@@ -435,11 +435,19 @@ if ! tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
 fi
 tmux pipe-pane -o -t "$TMUX_SESSION" "cat >> '$TMUX_LOG_FILE'"
 
-"$PYTHON_BIN" "$BRIDGE_SCRIPT" --runtime-dir "$RUNTIME_DIR" --session-id "$SESSION_ID" >>"$RUNTIME_DIR/bridge.log" 2>&1 &
-BRIDGE_PID=$!
-echo $BRIDGE_PID > "$RUNTIME_DIR/bridge.pid"
+echo "=== Wrapper Start ===" > "$RUNTIME_DIR/debug.log"
+date >> "$RUNTIME_DIR/debug.log"
+pwd >> "$RUNTIME_DIR/debug.log"
+env >> "$RUNTIME_DIR/debug.log"
+echo "Python: $PYTHON_BIN" >> "$RUNTIME_DIR/debug.log"
+echo "Script: $BRIDGE_SCRIPT" >> "$RUNTIME_DIR/debug.log"
 
-trap 'kill -TERM "$BRIDGE_PID" 2>/dev/null' EXIT
+nohup "$PYTHON_BIN" "$BRIDGE_SCRIPT" --runtime-dir "$RUNTIME_DIR" --session-id "$SESSION_ID" >>"$RUNTIME_DIR/bridge.log" 2>&1 &
+BRIDGE_PID=$!
+echo "Bridge PID: $BRIDGE_PID" >> "$RUNTIME_DIR/debug.log"
+echo $BRIDGE_PID > "$RUNTIME_DIR/bridge.pid"
+disown $BRIDGE_PID
+
 exec tmux attach -t "$TMUX_SESSION"
 '''
         script_file = runtime / "wrapper.sh"

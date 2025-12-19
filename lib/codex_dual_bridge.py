@@ -46,6 +46,17 @@ class DualBridge:
 
         terminal_type = os.environ.get("CODEX_TERMINAL", "tmux")
         pane_id = os.environ.get("CODEX_WEZTERM_PANE") if terminal_type == "wezterm" else os.environ.get("CODEX_TMUX_SESSION")
+        
+        # If pane_id not in env, try to read from .codex-session file
+        if not pane_id and terminal_type == "tmux":
+            session_file = Path.cwd() / ".codex-session"
+            if session_file.exists():
+                try:
+                    data = json.loads(session_file.read_text())
+                    pane_id = data.get("tmux_session")
+                except Exception:
+                    pass
+        
         if not pane_id:
             raise RuntimeError(f"缺少 {'CODEX_WEZTERM_PANE' if terminal_type == 'wezterm' else 'CODEX_TMUX_SESSION'} 环境变量")
 

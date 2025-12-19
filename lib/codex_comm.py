@@ -327,17 +327,17 @@ class CodexCommunicator:
                     return False, f"{self.terminal} pane 不存在: {self.pane_id}"
                 return True, "会话正常"
 
-            # tmux 模式：依赖 wrapper 写入 codex.pid 与 FIFO
-            codex_pid_file = self.runtime_dir / "codex.pid"
-            if not codex_pid_file.exists():
-                return False, "Codex进程PID文件不存在"
-
-            with open(codex_pid_file, "r", encoding="utf-8") as f:
-                codex_pid = int(f.read().strip())
-            try:
-                os.kill(codex_pid, 0)
-            except OSError:
-                return False, f"Codex进程(PID:{codex_pid})已退出"
+            # tmux 模式：检查 tmux 会话是否存活
+            # 注意：不再检查 codex.pid，因为 wrapper.sh 使用 exec tmux attach 后 PID 会失效
+            tmux_session = self.session_info.get("tmux_session")
+            if tmux_session and probe_terminal:
+                import subprocess
+                result = subprocess.run(
+                    ["tmux", "has-session", "-t", tmux_session],
+                    capture_output=True
+                )
+                if result.returncode != 0:
+                    return False, f"Tmux会话不存在: {tmux_session}"
 
             if not self.input_fifo.exists():
                 return False, "通信管道不存在"

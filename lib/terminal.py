@@ -133,7 +133,7 @@ class TmuxBackend(TerminalBackend):
         encoded = (sanitized + "\n").encode("utf-8")
         subprocess.run(["tmux", "load-buffer", "-b", buffer_name, "-"], input=encoded, check=True)
         subprocess.run(["tmux", "paste-buffer", "-t", session, "-b", buffer_name, "-p"], check=True)
-        time.sleep(0.02)
+        time.sleep(0.5)
         subprocess.run(["tmux", "send-keys", "-t", session, "Enter"], check=True)
         subprocess.run(["tmux", "delete-buffer", "-b", buffer_name], stderr=subprocess.DEVNULL)
 
