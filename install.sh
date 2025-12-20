@@ -636,9 +636,11 @@ install_claude_md_config() {
 ## Codex Collaboration Rules
 Codex is another AI assistant running in a separate terminal session (WezTerm, iTerm2 or tmux). When user intent involves asking/consulting/collaborating with Codex:
 
+**CRITICAL: After sending cask-w, DO NOT perform any additional actions. Stop and wait for user input.**
+
 Fast path (minimize latency):
 - If the user message starts with any of: `@codex`, `codex:`, `ask codex`, `let codex`, `/cask-w` then immediately run:
-  - `Bash(cask-w "<message>", run_in_background=true)` (background send, continue immediately)
+  - `Bash(cask-w "<message>")` then STOP and wait for user
 - If user message is only the prefix (no content), ask a 1-line clarification for what to send.
 
 Trigger conditions (any match):
@@ -647,28 +649,29 @@ Trigger conditions (any match):
 - User asks about codex's status or previous reply
 
 Command selection:
-- Default ask/collaborate -> `Bash(cask-w "<question>", run_in_background=true)`
-  - Sends in background, returns task_id immediately
-  - Continue with other work, do not wait
-  - Use `TaskOutput(task_id, block=true)` when result is needed
-- Send without waiting -> `cask "<question>"` (async, returns immediately)
+- Default ask/collaborate -> `Bash(cask-w "<question>")`
+  - After sending, STOP immediately and wait for user input
+  - Do NOT continue with other work
+- Send without waiting -> `cask "<question>"` (fire and forget)
 - Check connectivity -> `cping`
 - View previous reply -> `cpend`
-- Get background result -> `TaskOutput(task_id="xxx", block=true)`
 
 Examples:
-- "what does codex think" -> Bash(cask-w, run_in_background=true), then continue
-- "ask codex to review this" -> Bash(cask-w, run_in_background=true), then continue
+- "what does codex think" -> `Bash(cask-w "...")`, then STOP
+- "ask codex to review this" -> `Bash(cask-w "...")`, then STOP
+- "codex, help me with X" -> `Bash(cask-w "...")`, then STOP
 - "is codex alive" -> cping
 - "don't wait for reply" -> cask
-- "get codex result" -> TaskOutput(task_id) or cpend
+- "view codex reply" -> cpend
 
 ## Gemini Collaboration Rules
 Gemini is another AI assistant running in a separate terminal session (WezTerm, iTerm2 or tmux). When user intent involves asking/consulting/collaborating with Gemini:
 
+**CRITICAL: After sending gask-w, DO NOT perform any additional actions. Stop and wait for user input.**
+
 Fast path (minimize latency):
 - If the user message starts with any of: `@gemini`, `gemini:`, `ask gemini`, `let gemini`, `/gask-w` then immediately run:
-  - `Bash(gask-w "<message>", run_in_background=true)` (background send, continue immediately)
+  - `Bash(gask-w "<message>")` then STOP and wait for user
 - If user message is only the prefix (no content), ask a 1-line clarification for what to send.
 
 Trigger conditions (any match):
@@ -677,21 +680,20 @@ Trigger conditions (any match):
 - User asks about gemini's status or previous reply
 
 Command selection:
-- Default ask/collaborate -> `Bash(gask-w "<question>", run_in_background=true)`
-  - Sends in background, returns task_id immediately
-  - Continue with other work, do not wait
-  - Use `TaskOutput(task_id, block=true)` when result is needed
-- Send without waiting -> `gask "<question>"` (async, returns immediately)
+- Default ask/collaborate -> `Bash(gask-w "<question>")`
+  - After sending, STOP immediately and wait for user input
+  - Do NOT continue with other work
+- Send without waiting -> `gask "<question>"` (fire and forget)
 - Check connectivity -> `gping`
 - View previous reply -> `gpend`
-- Get background result -> `TaskOutput(task_id="xxx", block=true)`
 
 Examples:
-- "what does gemini think" -> Bash(gask-w, run_in_background=true), then continue
-- "ask gemini to review this" -> Bash(gask-w, run_in_background=true), then continue
+- "what does gemini think" -> `Bash(gask-w "...")`, then STOP
+- "ask gemini to review this" -> `Bash(gask-w "...")`, then STOP
+- "gemini, help me with X" -> `Bash(gask-w "...")`, then STOP
 - "is gemini alive" -> gping
 - "don't wait for reply" -> gask
-- "get gemini result" -> TaskOutput(task_id) or gpend
+- "view gemini reply" -> gpend
 <!-- CCB_CONFIG_END -->
 AI_RULES
 )

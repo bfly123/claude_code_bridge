@@ -1,25 +1,21 @@
 Forward commands to Codex session and wait for reply via `cask-w` command (supports tmux / WezTerm, forward only, does not execute in current Claude process).
 
 Execution:
-- Run in background `Bash(cask-w "<content>", run_in_background=true)`
-- Continue conversation immediately after sending, no blocking wait
-- Use `TaskOutput(task_id, block=true)` to get result when needed
+- Run `Bash(cask-w "<content>")`
+- After sending, STOP immediately and wait for user input
+- Do NOT continue with other tasks
 
 Parameters:
 - `<content>` required, will be forwarded to Codex session
-- Returns task_id for later result retrieval
 
 Workflow:
-1. Send to Codex in background
-2. Return task_id immediately
-3. Claude continues with other tasks
-4. Use TaskOutput to get reply when needed
+1. Send to Codex and wait for reply
+2. Display result to user
+3. STOP and wait for user's next instruction
 
 Examples:
-- `Bash(cask-w "1+2", run_in_background=true)` -> returns task_id
-- `TaskOutput(task_id, block=true)` -> get Codex reply
+- `Bash(cask-w "1+2")` -> wait for reply, then STOP
 
 Hints:
-- Can continue conversation after sending, no need to wait
 - Use `/cpend` to view latest reply
-- Use `TaskOutput` to get specific task result
+- Use `cask` for fire-and-forget (no wait)

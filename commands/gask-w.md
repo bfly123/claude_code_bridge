@@ -1,25 +1,21 @@
 Forward commands to Gemini session and wait for reply via `gask-w` command (supports tmux / WezTerm).
 
 Execution:
-- Run in background `Bash(gask-w "<content>", run_in_background=true)`
-- Continue conversation immediately after sending, no blocking wait
-- Use `TaskOutput(task_id, block=true)` to get result when needed
+- Run `Bash(gask-w "<content>")`
+- After sending, STOP immediately and wait for user input
+- Do NOT continue with other tasks
 
 Parameters:
 - `<content>` required, will be forwarded to Gemini session
-- Returns task_id for later result retrieval
 
 Workflow:
-1. Send to Gemini in background
-2. Return task_id immediately
-3. Claude continues with other tasks
-4. Use TaskOutput to get reply when needed
+1. Send to Gemini and wait for reply
+2. Display result to user
+3. STOP and wait for user's next instruction
 
 Examples:
-- `Bash(gask-w "explain this code", run_in_background=true)` -> returns task_id
-- `TaskOutput(task_id, block=true)` -> get Gemini reply
+- `Bash(gask-w "explain this code")` -> wait for reply, then STOP
 
 Hints:
-- Can continue conversation after sending, no need to wait
 - Use `/gpend` to view latest reply
-- Use `TaskOutput` to get specific task result
+- Use `gask` for fire-and-forget (no wait)
