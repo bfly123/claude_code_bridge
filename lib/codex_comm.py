@@ -237,7 +237,7 @@ class CodexLogReader:
 class CodexCommunicator:
     """Communicates with Codex bridge via FIFO and reads replies from logs"""
 
-    def __init__(self):
+    def __init__(self, lazy_init: bool = False):
         self.session_info = self._load_session_info()
         if not self.session_info:
             raise RuntimeError("❌ No active Codex session found. Run 'ccb up codex' first")
@@ -251,16 +251,35 @@ class CodexCommunicator:
 
         self.timeout = int(os.environ.get("CODEX_SYNC_TIMEOUT", "30"))
         self.marker_prefix = "ask"
-        preferred_log = self.session_info.get("codex_session_path")
-        bound_session_id = self.session_info.get("codex_session_id")
-        self.log_reader = CodexLogReader(log_path=preferred_log, session_id_filter=bound_session_id)
         self.project_session_file = self.session_info.get("_session_file")
 
-        self._prime_log_binding()
+        # Lazy initialization: defer log reader and health check
+        self._log_reader: Optional[CodexLogReader] = None
+        self._log_reader_primed = False
 
-        healthy, msg = self._check_session_health()
-        if not healthy:
-            raise RuntimeError(f"❌ Session unhealthy: {msg}\nTip: Run 'ccb up codex' to start a new session")
+        if not lazy_init:
+            self._ensure_log_reader()
+            healthy, msg = self._check_session_health()
+            if not healthy:
+                raise RuntimeError(f"❌ Session unhealthy: {msg}\nTip: Run 'ccb up codex' to start a new session")
+
+    @property
+    def log_reader(self) -> CodexLogReader:
+        """Lazy-load log reader on first access"""
+        if self._log_reader is None:
+            self._ensure_log_reader()
+        return self._log_reader
+
+    def _ensure_log_reader(self) -> None:
+        """Initialize log reader if not already done"""
+        if self._log_reader is not None:
+            return
+        preferred_log = self.session_info.get("codex_session_path")
+        bound_session_id = self.session_info.get("codex_session_id")
+        self._log_reader = CodexLogReader(log_path=preferred_log, session_id_filter=bound_session_id)
+        if not self._log_reader_primed:
+            self._prime_log_binding()
+            self._log_reader_primed = True
 
     def _load_session_info(self):
         if "CODEX_SESSION_ID" in os.environ:

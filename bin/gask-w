@@ -11,10 +11,6 @@ from pathlib import Path
 script_dir = Path(__file__).resolve().parent
 lib_dir = script_dir.parent / "lib"
 sys.path.insert(0, str(lib_dir))
-from compat import setup_windows_encoding
-setup_windows_encoding()
-
-from gemini_comm import GeminiCommunicator
 
 
 def main(argv: list[str]) -> int:
@@ -30,8 +26,15 @@ def main(argv: list[str]) -> int:
     # Early startup signal for background mode detection
     print("🚀 gask-w started", flush=True)
 
+    # Lazy imports after startup signal
+    if sys.platform == "win32":
+        from compat import setup_windows_encoding
+        setup_windows_encoding()
+
+    from gemini_comm import GeminiCommunicator
+
     try:
-        comm = GeminiCommunicator()
+        comm = GeminiCommunicator(lazy_init=True)
         reply = comm.ask_sync(message, timeout=0)
         return 0 if reply else 1
 

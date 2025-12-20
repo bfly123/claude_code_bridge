@@ -343,7 +343,7 @@ class GeminiLogReader:
 class GeminiCommunicator:
     """Communicate with Gemini via terminal and read replies from session files"""
 
-    def __init__(self):
+    def __init__(self, lazy_init: bool = False):
         self.session_info = self._load_session_info()
         if not self.session_info:
             raise RuntimeError("❌ No active Gemini session found, please run ccb up gemini first")
@@ -353,20 +353,39 @@ class GeminiCommunicator:
         self.terminal = self.session_info.get("terminal", "tmux")
         self.pane_id = get_pane_id_from_session(self.session_info)
         self.timeout = int(os.environ.get("GEMINI_SYNC_TIMEOUT", "60"))
-        work_dir_hint = self.session_info.get("work_dir")
-        log_work_dir = Path(work_dir_hint) if isinstance(work_dir_hint, str) and work_dir_hint else None
-        self.log_reader = GeminiLogReader(work_dir=log_work_dir)
-        preferred_session = self.session_info.get("gemini_session_path") or self.session_info.get("session_path")
-        if preferred_session:
-            self.log_reader.set_preferred_session(Path(str(preferred_session)))
         self.project_session_file = self.session_info.get("_session_file")
         self.backend = get_backend_for_session(self.session_info)
 
-        healthy, msg = self._check_session_health()
-        if not healthy:
-            raise RuntimeError(f"❌ Session unhealthy: {msg}\nHint: Please run ccb up gemini")
+        # Lazy initialization: defer log reader and health check
+        self._log_reader: Optional[GeminiLogReader] = None
+        self._log_reader_primed = False
 
-        self._prime_log_binding()
+        if not lazy_init:
+            self._ensure_log_reader()
+            healthy, msg = self._check_session_health()
+            if not healthy:
+                raise RuntimeError(f"❌ Session unhealthy: {msg}\nHint: Please run ccb up gemini")
+
+    @property
+    def log_reader(self) -> GeminiLogReader:
+        """Lazy-load log reader on first access"""
+        if self._log_reader is None:
+            self._ensure_log_reader()
+        return self._log_reader
+
+    def _ensure_log_reader(self) -> None:
+        """Initialize log reader if not already done"""
+        if self._log_reader is not None:
+            return
+        work_dir_hint = self.session_info.get("work_dir")
+        log_work_dir = Path(work_dir_hint) if isinstance(work_dir_hint, str) and work_dir_hint else None
+        self._log_reader = GeminiLogReader(work_dir=log_work_dir)
+        preferred_session = self.session_info.get("gemini_session_path") or self.session_info.get("session_path")
+        if preferred_session:
+            self._log_reader.set_preferred_session(Path(str(preferred_session)))
+        if not self._log_reader_primed:
+            self._prime_log_binding()
+            self._log_reader_primed = True
 
     def _prime_log_binding(self) -> None:
         session_path = self.log_reader.current_session_path()
