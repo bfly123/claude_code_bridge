@@ -6,6 +6,81 @@ INSTALL_PREFIX="${CODEX_INSTALL_PREFIX:-$HOME/.local/share/codex-dual}"
 BIN_DIR="${CODEX_BIN_DIR:-$HOME/.local/bin}"
 readonly REPO_ROOT INSTALL_PREFIX BIN_DIR
 
+# i18n support
+detect_lang() {
+  local lang="${CCB_LANG:-auto}"
+  case "$lang" in
+    zh|cn|chinese) echo "zh" ;;
+    en|english) echo "en" ;;
+    *)
+      local sys_lang="${LANG:-${LC_ALL:-${LC_MESSAGES:-}}}"
+      if [[ "$sys_lang" == zh* ]] || [[ "$sys_lang" == *chinese* ]]; then
+        echo "zh"
+      else
+        echo "en"
+      fi
+      ;;
+  esac
+}
+
+CCB_LANG_DETECTED="$(detect_lang)"
+
+# Message function
+msg() {
+  local key="$1"
+  shift
+  local en_msg zh_msg
+  case "$key" in
+    install_complete)
+      en_msg="Installation complete"
+      zh_msg="安装完成" ;;
+    uninstall_complete)
+      en_msg="Uninstall complete"
+      zh_msg="卸载完成" ;;
+    python_version_old)
+      en_msg="Python version too old: $1"
+      zh_msg="Python 版本过旧: $1" ;;
+    requires_python)
+      en_msg="Requires Python 3.10+"
+      zh_msg="需要 Python 3.10+" ;;
+    missing_dep)
+      en_msg="Missing dependency: $1"
+      zh_msg="缺少依赖: $1" ;;
+    detected_env)
+      en_msg="Detected $1 environment"
+      zh_msg="检测到 $1 环境" ;;
+    wsl1_not_supported)
+      en_msg="WSL 1 does not support FIFO pipes, please upgrade to WSL 2"
+      zh_msg="WSL 1 不支持 FIFO 管道，请升级到 WSL 2" ;;
+    confirm_wsl)
+      en_msg="Confirm continue installing in WSL? (y/N)"
+      zh_msg="确认继续在 WSL 中安装？(y/N)" ;;
+    cancelled)
+      en_msg="Installation cancelled"
+      zh_msg="安装已取消" ;;
+    wsl_warning)
+      en_msg="Detected WSL environment"
+      zh_msg="检测到 WSL 环境" ;;
+    same_env_required)
+      en_msg="ccb/cask-w must run in the same environment as codex/gemini."
+      zh_msg="ccb/cask-w 必须与 codex/gemini 在同一环境运行。" ;;
+    confirm_wsl_native)
+      en_msg="Please confirm: you will install and run codex/gemini in WSL (not Windows native)."
+      zh_msg="请确认：你将在 WSL 中安装并运行 codex/gemini（不是 Windows 原生）。" ;;
+    wezterm_recommended)
+      en_msg="Recommend installing WezTerm as terminal frontend"
+      zh_msg="推荐安装 WezTerm 作为终端前端" ;;
+    *)
+      en_msg="$key"
+      zh_msg="$key" ;;
+  esac
+  if [[ "$CCB_LANG_DETECTED" == "zh" ]]; then
+    echo "$zh_msg"
+  else
+    echo "$en_msg"
+  fi
+}
+
 SCRIPTS_TO_LINK=(
   bin/cask
   bin/cask-w

@@ -17,6 +17,7 @@ from typing import Optional, Tuple, Dict, Any
 
 from terminal import get_backend_for_session, get_pane_id_from_session
 from ccb_config import apply_backend_env
+from i18n import t
 
 apply_backend_env()
 
@@ -412,11 +413,11 @@ class CodexCommunicator:
             if not healthy:
                 raise RuntimeError(f"❌ Session error: {status}")
 
-            print("🔔 Sending question to Codex...")
+            print(f"🔔 {t('sending_to', provider='Codex')}")
             marker, state = self._send_message(question)
             wait_timeout = self.timeout if timeout is None else int(timeout)
             if wait_timeout == 0:
-                print("⏳ Waiting for Codex reply (no timeout, Ctrl-C to interrupt)...")
+                print(f"⏳ {t('waiting_for_reply', provider='Codex')}")
                 start_time = time.time()
                 last_hint = 0
                 while True:
@@ -427,7 +428,7 @@ class CodexCommunicator:
                         log_hint = self.log_reader.current_log_path()
                     self._remember_codex_session(log_hint)
                     if message:
-                        print("🤖 Codex reply:")
+                        print(f"🤖 {t('reply_from', provider='Codex')}")
                         print(message)
                         return message
                     elapsed = int(time.time() - start_time)
@@ -442,11 +443,11 @@ class CodexCommunicator:
                 log_hint = self.log_reader.current_log_path()
             self._remember_codex_session(log_hint)
             if message:
-                print("🤖 Codex reply:")
+                print(f"🤖 {t('reply_from', provider='Codex')}")
                 print(message)
                 return message
 
-            print("⏰ Codex did not reply in time. Use /cpend later to get the latest answer")
+            print(f"⏰ {t('timeout_no_reply', provider='Codex')}")
             return None
         except Exception as exc:
             print(f"❌ Sync ask failed: {exc}")
@@ -460,7 +461,7 @@ class CodexCommunicator:
             self._remember_codex_session(self.log_reader.current_log_path())
         if not message:
             if display:
-                print("No Codex reply available")
+                print(t('no_reply_available', provider='Codex'))
             return None
         if display:
             print(message)

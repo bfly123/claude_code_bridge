@@ -15,6 +15,7 @@ from typing import Optional, Tuple, Dict, Any
 
 from terminal import get_backend_for_session, get_pane_id_from_session
 from ccb_config import apply_backend_env
+from i18n import t
 
 apply_backend_env()
 
@@ -454,14 +455,14 @@ class GeminiCommunicator:
             if not healthy:
                 raise RuntimeError(f"❌ Session error: {status}")
 
-            print("🔔 Sending question to Gemini...")
+            print(f"🔔 {t('sending_to', provider='Gemini')}")
             self._send_via_terminal(question)
             # Capture state after sending to reduce "question → send" latency.
             state = self.log_reader.capture_state()
 
             wait_timeout = self.timeout if timeout is None else int(timeout)
             if wait_timeout == 0:
-                print("⏳ Waiting for Gemini reply (no timeout, Ctrl-C to interrupt)...")
+                print(f"⏳ {t('waiting_for_reply', provider='Gemini')}")
                 start_time = time.time()
                 last_hint = 0
                 while True:
@@ -471,7 +472,7 @@ class GeminiCommunicator:
                     if isinstance(session_path, Path):
                         self._remember_gemini_session(session_path)
                     if message:
-                        print("🤖 Gemini reply:")
+                        print(f"🤖 {t('reply_from', provider='Gemini')}")
                         print(message)
                         return message
                     elapsed = int(time.time() - start_time)
@@ -485,11 +486,11 @@ class GeminiCommunicator:
             if isinstance(session_path, Path):
                 self._remember_gemini_session(session_path)
             if message:
-                print("🤖 Gemini reply:")
+                print(f"🤖 {t('reply_from', provider='Gemini')}")
                 print(message)
                 return message
 
-            print("⏰ Gemini did not reply in time, run gpend later to get the answer")
+            print(f"⏰ {t('timeout_no_reply', provider='Gemini')}")
             return None
         except Exception as exc:
             print(f"❌ Sync ask failed: {exc}")
@@ -502,7 +503,7 @@ class GeminiCommunicator:
         message = self.log_reader.latest_message()
         if not message:
             if display:
-                print("No Gemini reply yet")
+                print(t('no_reply_available', provider='Gemini'))
             return None
         if display:
             print(message)

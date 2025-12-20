@@ -27,6 +27,7 @@ from terminal import TmuxBackend, WeztermBackend, Iterm2Backend, detect_terminal
 from compat import setup_windows_encoding
 from ccb_config import get_backend_env
 from session_utils import safe_write_session, check_session_writable
+from i18n import t
 
 setup_windows_encoding()
 
@@ -142,16 +143,16 @@ class AILauncher:
     def _start_provider(self, provider: str) -> bool:
         # Handle case when no terminal detected
         if self.terminal_type is None:
-            print("❌ No terminal backend detected (WezTerm or tmux)")
-            print("   Solutions:")
-            print("   - Install WezTerm (recommended): https://wezfurlong.org/wezterm/")
-            print("   - Or install tmux")
-            print("   - Or set CCB_TERMINAL=wezterm and configure CODEX_WEZTERM_BIN")
+            print(f"❌ {t('no_terminal_backend')}")
+            print(f"   {t('solutions')}")
+            print(f"   - {t('install_wezterm')}")
+            print(f"   - {t('or_install_tmux')}")
+            print(f"   - {t('or_set_ccb_terminal')}")
             return False
 
         # WezTerm mode: no tmux dependency
         if self.terminal_type == "wezterm":
-            print(f"🚀 Starting {provider.capitalize()} backend (wezterm)...")
+            print(f"🚀 {t('starting_backend', provider=provider.capitalize(), terminal='wezterm')}")
             return self._start_provider_wezterm(provider)
         elif self.terminal_type == "iterm2":
             return self._start_provider_iterm2(provider)
@@ -161,14 +162,14 @@ class AILauncher:
             # Try fallback to WezTerm
             if detect_terminal() == "wezterm":
                 self.terminal_type = "wezterm"
-                print(f"🚀 Starting {provider.capitalize()} backend (wezterm - tmux unavailable)...")
+                print(f"🚀 {t('starting_backend', provider=provider.capitalize(), terminal='wezterm - tmux unavailable')}")
                 return self._start_provider_wezterm(provider)
             else:
-                print("❌ tmux not installed and WezTerm unavailable")
-                print("   Solution: Install WezTerm (recommended) or tmux")
+                print(f"❌ {t('tmux_not_installed')}")
+                print(f"   {t('install_wezterm_or_tmux')}")
                 return False
 
-        print(f"🚀 Starting {provider.capitalize()} backend (tmux)...")
+        print(f"🚀 {t('starting_backend', provider=provider.capitalize(), terminal='tmux')}")
 
         tmux_session = f"{provider}-{int(time.time()) % 100000}-{os.getpid()}"
         self.tmux_sessions[provider] = tmux_session
@@ -178,7 +179,7 @@ class AILauncher:
         elif provider == "gemini":
             return self._start_gemini(tmux_session)
         else:
-            print(f"❌ Unknown provider: {provider}")
+            print(f"❌ {t('unknown_provider', provider=provider)}")
             return False
 
     def _start_provider_wezterm(self, provider: str) -> bool:
@@ -211,7 +212,7 @@ class AILauncher:
         else:
             self._write_gemini_session(runtime, None, pane_id=pane_id)
 
-        print(f"✅ {provider.capitalize()} started (wezterm pane: {pane_id})")
+        print(f"✅ {t('started_backend', provider=provider.capitalize(), terminal='wezterm pane', pane_id=pane_id)}")
         return True
 
     def _start_provider_iterm2(self, provider: str) -> bool:
@@ -250,7 +251,7 @@ class AILauncher:
         else:
             self._write_gemini_session(runtime, None, pane_id=pane_id)
 
-        print(f"✅ {provider.capitalize()} started (iterm2 session: {pane_id})")
+        print(f"✅ {t('started_backend', provider=provider.capitalize(), terminal='iterm2 session', pane_id=pane_id)}")
         return True
 
     def _work_dir_strings(self, work_dir: Path) -> list[str]:
@@ -335,11 +336,11 @@ class AILauncher:
             session_id, has_history = self._get_latest_codex_session_id()
             if session_id:
                 cmd = f"{cmd} resume {session_id}"
-                print(f"🔁 Resuming Codex session: {session_id[:8]}...")
+                print(f"🔁 {t('resuming_session', provider='Codex', session_id=session_id[:8])}")
                 codex_resumed = True
 
             if not codex_resumed:
-                print("ℹ️ No Codex history found, starting fresh")
+                print(f"ℹ️ {t('no_history_fresh', provider='Codex')}")
         return cmd
 
     def _get_latest_gemini_project_hash(self) -> tuple[str | None, bool]:
@@ -371,9 +372,9 @@ class AILauncher:
             _, has_history = self._get_latest_gemini_project_hash()
             if has_history:
                 cmd = f"{cmd} --resume latest"
-                print("🔁 Resuming Gemini session...")
+                print(f"🔁 {t('resuming_session', provider='Gemini', session_id='')}")
             else:
-                print("ℹ️ No Gemini history found, starting fresh")
+                print(f"ℹ️ {t('no_history_fresh', provider='Gemini')}")
         return cmd
 
     def _warmup_provider(self, provider: str, timeout: float = 8.0) -> bool:
@@ -490,7 +491,7 @@ exec tmux attach -t "$TMUX_SESSION"
         else:
             subprocess.Popen([terminal, "-e", str(script_file)])
 
-        print(f"✅ Codex started (tmux: {tmux_session})")
+        print(f"✅ {t('started_backend', provider='Codex', terminal='tmux', pane_id=tmux_session)}")
         return True
 
     def _start_gemini(self, tmux_session: str) -> bool:
@@ -536,7 +537,7 @@ exec tmux attach -t "$TMUX_SESSION"
             # Open new terminal window
             subprocess.Popen([terminal, "--", str(script_file)])
 
-        print(f"✅ Gemini started (tmux: {tmux_session})")
+        print(f"✅ {t('started_backend', provider='Gemini', terminal='tmux', pane_id=tmux_session)}")
         return True
 
     def _write_codex_session(self, runtime, tmux_session, input_fifo, output_fifo, pane_id=None):
@@ -692,7 +693,7 @@ exec tmux attach -t "$TMUX_SESSION"
         )
 
     def _start_claude(self) -> int:
-        print("🚀 Starting Claude...")
+        print(f"🚀 {t('starting_claude')}")
 
         env = os.environ.copy()
         if "codex" in self.providers:
@@ -736,10 +737,10 @@ exec tmux attach -t "$TMUX_SESSION"
             # Only resume if Claude can actually find the session on disk.
             if local_session_id and (Path.home() / ".claude" / "session-env" / local_session_id).exists():
                 cmd.extend(["--resume", local_session_id])
-                print(f"🔁 Resuming Claude session: {local_session_id[:8]}...")
+                print(f"🔁 {t('resuming_claude', session_id=local_session_id[:8])}")
             else:
                 local_session_id = None
-                print("ℹ️ No local Claude session found, starting fresh")
+                print(f"ℹ️ {t('no_claude_session')}")
 
         # Always start Claude with an explicit session id when not resuming, so the id is local and resettable.
         if not local_session_id:
@@ -762,14 +763,14 @@ exec tmux attach -t "$TMUX_SESSION"
         try:
             return subprocess.run(cmd, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr, env=env).returncode
         except KeyboardInterrupt:
-            print("\n⚠️ User interrupted")
+            print(f"\n⚠️ {t('user_interrupted')}")
             return 130
 
     def cleanup(self):
         if self._cleaned:
             return
         self._cleaned = True
-        print("\n🧹 Cleaning up session resources...")
+        print(f"\n🧹 {t('cleaning_up')}")
 
         if self.terminal_type == "wezterm":
             backend = WeztermBackend()
@@ -800,7 +801,7 @@ exec tmux attach -t "$TMUX_SESSION"
         if self.runtime_dir.exists():
             shutil.rmtree(self.runtime_dir, ignore_errors=True)
 
-        print("✅ Cleanup complete")
+        print(f"✅ {t('cleanup_complete')}")
 
     def run_up(self) -> int:
         git_info = _get_git_info()
@@ -826,7 +827,7 @@ exec tmux attach -t "$TMUX_SESSION"
             self._warmup_provider(provider)
 
         if self.no_claude:
-            print("✅ Backends started (--no-claude mode)")
+            print(f"✅ {t('backends_started_no_claude')}")
             print()
             for provider in self.providers:
                 if self.terminal_type == "wezterm":
@@ -900,7 +901,7 @@ def cmd_status(args):
         except Exception as e:
             results[provider] = {"status": f"Error: {e}", "active": False}
 
-    print("📊 AI backend status:")
+    print(f"📊 {t('backend_status')}")
     for provider, info in results.items():
         icon = "✅" if info.get("active") else "❌"
         print(f"  {icon} {provider.capitalize()}: {info['status']}")

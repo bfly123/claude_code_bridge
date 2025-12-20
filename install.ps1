@@ -9,6 +9,39 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 
+# i18n support
+function Get-CCBLang {
+  $lang = $env:CCB_LANG
+  if ($lang -in @("zh", "cn", "chinese")) { return "zh" }
+  if ($lang -in @("en", "english")) { return "en" }
+  # Auto-detect from system
+  try {
+    $culture = (Get-Culture).Name
+    if ($culture -like "zh*") { return "zh" }
+  } catch {}
+  return "en"
+}
+
+$script:CCBLang = Get-CCBLang
+
+function Get-Msg {
+  param([string]$Key, [string]$Arg1 = "", [string]$Arg2 = "")
+  $msgs = @{
+    "install_complete" = @{ en = "Installation complete"; zh = "安装完成" }
+    "uninstall_complete" = @{ en = "Uninstall complete"; zh = "卸载完成" }
+    "python_old" = @{ en = "Python version too old: $Arg1"; zh = "Python 版本过旧: $Arg1" }
+    "requires_python" = @{ en = "ccb requires Python 3.10+"; zh = "ccb 需要 Python 3.10+" }
+    "confirm_windows" = @{ en = "Continue installation in Windows? (y/N)"; zh = "确认继续在 Windows 中安装？(y/N)" }
+    "cancelled" = @{ en = "Installation cancelled"; zh = "安装已取消" }
+    "windows_warning" = @{ en = "You are installing ccb in native Windows environment"; zh = "你正在 Windows 原生环境安装 ccb" }
+    "same_env" = @{ en = "ccb/cask-w must run in the same environment as codex/gemini."; zh = "ccb/cask-w 必须与 codex/gemini 在同一环境运行。" }
+  }
+  if ($msgs.ContainsKey($Key)) {
+    return $msgs[$Key][$script:CCBLang]
+  }
+  return $Key
+}
+
 function Show-Usage {
   Write-Host "Usage:"
   Write-Host "  .\install.ps1 install    # Install or update"

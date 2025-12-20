@@ -13,6 +13,8 @@ sys.path.insert(0, str(lib_dir))
 from compat import setup_windows_encoding
 setup_windows_encoding()
 
+from i18n import t
+
 try:
     from codex_comm import CodexCommunicator
 except ImportError as exc:
@@ -69,10 +71,10 @@ def main() -> int:
         if output:
             print(output)
         else:
-            print('No Codex reply available')
+            print(t('no_reply_available', provider='Codex'))
         return 0
     except Exception as exc:
-        print(f"❌ Execution failed: {exc}")
+        print(f"❌ {t('execution_failed', error=exc)}")
         return 1
 
 
