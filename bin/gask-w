@@ -27,6 +27,9 @@ def main(argv: list[str]) -> int:
         print("❌ Message cannot be empty", file=sys.stderr)
         return 1
 
+    # Early startup signal for background mode detection
+    print("🚀 gask-w started", flush=True)
+
     try:
         comm = GeminiCommunicator()
         reply = comm.ask_sync(message, timeout=0)

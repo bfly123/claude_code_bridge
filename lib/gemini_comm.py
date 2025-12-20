@@ -455,14 +455,14 @@ class GeminiCommunicator:
             if not healthy:
                 raise RuntimeError(f"❌ Session error: {status}")
 
-            print(f"🔔 {t('sending_to', provider='Gemini')}")
+            print(f"🔔 {t('sending_to', provider='Gemini')}", flush=True)
             self._send_via_terminal(question)
             # Capture state after sending to reduce "question → send" latency.
             state = self.log_reader.capture_state()
 
             wait_timeout = self.timeout if timeout is None else int(timeout)
             if wait_timeout == 0:
-                print(f"⏳ {t('waiting_for_reply', provider='Gemini')}")
+                print(f"⏳ {t('waiting_for_reply', provider='Gemini')}", flush=True)
                 start_time = time.time()
                 last_hint = 0
                 while True:

@@ -413,11 +413,11 @@ class CodexCommunicator:
             if not healthy:
                 raise RuntimeError(f"❌ Session error: {status}")
 
-            print(f"🔔 {t('sending_to', provider='Codex')}")
+            print(f"🔔 {t('sending_to', provider='Codex')}", flush=True)
             marker, state = self._send_message(question)
             wait_timeout = self.timeout if timeout is None else int(timeout)
             if wait_timeout == 0:
-                print(f"⏳ {t('waiting_for_reply', provider='Codex')}")
+                print(f"⏳ {t('waiting_for_reply', provider='Codex')}", flush=True)
                 start_time = time.time()
                 last_hint = 0
                 while True:
