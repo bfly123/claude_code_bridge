@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Codex 双窗口桥接器
-负责发送命令到 Codex，支持 tmux 和 WezTerm。
+Codex dual-window bridge
+Sends commands to Codex, supports tmux and WezTerm.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ def _env_float(name: str, default: float) -> float:
 
 
 class TerminalCodexSession:
-    """通过终端会话向 Codex CLI 注入指令"""
+    """Inject commands to Codex CLI via terminal session"""
 
     def __init__(self, terminal_type: str, pane_id: str):
         self.terminal_type = terminal_type
@@ -44,7 +44,7 @@ class TerminalCodexSession:
 
 
 class DualBridge:
-    """Claude ↔ Codex 桥接主流程"""
+    """Claude ↔ Codex bridge main process"""
 
     def __init__(self, runtime_dir: Path, session_id: str):
         self.runtime_dir = runtime_dir
@@ -58,7 +58,7 @@ class DualBridge:
         terminal_type = os.environ.get("CODEX_TERMINAL", "tmux")
         pane_id = os.environ.get("CODEX_WEZTERM_PANE") if terminal_type == "wezterm" else os.environ.get("CODEX_TMUX_SESSION")
         if not pane_id:
-            raise RuntimeError(f"缺少 {'CODEX_WEZTERM_PANE' if terminal_type == 'wezterm' else 'CODEX_TMUX_SESSION'} 环境变量")
+            raise RuntimeError(f"Missing {'CODEX_WEZTERM_PANE' if terminal_type == 'wezterm' else 'CODEX_TMUX_SESSION'} environment variable")
 
         self.codex_session = TerminalCodexSession(terminal_type, pane_id)
         self._running = True
@@ -67,10 +67,10 @@ class DualBridge:
 
     def _handle_signal(self, signum: int, _: Any) -> None:
         self._running = False
-        self._log_console(f"⚠️ 收到信号 {signum}，准备退出...")
+        self._log_console(f"⚠️ Received signal {signum}, exiting...")
 
     def run(self) -> int:
-        self._log_console("🔌 Codex桥接器已启动，等待Claude指令...")
+        self._log_console("🔌 Codex bridge started, waiting for Claude commands...")
         idle_sleep = _env_float("CCB_BRIDGE_IDLE_SLEEP", 0.05)
         error_backoff_min = _env_float("CCB_BRIDGE_ERROR_BACKOFF_MIN", 0.05)
         error_backoff_max = _env_float("CCB_BRIDGE_ERROR_BACKOFF_MAX", 0.2)
@@ -87,14 +87,14 @@ class DualBridge:
             except KeyboardInterrupt:
                 self._running = False
             except Exception as exc:
-                self._log_console(f"❌ 处理消息失败: {exc}")
+                self._log_console(f"❌ Failed to process message: {exc}")
                 self._log_bridge(f"error: {exc}")
                 if error_backoff:
                     time.sleep(error_backoff)
                 if error_backoff_max:
                     error_backoff = min(error_backoff_max, max(error_backoff_min, error_backoff * 2))
 
-        self._log_console("👋 Codex桥接器已退出")
+        self._log_console("👋 Codex bridge exited")
         return 0
 
     def _read_request(self) -> Optional[Dict[str, Any]]:
@@ -120,7 +120,7 @@ class DualBridge:
         try:
             self.codex_session.send(content)
         except Exception as exc:
-            msg = f"❌ 发送至 Codex 失败: {exc}"
+            msg = f"❌ Failed to send to Codex: {exc}"
             self._append_history("codex", msg, marker)
             self._log_console(msg)
 
@@ -136,7 +136,7 @@ class DualBridge:
                 json.dump(entry, handle, ensure_ascii=False)
                 handle.write("\n")
         except Exception as exc:
-            self._log_console(f"⚠️ 写入历史失败: {exc}")
+            self._log_console(f"⚠️ Failed to write history: {exc}")
 
     def _log_bridge(self, message: str) -> None:
         try:
@@ -159,9 +159,9 @@ class DualBridge:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Claude-Codex 桥接器")
-    parser.add_argument("--runtime-dir", required=True, help="运行目录")
-    parser.add_argument("--session-id", required=True, help="会话ID")
+    parser = argparse.ArgumentParser(description="Claude-Codex bridge")
+    parser.add_argument("--runtime-dir", required=True, help="Runtime directory")
+    parser.add_argument("--session-id", required=True, help="Session ID")
     return parser.parse_args()
 
 

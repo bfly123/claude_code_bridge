@@ -1,9 +1,9 @@
-通过 `gpend` 命令查看 Gemini 最新回复。
+View latest Gemini reply via `gpend` command.
 
-执行方式:
-- 沉默运行 `Bash(gpend)`，执行完毕后不做其他分析、推理或额外操作
-- 在终端中也可执行 `gpend`，效果等同
+Execution:
+- Run silently `Bash(gpend)`, no additional analysis or operations after execution
+- Can also run `gpend` in terminal with same effect
 
-提示:
-- 用于查看 gask 异步发送后的回复
-- 或 gask-w 超时后继续获取回复
+Hints:
+- Used to view reply after gask async send
+- Or continue getting reply after gask-w timeout

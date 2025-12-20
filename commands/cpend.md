@@ -1,19 +1,19 @@
-使用 `cpend` 从 Codex 官方日志中抓取最新回复，适合异步模式或超时后的补充查询。
+Use `cpend` to fetch latest reply from Codex official logs, suitable for async mode or follow-up queries after timeout.
 
-执行方式:
-- Claude 端使用 `Bash(cpend)`，命令执行过程保持静默
-- 本地终端可直接运行 `cpend`
+Execution:
+- Use `Bash(cpend)` on Claude side, keep command execution silent
+- Run `cpend` directly in local terminal
 
-功能特点:
-1. 解析 `.codex-session` 记录的日志路径，定位本次会话的最新 JSONL 文件
-2. 读取尾部消息并返回 Codex 最近一次输出
-3. 若无新内容，将提示“暂无 Codex 回复”
+Features:
+1. Parses log path recorded in `.codex-session`, locates latest JSONL file for current session
+2. Reads tail messages and returns Codex's most recent output
+3. If no new content, will prompt "No Codex reply yet"
 
-常见场景:
-- `cask` 异步提交多条任务后集中查看结果
-- `cask-w` 因超时退出后手动确认 Codex 是否已回应
-- 需要核对 Codex 回复与原始问题是否匹配
+Common scenarios:
+- View results after submitting multiple tasks via `cask` async
+- Manually confirm if Codex has responded after `cask-w` timeout exit
+- Need to verify if Codex reply matches original question
 
-提示:
-- 日志文件通常位于 `~/.codex/sessions/.../rollout-<session>.jsonl`
-- 如果命令返回空，请先确认 Codex 会话仍在运行（可用 `/cping` 检查）
+Hints:
+- Log file usually located at `~/.codex/sessions/.../rollout-<session>.jsonl`
+- If command returns empty, first confirm Codex session is still running (use `/cping` to check)

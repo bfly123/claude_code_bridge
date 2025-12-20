@@ -1,18 +1,18 @@
-通过 `gask` 命令将指令转发到 Gemini 会话（支持 tmux / WezTerm，仅转发，不在当前 Claude 进程执行）。
+Forward commands to Gemini session via `gask` command (supports tmux / WezTerm, forward only, does not execute in current Claude process).
 
-执行方式:
-- 沉默运行 `Bash(gask "<转发内容>")`，执行完毕后不做其他分析、推理或额外操作
-- 在终端中也可执行 `gask <转发内容>`，效果等同
+Execution:
+- Run silently `Bash(gask "<content>")`, no additional analysis or operations after execution
+- Can also run `gask <content>` in terminal with same effect
 
-参数说明:
-- `<转发内容>` 必填，会被转发到 Gemini 会话
-- ⚠️ 注意：gask 仅负责转发，不在本 Claude 进程执行，返回后立即结束
+Parameters:
+- `<content>` required, will be forwarded to Gemini session
+- Note: gask only forwards, does not execute in Claude process, returns immediately after
 
-示例:
-- `Bash(gask "解释一下这段代码")`
-- `Bash(gask "帮我优化这个函数")`
+Examples:
+- `Bash(gask "explain this code")`
+- `Bash(gask "help me optimize this function")`
 
-提示:
-- gask 发送命令后立即返回，不等待结果
-- 如需等待 Gemini 回复，请使用 `/gask-w`
-- gask 返回后表示转发完成，无需继续执行任何操作
+Hints:
+- gask returns immediately after sending, does not wait for result
+- Use `/gask-w` if you need to wait for Gemini reply
+- After gask returns, forwarding is complete, no further action needed

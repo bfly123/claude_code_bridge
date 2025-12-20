@@ -1,9 +1,9 @@
-通过 `gping` 命令测试与 Gemini 的连通性。
+Test connectivity with Gemini via `gping` command.
 
-执行方式:
-- 沉默运行 `Bash(gping)`，执行完毕后不做其他分析、推理或额外操作
-- 在终端中也可执行 `gping`，效果等同
+Execution:
+- Run silently `Bash(gping)`, no additional analysis or operations after execution
+- Can also run `gping` in terminal with same effect
 
-提示:
-- 返回 Gemini 会话状态
-- 用于检查 Gemini 是否正常运行
+Hints:
+- Returns Gemini session status
+- Used to check if Gemini is running normally

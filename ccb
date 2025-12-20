@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-ccb (Claude Code Bridge) - 统一 AI 启动器
-支持 Claude + Codex / Claude + Gemini / 三者同时
-支持 tmux、WezTerm 和 iTerm2 终端
+ccb (Claude Code Bridge) - Unified AI Launcher
+Supports Claude + Codex / Claude + Gemini / all three simultaneously
+Supports tmux, WezTerm and iTerm2 terminals
 """
 
 import sys
@@ -87,32 +87,32 @@ class AILauncher:
         self.processes = {}
 
     def _detect_terminal_type(self):
-        # 环境变量强制指定
+        # Forced by environment variable
         forced = (os.environ.get("CCB_TERMINAL") or os.environ.get("CODEX_TERMINAL") or "").strip().lower()
         if forced in {"wezterm", "tmux"}:
             return forced
 
-        # 在 WezTerm pane 内时，强制使用 wezterm，完全不依赖 tmux
+        # When inside WezTerm pane, force wezterm, no tmux dependency
         if os.environ.get("WEZTERM_PANE"):
             return "wezterm"
-        # 只有在 iTerm2 环境中才用 iTerm2 分屏
+        # Only use iTerm2 split when in iTerm2 environment
         if os.environ.get("ITERM_SESSION_ID"):
             return "iterm2"
 
-        # 使用 detect_terminal() 自动检测（WezTerm 优先）
+        # Use detect_terminal() for auto-detection (WezTerm preferred)
         detected = detect_terminal()
         if detected:
             return detected
 
-        # 兜底：如果都没有，返回 None 让后续逻辑处理
+        # Fallback: if nothing found, return None for later handling
         return None
 
     def _detect_launch_terminal(self):
-        """选择用于启动新窗口的终端程序（仅 tmux 模式下使用）"""
-        # WezTerm 模式不需要外部终端程序
+        """Select terminal program for launching new windows (tmux mode only)"""
+        # WezTerm mode doesn't need external terminal program
         if self.terminal_type == "wezterm":
             return None
-        # tmux 模式下选择终端
+        # tmux mode: select terminal
         terminals = ["gnome-terminal", "konsole", "alacritty", "xterm"]
         for term in terminals:
             if shutil.which(term):
@@ -120,7 +120,7 @@ class AILauncher:
         return "tmux"
 
     def _launch_script_in_macos_terminal(self, script_file: Path) -> bool:
-        """macOS: 使用 Terminal.app 打开新窗口执行脚本（避免 tmux launcher 嵌套导致交互失败）"""
+        """macOS: Use Terminal.app to open new window for script (avoid tmux launcher nesting issues)"""
         if platform.system() != "Darwin":
             return False
         if not shutil.which("osascript"):
@@ -140,35 +140,35 @@ class AILauncher:
         return True
 
     def _start_provider(self, provider: str) -> bool:
-        # 处理未检测到终端的情况
+        # Handle case when no terminal detected
         if self.terminal_type is None:
-            print("❌ 未检测到可用的终端后端（WezTerm 或 tmux）")
-            print("   解决方案:")
-            print("   - 安装 WezTerm（推荐）: https://wezfurlong.org/wezterm/")
-            print("   - 或安装 tmux")
-            print("   - 或设置环境变量 CCB_TERMINAL=wezterm 并配置 CODEX_WEZTERM_BIN")
+            print("❌ No terminal backend detected (WezTerm or tmux)")
+            print("   Solutions:")
+            print("   - Install WezTerm (recommended): https://wezfurlong.org/wezterm/")
+            print("   - Or install tmux")
+            print("   - Or set CCB_TERMINAL=wezterm and configure CODEX_WEZTERM_BIN")
             return False
 
-        # WezTerm 模式：完全不依赖 tmux
+        # WezTerm mode: no tmux dependency
         if self.terminal_type == "wezterm":
-            print(f"🚀 启动 {provider.capitalize()} 后端 (wezterm)...")
+            print(f"🚀 Starting {provider.capitalize()} backend (wezterm)...")
             return self._start_provider_wezterm(provider)
         elif self.terminal_type == "iterm2":
             return self._start_provider_iterm2(provider)
 
-        # tmux 模式：检查 tmux 是否可用
+        # tmux mode: check if tmux is available
         if not shutil.which("tmux"):
-            # 尝试 fallback 到 WezTerm
+            # Try fallback to WezTerm
             if detect_terminal() == "wezterm":
                 self.terminal_type = "wezterm"
-                print(f"🚀 启动 {provider.capitalize()} 后端 (wezterm - tmux 不可用)...")
+                print(f"🚀 Starting {provider.capitalize()} backend (wezterm - tmux unavailable)...")
                 return self._start_provider_wezterm(provider)
             else:
-                print("❌ tmux 未安装，且 WezTerm 不可用")
-                print("   解决方案: 安装 WezTerm（推荐）或 tmux")
+                print("❌ tmux not installed and WezTerm unavailable")
+                print("   Solution: Install WezTerm (recommended) or tmux")
                 return False
 
-        print(f"🚀 启动 {provider.capitalize()} 后端 (tmux)...")
+        print(f"🚀 Starting {provider.capitalize()} backend (tmux)...")
 
         tmux_session = f"{provider}-{int(time.time()) % 100000}-{os.getpid()}"
         self.tmux_sessions[provider] = tmux_session
@@ -178,7 +178,7 @@ class AILauncher:
         elif provider == "gemini":
             return self._start_gemini(tmux_session)
         else:
-            print(f"❌ 未知的 provider: {provider}")
+            print(f"❌ Unknown provider: {provider}")
             return False
 
     def _start_provider_wezterm(self, provider: str) -> bool:
@@ -206,12 +206,12 @@ class AILauncher:
         if provider == "codex":
             input_fifo = runtime / "input.fifo"
             output_fifo = runtime / "output.fifo"
-            # WezTerm 模式通过 pane 注入文本，不强依赖 FIFO；Windows/WSL 场景也不一定支持 mkfifo。
+            # WezTerm mode injects text via pane, no strong FIFO dependency; Windows/WSL may not support mkfifo
             self._write_codex_session(runtime, None, input_fifo, output_fifo, pane_id=pane_id)
         else:
             self._write_gemini_session(runtime, None, pane_id=pane_id)
 
-        print(f"✅ {provider.capitalize()} 已启动 (wezterm pane: {pane_id})")
+        print(f"✅ {provider.capitalize()} started (wezterm pane: {pane_id})")
         return True
 
     def _start_provider_iterm2(self, provider: str) -> bool:
@@ -219,7 +219,7 @@ class AILauncher:
         runtime.mkdir(parents=True, exist_ok=True)
 
         start_cmd = self._get_start_cmd(provider)
-        # iTerm2 分屏里，进程退出会导致 pane 直接关闭；默认保持 pane 打开便于查看退出信息。
+        # In iTerm2 split, process exit will close pane; keep pane open by default to view exit info
         keep_open = os.environ.get("CODEX_ITERM2_KEEP_OPEN", "1").lower() not in {"0", "false", "no", "off"}
         if keep_open:
             start_cmd = (
@@ -245,12 +245,12 @@ class AILauncher:
         if provider == "codex":
             input_fifo = runtime / "input.fifo"
             output_fifo = runtime / "output.fifo"
-            # iTerm2 模式通过 pane 注入文本，不强依赖 FIFO
+            # iTerm2 mode injects text via pane, no strong FIFO dependency
             self._write_codex_session(runtime, None, input_fifo, output_fifo, pane_id=pane_id)
         else:
             self._write_gemini_session(runtime, None, pane_id=pane_id)
 
-        print(f"✅ {provider.capitalize()} 已启动 (iterm2 session: {pane_id})")
+        print(f"✅ {provider.capitalize()} started (iterm2 session: {pane_id})")
         return True
 
     def _work_dir_strings(self, work_dir: Path) -> list[str]:
@@ -414,8 +414,8 @@ class AILauncher:
 
     def _get_start_cmd(self, provider: str) -> str:
         if provider == "codex":
-            # NOTE: Codex TUI 有 paste-burst 检测；终端注入（wezterm send-text/tmux paste-buffer）
-            # 往往会被识别为“粘贴”，导致回车仅换行不提交。默认关闭该检测，保证自动通信可用。
+            # NOTE: Codex TUI has paste-burst detection; terminal injection (wezterm send-text/tmux paste-buffer)
+            # is often detected as "paste", causing Enter to only line-break not submit. Disable detection by default.
             return self._build_codex_start_cmd()
         elif provider == "gemini":
             return self._build_gemini_start_cmd()
@@ -487,7 +487,7 @@ exec tmux attach -t "$TMUX_SESSION"
         else:
             subprocess.Popen([terminal, "-e", str(script_file)])
 
-        print(f"✅ Codex 已启动 (tmux: {tmux_session})")
+        print(f"✅ Codex started (tmux: {tmux_session})")
         return True
 
     def _start_gemini(self, tmux_session: str) -> bool:
@@ -500,7 +500,7 @@ exec tmux attach -t "$TMUX_SESSION"
 
         self._write_gemini_session(runtime, tmux_session)
 
-        # 创建启动脚本
+        # Create startup script
         wrapper = f'''#!/bin/bash
 	cd "{os.getcwd()}"
 	tmux new-session -d -s "{tmux_session}" 2>/dev/null || true
@@ -515,7 +515,7 @@ exec tmux attach -t "$TMUX_SESSION"
             if self._launch_script_in_macos_terminal(script_file):
                 pass
             else:
-                # 纯 tmux 模式
+                # Pure tmux mode
                 subprocess.run(["tmux", "new-session", "-d", "-s", tmux_session], check=True, cwd=os.getcwd())
                 backend = TmuxBackend()
                 deadline = time.time() + 1.0
@@ -530,20 +530,20 @@ exec tmux attach -t "$TMUX_SESSION"
                         time.sleep(sleep_s)
                         sleep_s = min(0.2, sleep_s * 2)
         else:
-            # 打开新终端窗口
+            # Open new terminal window
             subprocess.Popen([terminal, "--", str(script_file)])
 
-        print(f"✅ Gemini 已启动 (tmux: {tmux_session})")
+        print(f"✅ Gemini started (tmux: {tmux_session})")
         return True
 
     def _write_codex_session(self, runtime, tmux_session, input_fifo, output_fifo, pane_id=None):
         session_file = Path.cwd() / ".codex-session"
 
-        # 预检查权限
+        # Pre-check permissions
         writable, reason, fix = check_session_writable(session_file)
         if not writable:
-            print(f"❌ 无法写入 {session_file.name}: {reason}", file=sys.stderr)
-            print(f"💡 解决方案: {fix}", file=sys.stderr)
+            print(f"❌ Cannot write {session_file.name}: {reason}", file=sys.stderr)
+            print(f"💡 Fix: {fix}", file=sys.stderr)
             return False
 
         data = {}
@@ -576,11 +576,11 @@ exec tmux attach -t "$TMUX_SESSION"
     def _write_gemini_session(self, runtime, tmux_session, pane_id=None):
         session_file = Path.cwd() / ".gemini-session"
 
-        # 预检查权限
+        # Pre-check permissions
         writable, reason, fix = check_session_writable(session_file)
         if not writable:
-            print(f"❌ 无法写入 {session_file.name}: {reason}", file=sys.stderr)
-            print(f"💡 解决方案: {fix}", file=sys.stderr)
+            print(f"❌ Cannot write {session_file.name}: {reason}", file=sys.stderr)
+            print(f"💡 Fix: {fix}", file=sys.stderr)
             return False
 
         data = {
@@ -689,7 +689,7 @@ exec tmux attach -t "$TMUX_SESSION"
         )
 
     def _start_claude(self) -> int:
-        print("🚀 启动 Claude...")
+        print("🚀 Starting Claude...")
 
         env = os.environ.copy()
         if "codex" in self.providers:
@@ -744,29 +744,29 @@ exec tmux attach -t "$TMUX_SESSION"
             cmd.extend(["--session-id", new_id])
             self._write_local_claude_session(new_id, active=True)
 
-        print(f"📋 会话ID: {self.session_id}")
-        print(f"📁 运行目录: {self.runtime_dir}")
-        print(f"🔌 活跃后端: {', '.join(self.providers)}")
+        print(f"📋 Session ID: {self.session_id}")
+        print(f"📁 Runtime dir: {self.runtime_dir}")
+        print(f"🔌 Active backends: {', '.join(self.providers)}")
         print()
-        print("🎯 可用命令:")
+        print("🎯 Available commands:")
         if "codex" in self.providers:
-            print("   cask/cask-w/cping/cpend - Codex 通信")
+            print("   cask/cask-w/cping/cpend - Codex communication")
         if "gemini" in self.providers:
-            print("   gask/gask-w/gping/gpend - Gemini 通信")
+            print("   gask/gask-w/gping/gpend - Gemini communication")
         print()
-        print(f"执行: {' '.join(cmd)}")
+        print(f"Executing: {' '.join(cmd)}")
 
         try:
             return subprocess.run(cmd, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr, env=env).returncode
         except KeyboardInterrupt:
-            print("\n⚠️ 用户中断")
+            print("\n⚠️ User interrupted")
             return 130
 
     def cleanup(self):
         if self._cleaned:
             return
         self._cleaned = True
-        print("\n🧹 清理会话资源...")
+        print("\n🧹 Cleaning up session resources...")
 
         if self.terminal_type == "wezterm":
             backend = WeztermBackend()
@@ -797,14 +797,14 @@ exec tmux attach -t "$TMUX_SESSION"
         if self.runtime_dir.exists():
             shutil.rmtree(self.runtime_dir, ignore_errors=True)
 
-        print("✅ 清理完成")
+        print("✅ Cleanup complete")
 
     def run_up(self) -> int:
         git_info = _get_git_info()
         version_str = f"v{VERSION}" + (f" ({git_info})" if git_info else "")
         print(f"🚀 Claude Code Bridge {version_str}")
         print(f"📅 {time.strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"🔌 后端: {', '.join(self.providers)}")
+        print(f"🔌 Backends: {', '.join(self.providers)}")
         print("=" * 50)
 
         atexit.register(self.cleanup)
@@ -823,7 +823,7 @@ exec tmux attach -t "$TMUX_SESSION"
             self._warmup_provider(provider)
 
         if self.no_claude:
-            print("✅ 后端已启动（--no-claude 模式）")
+            print("✅ Backends started (--no-claude mode)")
             print()
             for provider in self.providers:
                 if self.terminal_type == "wezterm":
@@ -839,7 +839,7 @@ exec tmux attach -t "$TMUX_SESSION"
                     if tmux:
                         print(f"   {provider}: tmux attach -t {tmux}")
             print()
-            print(f"终止: ccb kill {' '.join(self.providers)}")
+            print(f"Kill: ccb kill {' '.join(self.providers)}")
             atexit.unregister(self.cleanup)
             return 0
 
@@ -866,7 +866,7 @@ def cmd_status(args):
     for provider in providers:
         session_file = Path.cwd() / f".{provider}-session"
         if not session_file.exists():
-            results[provider] = {"status": "未配置", "active": False}
+            results[provider] = {"status": "Not configured", "active": False}
             continue
 
         try:
@@ -888,16 +888,16 @@ def cmd_status(args):
                 alive = False
 
             results[provider] = {
-                "status": "运行中" if (active and alive) else "已停止",
+                "status": "Running" if (active and alive) else "Stopped",
                 "active": active and alive,
                 "terminal": terminal,
                 "pane_id": pane_id,
                 "runtime_dir": data.get("runtime_dir", ""),
             }
         except Exception as e:
-            results[provider] = {"status": f"错误: {e}", "active": False}
+            results[provider] = {"status": f"Error: {e}", "active": False}
 
-    print("📊 AI 后端状态:")
+    print("📊 AI backend status:")
     for provider, info in results.items():
         icon = "✅" if info.get("active") else "❌"
         print(f"  {icon} {provider.capitalize()}: {info['status']}")
@@ -913,7 +913,7 @@ def cmd_kill(args):
     for provider in providers:
         session_file = Path.cwd() / f".{provider}-session"
         if not session_file.exists():
-            print(f"⚠️ {provider}: 未找到会话文件")
+            print(f"⚠️ {provider}: Session file not found")
             continue
 
         try:
@@ -935,7 +935,7 @@ def cmd_kill(args):
             data["ended_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
             session_file.write_text(json.dumps(data, ensure_ascii=False, indent=2))
 
-            print(f"✅ {provider.capitalize()} 已终止")
+            print(f"✅ {provider.capitalize()} terminated")
         except Exception as e:
             print(f"❌ {provider}: {e}")
 
@@ -948,7 +948,7 @@ def cmd_restore(args):
     for provider in providers:
         session_file = Path.cwd() / f".{provider}-session"
         if not session_file.exists():
-            print(f"⚠️ {provider}: 未找到会话文件")
+            print(f"⚠️ {provider}: Session file not found")
             continue
 
         try:
@@ -1037,14 +1037,14 @@ def cmd_restore(args):
                                 break
 
                 if has_history:
-                    print(f"ℹ️ {provider}: 会话已结束，但可恢复历史会话")
+                    print(f"ℹ️ {provider}: Session ended but history recoverable")
                     if session_id:
-                        print(f"   会话ID: {session_id[:8]}...")
-                    print(f"   使用: ccb up {provider} -r")
+                        print(f"   Session ID: {session_id[:8]}...")
+                    print(f"   Use: ccb up {provider} -r")
                 else:
-                    print(f"⚠️ {provider}: 会话已结束，无可恢复历史")
+                    print(f"⚠️ {provider}: Session ended, no recoverable history")
             else:
-                print(f"⚠️ {provider}: 会话已丢失，使用 ccb up {provider} -r 重启")
+                print(f"⚠️ {provider}: Session lost, use ccb up {provider} -r to restart")
 
         except Exception as e:
             print(f"❌ {provider}: {e}")
@@ -1140,7 +1140,7 @@ def cmd_update(args):
         tmp_dir.mkdir(parents=True, exist_ok=True)
         tarball_path = tmp_dir / "main.tar.gz"
 
-        # 优先使用 curl/wget（更好的证书处理）
+        # Prefer curl/wget (better certificate handling)
         downloaded = False
         if shutil.which("curl"):
             result = subprocess.run(
@@ -1155,12 +1155,12 @@ def cmd_update(args):
             )
             downloaded = result.returncode == 0
         if not downloaded:
-            # 回退到 urllib（可能有 SSL 问题）
+            # Fallback to urllib (may have SSL issues)
             import ssl
             try:
                 urllib.request.urlretrieve(tarball_url, tarball_path)
             except ssl.SSLError:
-                print("⚠️ SSL 证书验证失败，尝试跳过验证...")
+                print("⚠️ SSL certificate verification failed, trying to skip...")
                 ctx = ssl.create_default_context()
                 ctx.check_hostname = False
                 ctx.verify_mode = ssl.CERT_NONE
@@ -1187,7 +1187,7 @@ def cmd_update(args):
         subprocess.run([str(extracted_dir / "install.sh"), "install"], check=True, env=env)
 
         print("✅ Update complete!")
-        print("💡 推荐：安装 WezTerm 作为终端前端（分屏/滚动体验更好），详情见 README。")
+        print("💡 Recommended: Install WezTerm as terminal frontend (better split/scroll experience), see README.")
         return 0
 
     except Exception as e:
@@ -1200,29 +1200,29 @@ def cmd_update(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Claude AI 统一启动器", add_help=True)
-    subparsers = parser.add_subparsers(dest="command", help="子命令")
+    parser = argparse.ArgumentParser(description="Claude AI unified launcher", add_help=True)
+    subparsers = parser.add_subparsers(dest="command", help="Subcommands")
 
-    # up 子命令
-    up_parser = subparsers.add_parser("up", help="启动 AI 后端")
-    up_parser.add_argument("providers", nargs="*", choices=["codex", "gemini"], help="要启动的后端")
-    up_parser.add_argument("-r", "--resume", action="store_true", help="恢复上下文")
-    up_parser.add_argument("-a", "--auto", action="store_true", help="全自动权限模式")
-    up_parser.add_argument("--no-claude", action="store_true", help="不启动 Claude 主窗口")
+    # up subcommand
+    up_parser = subparsers.add_parser("up", help="Start AI backends")
+    up_parser.add_argument("providers", nargs="*", choices=["codex", "gemini"], help="Backends to start")
+    up_parser.add_argument("-r", "--resume", action="store_true", help="Resume context")
+    up_parser.add_argument("-a", "--auto", action="store_true", help="Full auto permission mode")
+    up_parser.add_argument("--no-claude", action="store_true", help="Don't start Claude main window")
 
-    # status 子命令
-    status_parser = subparsers.add_parser("status", help="检查状态")
-    status_parser.add_argument("providers", nargs="*", default=[], help="要检查的后端 (codex/gemini)")
+    # status subcommand
+    status_parser = subparsers.add_parser("status", help="Check status")
+    status_parser.add_argument("providers", nargs="*", default=[], help="Backends to check (codex/gemini)")
 
-    # kill 子命令
-    kill_parser = subparsers.add_parser("kill", help="终止会话")
-    kill_parser.add_argument("providers", nargs="*", default=[], help="要终止的后端 (codex/gemini)")
+    # kill subcommand
+    kill_parser = subparsers.add_parser("kill", help="Terminate session")
+    kill_parser.add_argument("providers", nargs="*", default=[], help="Backends to terminate (codex/gemini)")
 
-    # restore 子命令
-    restore_parser = subparsers.add_parser("restore", help="恢复/attach 会话")
-    restore_parser.add_argument("providers", nargs="*", default=[], help="要恢复的后端 (codex/gemini)")
+    # restore subcommand
+    restore_parser = subparsers.add_parser("restore", help="Restore/attach session")
+    restore_parser.add_argument("providers", nargs="*", default=[], help="Backends to restore (codex/gemini)")
 
-    # update 子命令
+    # update subcommand
     update_parser = subparsers.add_parser("update", help="Update to latest version")
 
     args = parser.parse_args()

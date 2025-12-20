@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Codex 通信模块（日志驱动版本）
-通过 FIFO 发送请求，并从 ~/.codex/sessions 下的官方日志解析回复。
+Codex communication module (log-driven version)
+Sends requests via FIFO and parses replies from ~/.codex/sessions logs.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ SESSION_ID_PATTERN = re.compile(
 
 
 class CodexLogReader:
-    """读取 ~/.codex/sessions 内的 Codex 官方日志"""
+    """Reads Codex official logs from ~/.codex/sessions"""
 
     def __init__(self, root: Path = SESSION_ROOT, log_path: Optional[Path] = None, session_id_filter: Optional[str] = None):
         self.root = Path(root).expanduser()
@@ -88,7 +88,7 @@ class CodexLogReader:
         return self._latest_log()
 
     def capture_state(self) -> Dict[str, Any]:
-        """记录当前日志与偏移"""
+        """Capture current log path and offset"""
         log = self._latest_log()
         offset = 0
         if log and log.exists():
@@ -99,15 +99,15 @@ class CodexLogReader:
         return {"log_path": log, "offset": offset}
 
     def wait_for_message(self, state: Dict[str, Any], timeout: float) -> Tuple[Optional[str], Dict[str, Any]]:
-        """阻塞等待新的回复"""
+        """Block and wait for new reply"""
         return self._read_since(state, timeout, block=True)
 
     def try_get_message(self, state: Dict[str, Any]) -> Tuple[Optional[str], Dict[str, Any]]:
-        """非阻塞读取回复"""
+        """Non-blocking read for reply"""
         return self._read_since(state, timeout=0.0, block=False)
 
     def latest_message(self) -> Optional[str]:
-        """直接获取最新一条回复"""
+        """Get the latest reply directly"""
         log_path = self._latest_log()
         if not log_path or not log_path.exists():
             return None
@@ -160,7 +160,7 @@ class CodexLogReader:
             if latest:
                 self._preferred_log = latest
                 return latest
-            raise FileNotFoundError("未找到 Codex session 日志")
+            raise FileNotFoundError("Codex session log not found")
 
         while True:
             try:
@@ -234,12 +234,12 @@ class CodexLogReader:
 
 
 class CodexCommunicator:
-    """通过 FIFO 与 Codex 桥接器通信，并使用日志读取回复"""
+    """Communicates with Codex bridge via FIFO and reads replies from logs"""
 
     def __init__(self):
         self.session_info = self._load_session_info()
         if not self.session_info:
-            raise RuntimeError("❌ 未找到活跃的Codex会话，请先运行 ccb up codex")
+            raise RuntimeError("❌ No active Codex session found. Run 'ccb up codex' first")
 
         self.session_id = self.session_info["session_id"]
         self.runtime_dir = Path(self.session_info["runtime_dir"])
@@ -259,12 +259,12 @@ class CodexCommunicator:
 
         healthy, msg = self._check_session_health()
         if not healthy:
-            raise RuntimeError(f"❌ 会话不健康: {msg}\n提示: 请运行 ccb up codex 启动新会话")
+            raise RuntimeError(f"❌ Session unhealthy: {msg}\nTip: Run 'ccb up codex' to start a new session")
 
     def _load_session_info(self):
         if "CODEX_SESSION_ID" in os.environ:
             terminal = os.environ.get("CODEX_TERMINAL", "tmux")
-            # 根据终端类型获取正确的 pane_id
+            # Get pane_id based on terminal type
             if terminal == "wezterm":
                 pane_id = os.environ.get("CODEX_WEZTERM_PANE", "")
             elif terminal == "iterm2":
@@ -307,7 +307,7 @@ class CodexCommunicator:
             return None
 
     def _prime_log_binding(self) -> None:
-        """确保在会话启动时尽早绑定日志路径和会话ID"""
+        """Ensure log path and session ID are bound early at session start"""
         log_hint = self.log_reader.current_log_path()
         if not log_hint:
             return
@@ -319,52 +319,52 @@ class CodexCommunicator:
     def _check_session_health_impl(self, probe_terminal: bool):
         try:
             if not self.runtime_dir.exists():
-                return False, "运行时目录不存在"
+                return False, "Runtime directory does not exist"
 
-            # WezTerm/iTerm2 模式：没有 tmux wrapper，因此通常不会生成 codex.pid；
-            # 以 pane 存活作为健康判定（与 Gemini 逻辑一致）。
+            # WezTerm/iTerm2 mode: no tmux wrapper, so codex.pid usually not generated;
+            # use pane liveness as health check (consistent with Gemini logic).
             if self.terminal in ("wezterm", "iterm2"):
                 if not self.pane_id:
-                    return False, f"未找到 {self.terminal} pane_id"
+                    return False, f"{self.terminal} pane_id not found"
                 if probe_terminal and (not self.backend or not self.backend.is_alive(self.pane_id)):
-                    return False, f"{self.terminal} pane 不存在: {self.pane_id}"
-                return True, "会话正常"
+                    return False, f"{self.terminal} pane does not exist: {self.pane_id}"
+                return True, "Session healthy"
 
-            # tmux 模式：依赖 wrapper 写入 codex.pid 与 FIFO
+            # tmux mode: relies on wrapper to write codex.pid and FIFO
             codex_pid_file = self.runtime_dir / "codex.pid"
             if not codex_pid_file.exists():
-                return False, "Codex进程PID文件不存在"
+                return False, "Codex process PID file not found"
 
             with open(codex_pid_file, "r", encoding="utf-8") as f:
                 codex_pid = int(f.read().strip())
             try:
                 os.kill(codex_pid, 0)
             except OSError:
-                return False, f"Codex进程(PID:{codex_pid})已退出"
+                return False, f"Codex process (PID:{codex_pid}) has exited"
 
             bridge_pid_file = self.runtime_dir / "bridge.pid"
             if not bridge_pid_file.exists():
-                return False, "Bridge进程PID文件不存在"
+                return False, "Bridge process PID file not found"
             try:
                 with bridge_pid_file.open("r", encoding="utf-8") as handle:
                     bridge_pid = int(handle.read().strip())
             except Exception:
-                return False, "Bridge进程PID读取失败"
+                return False, "Failed to read bridge process PID"
             try:
                 os.kill(bridge_pid, 0)
             except OSError:
-                return False, f"Bridge进程(PID:{bridge_pid})已退出"
+                return False, f"Bridge process (PID:{bridge_pid}) has exited"
 
             if not self.input_fifo.exists():
-                return False, "通信管道不存在"
+                return False, "Communication pipe does not exist"
 
-            return True, "会话正常"
+            return True, "Session healthy"
         except Exception as exc:
-            return False, f"检查失败: {exc}"
+            return False, f"Health check failed: {exc}"
 
     def _send_via_terminal(self, content: str) -> None:
         if not self.backend or not self.pane_id:
-            raise RuntimeError("未配置终端会话")
+            raise RuntimeError("Terminal session not configured")
         self.backend.send_text(self.pane_id, content)
 
     def _send_message(self, content: str) -> Tuple[str, Dict[str, Any]]:
@@ -377,7 +377,7 @@ class CodexCommunicator:
 
         state = self.log_reader.capture_state()
 
-        # tmux 模式优先通过 FIFO 驱动桥接器；WezTerm/iTerm2 模式则直接向 pane 注入文本
+        # tmux mode drives bridge via FIFO; WezTerm/iTerm2 mode injects text directly to pane
         if self.terminal in ("wezterm", "iterm2"):
             self._send_via_terminal(content)
         else:
@@ -394,29 +394,29 @@ class CodexCommunicator:
         try:
             healthy, status = self._check_session_health_impl(probe_terminal=False)
             if not healthy:
-                raise RuntimeError(f"❌ 会话异常: {status}")
+                raise RuntimeError(f"❌ Session error: {status}")
 
             marker, state = self._send_message(question)
             log_hint = state.get("log_path") or self.log_reader.current_log_path()
             self._remember_codex_session(log_hint)
-            print(f"✅ 已发送到Codex (标记: {marker[:12]}...)")
-            print("提示: 使用 /cpend 查看最新回复")
+            print(f"✅ Sent to Codex (marker: {marker[:12]}...)")
+            print("Tip: Use /cpend to view latest reply")
             return True
         except Exception as exc:
-            print(f"❌ 发送失败: {exc}")
+            print(f"❌ Send failed: {exc}")
             return False
 
     def ask_sync(self, question: str, timeout: Optional[int] = None) -> Optional[str]:
         try:
             healthy, status = self._check_session_health_impl(probe_terminal=False)
             if not healthy:
-                raise RuntimeError(f"❌ 会话异常: {status}")
+                raise RuntimeError(f"❌ Session error: {status}")
 
-            print("🔔 发送问题到Codex...")
+            print("🔔 Sending question to Codex...")
             marker, state = self._send_message(question)
             wait_timeout = self.timeout if timeout is None else int(timeout)
             if wait_timeout == 0:
-                print("⏳ 等待 Codex 回复 (无超时，Ctrl-C 可中断)...")
+                print("⏳ Waiting for Codex reply (no timeout, Ctrl-C to interrupt)...")
                 start_time = time.time()
                 last_hint = 0
                 while True:
@@ -427,29 +427,29 @@ class CodexCommunicator:
                         log_hint = self.log_reader.current_log_path()
                     self._remember_codex_session(log_hint)
                     if message:
-                        print("🤖 Codex回复:")
+                        print("🤖 Codex reply:")
                         print(message)
                         return message
                     elapsed = int(time.time() - start_time)
                     if elapsed >= last_hint + 30:
                         last_hint = elapsed
-                        print(f"⏳ 仍在等待... ({elapsed}s)")
+                        print(f"⏳ Still waiting... ({elapsed}s)")
 
-            print(f"⏳ 等待Codex回复 (超时 {wait_timeout} 秒)...")
+            print(f"⏳ Waiting for Codex reply (timeout {wait_timeout}s)...")
             message, new_state = self.log_reader.wait_for_message(state, float(wait_timeout))
             log_hint = (new_state or {}).get("log_path") if isinstance(new_state, dict) else None
             if not log_hint:
                 log_hint = self.log_reader.current_log_path()
             self._remember_codex_session(log_hint)
             if message:
-                print("🤖 Codex回复:")
+                print("🤖 Codex reply:")
                 print(message)
                 return message
 
-            print("⏰ Codex未在限定时间内回复，可稍后执行 /cpend 获取最新答案")
+            print("⏰ Codex did not reply in time. Use /cpend later to get the latest answer")
             return None
         except Exception as exc:
-            print(f"❌ 同步询问失败: {exc}")
+            print(f"❌ Sync ask failed: {exc}")
             return None
 
     def consume_pending(self, display: bool = True):
@@ -460,7 +460,7 @@ class CodexCommunicator:
             self._remember_codex_session(self.log_reader.current_log_path())
         if not message:
             if display:
-                print("暂无 Codex 回复")
+                print("No Codex reply available")
             return None
         if display:
             print(message)
@@ -468,7 +468,7 @@ class CodexCommunicator:
 
     def ping(self, display: bool = True) -> Tuple[bool, str]:
         healthy, status = self._check_session_health()
-        msg = f"✅ Codex连接正常 ({status})" if healthy else f"❌ Codex连接异常: {status}"
+        msg = f"✅ Codex connection OK ({status})" if healthy else f"❌ Codex connection error: {status}"
         if display:
             print(msg)
         return healthy, msg
@@ -544,12 +544,12 @@ class CodexCommunicator:
                     json.dump(data, handle, ensure_ascii=False, indent=2)
                 os.replace(tmp_file, project_file)
             except PermissionError as e:
-                print(f"⚠️  无法更新 {project_file.name}: {e}", file=sys.stderr)
-                print(f"💡 尝试: sudo chown $USER:$USER {project_file}", file=sys.stderr)
+                print(f"⚠️  Cannot update {project_file.name}: {e}", file=sys.stderr)
+                print(f"💡 Try: sudo chown $USER:$USER {project_file}", file=sys.stderr)
                 if tmp_file.exists():
                     tmp_file.unlink(missing_ok=True)
             except Exception as e:
-                print(f"⚠️  更新 {project_file.name} 失败: {e}", file=sys.stderr)
+                print(f"⚠️  Failed to update {project_file.name}: {e}", file=sys.stderr)
                 if tmp_file.exists():
                     tmp_file.unlink(missing_ok=True)
 
@@ -601,13 +601,13 @@ class CodexCommunicator:
 def main() -> int:
     import argparse
 
-    parser = argparse.ArgumentParser(description="Codex 通信工具（日志驱动）")
-    parser.add_argument("question", nargs="*", help="要发送的问题")
-    parser.add_argument("--wait", "-w", action="store_true", help="同步等待回复")
-    parser.add_argument("--timeout", type=int, default=30, help="同步超时时间(秒)")
-    parser.add_argument("--ping", action="store_true", help="测试连通性")
-    parser.add_argument("--status", action="store_true", help="查看状态")
-    parser.add_argument("--pending", action="store_true", help="查看待处理回复")
+    parser = argparse.ArgumentParser(description="Codex communication tool (log-driven)")
+    parser.add_argument("question", nargs="*", help="Question to send")
+    parser.add_argument("--wait", "-w", action="store_true", help="Wait for reply synchronously")
+    parser.add_argument("--timeout", type=int, default=30, help="Sync timeout in seconds")
+    parser.add_argument("--ping", action="store_true", help="Test connectivity")
+    parser.add_argument("--status", action="store_true", help="Show status")
+    parser.add_argument("--pending", action="store_true", help="Show pending reply")
 
     args = parser.parse_args()
 
@@ -618,7 +618,7 @@ def main() -> int:
             comm.ping()
         elif args.status:
             status = comm.get_status()
-            print("📊 Codex状态:")
+            print("📊 Codex status:")
             for key, value in status.items():
                 print(f"   {key}: {value}")
         elif args.pending:
@@ -629,18 +629,18 @@ def main() -> int:
                 tokens = tokens[1:]
             question_text = " ".join(tokens).strip()
             if not question_text:
-                print("❌ 请提供问题内容")
+                print("❌ Please provide a question")
                 return 1
             if args.wait:
                 comm.ask_sync(question_text, args.timeout)
             else:
                 comm.ask_async(question_text)
         else:
-            print("请提供问题或使用 --ping/--status/--pending 选项")
+            print("Please provide a question or use --ping/--status/--pending options")
             return 1
         return 0
     except Exception as exc:
-        print(f"❌ 执行失败: {exc}")
+        print(f"❌ Execution failed: {exc}")
         return 1
 
 

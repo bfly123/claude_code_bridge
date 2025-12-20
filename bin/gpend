@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-gpend - 查看 Gemini 最新回复
+gpend - View latest Gemini reply
 """
 
 import sys
@@ -15,7 +15,7 @@ setup_windows_encoding()
 try:
     from gemini_comm import GeminiCommunicator
 except ImportError as exc:
-    print(f"导入失败: {exc}")
+    print(f"Import failed: {exc}")
     sys.exit(1)
 
 
@@ -26,10 +26,10 @@ def main() -> int:
         if output:
             print(output)
         else:
-            print('暂无 Gemini 回复')
+            print('No Gemini reply available')
         return 0
     except Exception as exc:
-        print(f"❌ 执行失败: {exc}")
+        print(f"❌ Execution failed: {exc}")
         return 1
 
 

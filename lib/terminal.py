@@ -36,7 +36,7 @@ def is_wsl() -> bool:
 
 
 def _load_cached_wezterm_bin() -> str | None:
-    """读取安装时缓存的 WezTerm 路径"""
+    """Load cached WezTerm path from installation"""
     config = Path.home() / ".config/ccb/env"
     if config.exists():
         try:
@@ -54,11 +54,11 @@ _cached_wezterm_bin: str | None = None
 
 
 def _get_wezterm_bin() -> str | None:
-    """获取 WezTerm 路径（带缓存）"""
+    """Get WezTerm path (with cache)"""
     global _cached_wezterm_bin
     if _cached_wezterm_bin:
         return _cached_wezterm_bin
-    # 优先级: 环境变量 > 安装缓存 > PATH > 硬编码路径
+    # Priority: env var > install cache > PATH > hardcoded paths
     override = os.environ.get("CODEX_WEZTERM_BIN") or os.environ.get("WEZTERM_BIN")
     if override and Path(override).exists():
         _cached_wezterm_bin = override
@@ -82,7 +82,7 @@ def _get_wezterm_bin() -> str | None:
 
 
 def _is_windows_wezterm() -> bool:
-    """检测 WezTerm 是否运行在 Windows 上"""
+    """Detect if WezTerm is running on Windows"""
     override = os.environ.get("CODEX_WEZTERM_BIN") or os.environ.get("WEZTERM_BIN")
     if override:
         if ".exe" in override.lower() or "/mnt/" in override:
@@ -171,7 +171,7 @@ class TmuxBackend(TerminalBackend):
 
 
 class Iterm2Backend(TerminalBackend):
-    """iTerm2 后端，使用 it2 CLI (pip install it2)"""
+    """iTerm2 backend, using it2 CLI (pip install it2)"""
     _it2_bin: Optional[str] = None
 
     @classmethod
@@ -189,15 +189,15 @@ class Iterm2Backend(TerminalBackend):
         sanitized = text.replace("\r", "").strip()
         if not sanitized:
             return
-        # 类似 WezTerm 的方式：先发送文本，再发送回车
-        # it2 session send 发送文本（不带换行）
+        # Similar to WezTerm: send text first, then send Enter
+        # it2 session send sends text (without newline)
         subprocess.run(
             [self._bin(), "session", "send", sanitized, "--session", session_id],
             check=True,
         )
-        # 等待一点时间，让 TUI 处理输入
+        # Wait a bit for TUI to process input
         time.sleep(0.01)
-        # 发送回车键（使用 \r）
+        # Send Enter key (using \r)
         subprocess.run(
             [self._bin(), "session", "send", "\r", "--session", session_id],
             check=True,
@@ -226,29 +226,29 @@ class Iterm2Backend(TerminalBackend):
         subprocess.run([self._bin(), "session", "focus", session_id])
 
     def create_pane(self, cmd: str, cwd: str, direction: str = "right", percent: int = 50, parent_pane: Optional[str] = None) -> str:
-        # iTerm2 分屏：vertical 对应 right，horizontal 对应 bottom
+        # iTerm2 split: vertical corresponds to right, horizontal to bottom
         args = [self._bin(), "session", "split"]
         if direction == "right":
             args.append("--vertical")
-        # 如果有 parent_pane，指定目标 session
+        # If parent_pane specified, target that session
         if parent_pane:
             args.extend(["--session", parent_pane])
 
         result = subprocess.run(args, capture_output=True, text=True, check=True)
-        # it2 输出格式: "Created new pane: <session_id>"
+        # it2 output format: "Created new pane: <session_id>"
         output = result.stdout.strip()
         if ":" in output:
             new_session_id = output.split(":")[-1].strip()
         else:
-            # 尝试从 stderr 或其他地方获取
+            # Try to get from stderr or elsewhere
             new_session_id = output
 
-        # 在新 pane 中执行启动命令
+        # Execute startup command in new pane
         if new_session_id and cmd:
-            # 先 cd 到工作目录，再执行命令
+            # First cd to work directory, then execute command
             full_cmd = f"cd {shlex.quote(cwd)} && {cmd}"
-            time.sleep(0.2)  # 等待 pane 就绪
-            # 使用 send + 回车的方式，与 send_text 保持一致
+            time.sleep(0.2)  # Wait for pane ready
+            # Use send + Enter, consistent with send_text
             subprocess.run(
                 [self._bin(), "session", "send", full_cmd, "--session", new_session_id],
                 check=True
@@ -378,20 +378,20 @@ _backend_cache: Optional[TerminalBackend] = None
 
 
 def detect_terminal() -> Optional[str]:
-    # 优先检测当前环境变量（已在某终端中运行）
+    # Priority: check current env vars (already running in a terminal)
     if os.environ.get("WEZTERM_PANE"):
         return "wezterm"
     if os.environ.get("ITERM_SESSION_ID"):
         return "iterm2"
     if os.environ.get("TMUX"):
         return "tmux"
-    # 检查配置的二进制覆盖或缓存路径
+    # Check configured binary override or cached path
     if _get_wezterm_bin():
         return "wezterm"
     override = os.environ.get("CODEX_IT2_BIN") or os.environ.get("IT2_BIN")
     if override and Path(override).expanduser().exists():
         return "iterm2"
-    # 检查可用的终端工具
+    # Check available terminal tools
     if shutil.which("it2"):
         return "iterm2"
     if shutil.which("tmux") or shutil.which("tmux.exe"):

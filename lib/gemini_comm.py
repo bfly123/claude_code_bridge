@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Gemini 通信模块
-支持 tmux 和 WezTerm 终端发送请求，从 ~/.gemini/tmp/<hash>/chats/session-*.json 读取回复
+Gemini communication module
+Supports tmux and WezTerm terminals, reads replies from ~/.gemini/tmp/<hash>/chats/session-*.json
 """
 
 from __future__ import annotations
@@ -22,10 +22,10 @@ GEMINI_ROOT = Path(os.environ.get("GEMINI_ROOT") or (Path.home() / ".gemini" / "
 
 
 def _get_project_hash(work_dir: Optional[Path] = None) -> str:
-    """计算项目目录的哈希值（与 gemini-cli 的 Storage.getFilePathHash 一致）"""
+    """Calculate project directory hash (consistent with gemini-cli's Storage.getFilePathHash)"""
     path = work_dir or Path.cwd()
-    # gemini-cli 使用的是 Node.js 的 path.resolve()（不会 realpath 解析符号链接），
-    # 因此这里使用 absolute() 而不是 resolve()，避免在 WSL/Windows 场景下 hash 不一致。
+    # gemini-cli uses Node.js path.resolve() (doesn't resolve symlinks),
+    # so we use absolute() instead of resolve() to avoid hash mismatch on WSL/Windows.
     try:
         normalized = str(path.expanduser().absolute())
     except Exception:
@@ -34,7 +34,7 @@ def _get_project_hash(work_dir: Optional[Path] = None) -> str:
 
 
 class GeminiLogReader:
-    """读取 ~/.gemini/tmp/<hash>/chats 内的 Gemini 会话文件"""
+    """Reads Gemini session files from ~/.gemini/tmp/<hash>/chats"""
 
     def __init__(self, root: Path = GEMINI_ROOT, work_dir: Optional[Path] = None):
         self.root = Path(root).expanduser()
@@ -60,7 +60,7 @@ class GeminiLogReader:
         return chats if chats.exists() else None
 
     def _scan_latest_session_any_project(self) -> Optional[Path]:
-        """在所有 projectHash 下扫描最新 session 文件（用于 Windows/WSL 路径哈希不一致的兜底）"""
+        """Scan latest session across all projectHash (fallback for Windows/WSL path hash mismatch)"""
         if not self.root.exists():
             return None
         try:
@@ -88,7 +88,7 @@ class GeminiLogReader:
         if sessions:
             return sessions[-1]
 
-        # fallback: projectHash 可能因路径规范化差异（Windows/WSL、符号链接等）而不匹配
+        # fallback: projectHash may mismatch due to path normalization differences (Windows/WSL, symlinks, etc.)
         return self._scan_latest_session_any_project()
 
     def _latest_session(self) -> Optional[Path]:
@@ -98,7 +98,7 @@ class GeminiLogReader:
         if latest:
             self._preferred_session = latest
             try:
-                # 若是 fallback 扫描到的 session，则反向绑定 projectHash，后续避免全量扫描
+                # If session found via fallback scan, bind projectHash to avoid future full scans
                 project_hash = latest.parent.parent.name
                 if project_hash:
                     self._project_hash = project_hash
@@ -120,7 +120,7 @@ class GeminiLogReader:
         return self._latest_session()
 
     def capture_state(self) -> Dict[str, Any]:
-        """记录当前会话文件和消息数量"""
+        """Record current session file and message count"""
         session = self._latest_session()
         msg_count = 0
         mtime = 0.0
@@ -154,15 +154,15 @@ class GeminiLogReader:
         }
 
     def wait_for_message(self, state: Dict[str, Any], timeout: float) -> Tuple[Optional[str], Dict[str, Any]]:
-        """阻塞等待新的 Gemini 回复"""
+        """Block and wait for new Gemini reply"""
         return self._read_since(state, timeout, block=True)
 
     def try_get_message(self, state: Dict[str, Any]) -> Tuple[Optional[str], Dict[str, Any]]:
-        """非阻塞读取回复"""
+        """Non-blocking read reply"""
         return self._read_since(state, timeout=0.0, block=False)
 
     def latest_message(self) -> Optional[str]:
-        """直接获取最新一条 Gemini 回复"""
+        """Get the latest Gemini reply directly"""
         session = self._latest_session()
         if not session or not session.exists():
             return None
@@ -188,18 +188,18 @@ class GeminiLogReader:
         prev_session = state.get("session_path")
         prev_last_gemini_id = state.get("last_gemini_id")
         prev_last_gemini_hash = state.get("last_gemini_hash")
-        # 允许短 timeout 场景下也能扫描到新 session 文件（gask-w 默认 1s/次）
+        # Allow short timeout to scan new session files (gask-w defaults 1s/poll)
         rescan_interval = min(2.0, max(0.2, timeout / 2.0))
         last_rescan = time.time()
         last_forced_read = time.time()
 
         while True:
-            # 定期重新扫描，检测是否有新会话文件
+            # Periodically rescan to detect new session files
             if time.time() - last_rescan >= rescan_interval:
                 latest = self._scan_latest_session()
                 if latest and latest != self._preferred_session:
                     self._preferred_session = latest
-                    # 新会话文件，重置计数
+                    # New session file, reset counters
                     if latest != prev_session:
                         prev_count = 0
                         prev_mtime = 0.0
@@ -229,8 +229,8 @@ class GeminiLogReader:
                 current_mtime = stat.st_mtime
                 current_mtime_ns = getattr(stat, "st_mtime_ns", int(current_mtime * 1_000_000_000))
                 current_size = stat.st_size
-                # Windows/WSL 场景下文件 mtime 可能是秒级精度，单靠 mtime 会漏掉快速写入的更新；
-                # 因此同时用文件大小作为变化信号。
+                # On Windows/WSL, mtime may have second-level precision, which can miss rapid writes.
+                # Use file size as additional change signal.
                 if block and current_mtime_ns <= prev_mtime_ns and current_size == prev_size:
                     if time.time() - last_forced_read < self._force_read_interval:
                         time.sleep(self._poll_interval)
@@ -269,7 +269,7 @@ class GeminiLogReader:
                                 }
                                 return content, new_state
                 else:
-                    # 有些版本会先写入空的 gemini 消息，再“原地更新 content”，消息数不变。
+                    # Some versions write empty gemini message first, then update content in-place.
                     last = self._extract_last_gemini(data)
                     if last:
                         last_id, content = last
@@ -340,12 +340,12 @@ class GeminiLogReader:
 
 
 class GeminiCommunicator:
-    """通过终端与 Gemini 通信，并从会话文件读取回复"""
+    """Communicate with Gemini via terminal and read replies from session files"""
 
     def __init__(self):
         self.session_info = self._load_session_info()
         if not self.session_info:
-            raise RuntimeError("❌ 未找到活跃的 Gemini 会话，请先运行 ccb up gemini")
+            raise RuntimeError("❌ No active Gemini session found, please run ccb up gemini first")
 
         self.session_id = self.session_info["session_id"]
         self.runtime_dir = Path(self.session_info["runtime_dir"])
@@ -363,7 +363,7 @@ class GeminiCommunicator:
 
         healthy, msg = self._check_session_health()
         if not healthy:
-            raise RuntimeError(f"❌ 会话不健康: {msg}\n提示: 请运行 ccb up gemini")
+            raise RuntimeError(f"❌ Session unhealthy: {msg}\nHint: Please run ccb up gemini")
 
         self._prime_log_binding()
 
@@ -376,7 +376,7 @@ class GeminiCommunicator:
     def _load_session_info(self):
         if "GEMINI_SESSION_ID" in os.environ:
             terminal = os.environ.get("GEMINI_TERMINAL", "tmux")
-            # 根据终端类型获取正确的 pane_id
+            # Get correct pane_id based on terminal type
             if terminal == "wezterm":
                 pane_id = os.environ.get("GEMINI_WEZTERM_PANE", "")
             elif terminal == "iterm2":
@@ -419,18 +419,18 @@ class GeminiCommunicator:
     def _check_session_health_impl(self, probe_terminal: bool) -> Tuple[bool, str]:
         try:
             if not self.runtime_dir.exists():
-                return False, "运行时目录不存在"
+                return False, "Runtime directory not found"
             if not self.pane_id:
-                return False, "未找到会话 ID"
+                return False, "Session ID not found"
             if probe_terminal and self.backend and not self.backend.is_alive(self.pane_id):
-                return False, f"{self.terminal} 会话 {self.pane_id} 不存在"
-            return True, "会话正常"
+                return False, f"{self.terminal} session {self.pane_id} not found"
+            return True, "Session OK"
         except Exception as exc:
-            return False, f"检查失败: {exc}"
+            return False, f"Check failed: {exc}"
 
     def _send_via_terminal(self, content: str) -> bool:
         if not self.backend or not self.pane_id:
-            raise RuntimeError("未配置终端会话")
+            raise RuntimeError("Terminal session not configured")
         self.backend.send_text(self.pane_id, content)
         return True
 
@@ -438,30 +438,30 @@ class GeminiCommunicator:
         try:
             healthy, status = self._check_session_health_impl(probe_terminal=False)
             if not healthy:
-                raise RuntimeError(f"❌ 会话异常: {status}")
+                raise RuntimeError(f"❌ Session error: {status}")
 
             self._send_via_terminal(question)
-            print(f"✅ 已发送到 Gemini")
-            print("提示: 使用 gpend 查看回复")
+            print(f"✅ Sent to Gemini")
+            print("Hint: Use gpend to view reply")
             return True
         except Exception as exc:
-            print(f"❌ 发送失败: {exc}")
+            print(f"❌ Send failed: {exc}")
             return False
 
     def ask_sync(self, question: str, timeout: Optional[int] = None) -> Optional[str]:
         try:
             healthy, status = self._check_session_health_impl(probe_terminal=False)
             if not healthy:
-                raise RuntimeError(f"❌ 会话异常: {status}")
+                raise RuntimeError(f"❌ Session error: {status}")
 
-            print("🔔 发送问题到 Gemini...")
+            print("🔔 Sending question to Gemini...")
             self._send_via_terminal(question)
             # Capture state after sending to reduce "question → send" latency.
             state = self.log_reader.capture_state()
 
             wait_timeout = self.timeout if timeout is None else int(timeout)
             if wait_timeout == 0:
-                print("⏳ 等待 Gemini 回复 (无超时，Ctrl-C 可中断)...")
+                print("⏳ Waiting for Gemini reply (no timeout, Ctrl-C to interrupt)...")
                 start_time = time.time()
                 last_hint = 0
                 while True:
@@ -471,28 +471,28 @@ class GeminiCommunicator:
                     if isinstance(session_path, Path):
                         self._remember_gemini_session(session_path)
                     if message:
-                        print("🤖 Gemini 回复:")
+                        print("🤖 Gemini reply:")
                         print(message)
                         return message
                     elapsed = int(time.time() - start_time)
                     if elapsed >= last_hint + 30:
                         last_hint = elapsed
-                        print(f"⏳ 仍在等待... ({elapsed}s)")
+                        print(f"⏳ Still waiting... ({elapsed}s)")
 
-            print(f"⏳ 等待 Gemini 回复 (超时 {wait_timeout} 秒)...")
+            print(f"⏳ Waiting for Gemini reply (timeout {wait_timeout}s)...")
             message, new_state = self.log_reader.wait_for_message(state, float(wait_timeout))
             session_path = (new_state or {}).get("session_path") if isinstance(new_state, dict) else None
             if isinstance(session_path, Path):
                 self._remember_gemini_session(session_path)
             if message:
-                print("🤖 Gemini 回复:")
+                print("🤖 Gemini reply:")
                 print(message)
                 return message
 
-            print("⏰ Gemini 未在限定时间内回复，可稍后执行 gpend 获取答案")
+            print("⏰ Gemini did not reply in time, run gpend later to get the answer")
             return None
         except Exception as exc:
-            print(f"❌ 同步询问失败: {exc}")
+            print(f"❌ Sync ask failed: {exc}")
             return None
 
     def consume_pending(self, display: bool = True):
@@ -502,7 +502,7 @@ class GeminiCommunicator:
         message = self.log_reader.latest_message()
         if not message:
             if display:
-                print("暂无 Gemini 回复")
+                print("No Gemini reply yet")
             return None
         if display:
             print(message)
@@ -555,15 +555,15 @@ class GeminiCommunicator:
                 json.dump(data, handle, ensure_ascii=False, indent=2)
             os.replace(tmp_file, project_file)
         except PermissionError as e:
-            print(f"⚠️  无法更新 {project_file.name}: {e}", file=sys.stderr)
-            print(f"💡 尝试: sudo chown $USER:$USER {project_file}", file=sys.stderr)
+            print(f"⚠️  Cannot update {project_file.name}: {e}", file=sys.stderr)
+            print(f"💡 Try: sudo chown $USER:$USER {project_file}", file=sys.stderr)
             try:
                 if tmp_file.exists():
                     tmp_file.unlink(missing_ok=True)
             except Exception:
                 pass
         except Exception as e:
-            print(f"⚠️  更新 {project_file.name} 失败: {e}", file=sys.stderr)
+            print(f"⚠️  Failed to update {project_file.name}: {e}", file=sys.stderr)
             try:
                 if tmp_file.exists():
                     tmp_file.unlink(missing_ok=True)
@@ -572,7 +572,7 @@ class GeminiCommunicator:
 
     def ping(self, display: bool = True) -> Tuple[bool, str]:
         healthy, status = self._check_session_health()
-        msg = f"✅ Gemini 连接正常 ({status})" if healthy else f"❌ Gemini 连接异常: {status}"
+        msg = f"✅ Gemini connection OK ({status})" if healthy else f"❌ Gemini connection error: {status}"
         if display:
             print(msg)
         return healthy, msg
@@ -592,13 +592,13 @@ class GeminiCommunicator:
 def main() -> int:
     import argparse
 
-    parser = argparse.ArgumentParser(description="Gemini 通信工具")
-    parser.add_argument("question", nargs="*", help="要发送的问题")
-    parser.add_argument("--wait", "-w", action="store_true", help="同步等待回复")
-    parser.add_argument("--timeout", type=int, default=60, help="同步超时时间(秒)")
-    parser.add_argument("--ping", action="store_true", help="测试连通性")
-    parser.add_argument("--status", action="store_true", help="查看状态")
-    parser.add_argument("--pending", action="store_true", help="查看待处理回复")
+    parser = argparse.ArgumentParser(description="Gemini communication tool")
+    parser.add_argument("question", nargs="*", help="Question to send")
+    parser.add_argument("--wait", "-w", action="store_true", help="Wait for reply synchronously")
+    parser.add_argument("--timeout", type=int, default=60, help="Sync timeout in seconds")
+    parser.add_argument("--ping", action="store_true", help="Test connectivity")
+    parser.add_argument("--status", action="store_true", help="View status")
+    parser.add_argument("--pending", action="store_true", help="View pending reply")
 
     args = parser.parse_args()
 
@@ -609,7 +609,7 @@ def main() -> int:
             comm.ping()
         elif args.status:
             status = comm.get_status()
-            print("📊 Gemini 状态:")
+            print("📊 Gemini status:")
             for key, value in status.items():
                 print(f"   {key}: {value}")
         elif args.pending:
@@ -617,18 +617,18 @@ def main() -> int:
         elif args.question:
             question_text = " ".join(args.question).strip()
             if not question_text:
-                print("❌ 请提供问题内容")
+                print("❌ Please provide a question")
                 return 1
             if args.wait:
                 comm.ask_sync(question_text, args.timeout)
             else:
                 comm.ask_async(question_text)
         else:
-            print("请提供问题或使用 --ping/--status/--pending 选项")
+            print("Please provide a question or use --ping/--status/--pending")
             return 1
         return 0
     except Exception as exc:
-        print(f"❌ 执行失败: {exc}")
+        print(f"❌ Execution failed: {exc}")
         return 1
 
 

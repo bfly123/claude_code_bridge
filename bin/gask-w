@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-gask-w - 同步发送消息到 Gemini 并等待回复
+gask-w - Sync send message to Gemini and wait for reply
 """
 
 from __future__ import annotations
@@ -19,12 +19,12 @@ from gemini_comm import GeminiCommunicator
 
 def main(argv: list[str]) -> int:
     if len(argv) <= 1:
-        print("用法: gask-w <消息>", file=sys.stderr)
+        print("Usage: gask-w <message>", file=sys.stderr)
         return 1
 
     message = " ".join(argv[1:]).strip()
     if not message:
-        print("❌ 消息内容不能为空", file=sys.stderr)
+        print("❌ Message cannot be empty", file=sys.stderr)
         return 1
 
     try:

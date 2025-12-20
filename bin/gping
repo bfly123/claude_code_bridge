@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-gping - 测试 Gemini 连通性
+gping - Test Gemini connectivity
 """
 
 import sys
@@ -22,12 +22,12 @@ try:
             print(message)
             return 0 if healthy else 1
         except Exception as e:
-            print(f"❌ Gemini 连通性测试失败: {e}")
+            print(f"❌ Gemini connectivity test failed: {e}")
             return 1
 
     if __name__ == "__main__":
         sys.exit(main())
 
 except ImportError as e:
-    print(f"❌ 导入模块失败: {e}")
+    print(f"❌ Module import failed: {e}")
     sys.exit(1)

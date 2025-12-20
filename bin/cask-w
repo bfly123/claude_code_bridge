@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-cask-w - 同步发送消息到 Codex 并等待回复
+cask-w - Sync send message to Codex and wait for reply
 """
 from __future__ import annotations
 import sys
@@ -17,12 +17,12 @@ from codex_comm import CodexCommunicator
 
 def main(argv: list[str]) -> int:
     if len(argv) <= 1:
-        print("用法: cask-w <消息>", file=sys.stderr)
+        print("Usage: cask-w <message>", file=sys.stderr)
         return 1
 
     message = " ".join(argv[1:]).strip()
     if not message:
-        print("❌ 消息内容不能为空", file=sys.stderr)
+        print("❌ Message cannot be empty", file=sys.stderr)
         return 1
 
     try:

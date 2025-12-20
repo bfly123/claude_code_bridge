@@ -62,25 +62,25 @@ function Confirm-BackendEnv {
   if ($Yes -or $env:CCB_INSTALL_ASSUME_YES -eq "1") { return }
 
   if (-not [Environment]::UserInteractive) {
-    Write-Host "❌ 非交互环境下默认中止，避免 Windows/WSL 环境错配。"
-    Write-Host "   若确认 codex/gemini 将在 Windows 原生运行："
-    Write-Host "   重新运行: powershell -ExecutionPolicy Bypass -File .\install.ps1 install -Yes"
+    Write-Host "❌ Non-interactive environment detected, aborting to prevent Windows/WSL mismatch."
+    Write-Host "   If codex/gemini will run in native Windows:"
+    Write-Host "   Re-run: powershell -ExecutionPolicy Bypass -File .\install.ps1 install -Yes"
     exit 1
   }
 
   Write-Host ""
   Write-Host "================================================================"
-  Write-Host "⚠️  你正在 Windows 原生环境安装 ccb"
+  Write-Host "⚠️  You are installing ccb in native Windows environment"
   Write-Host "================================================================"
-  Write-Host "ccb/cask-w 必须与 codex/gemini 在同一环境运行。"
+  Write-Host "ccb/cask-w must run in the same environment as codex/gemini."
   Write-Host ""
-  Write-Host "请确认：你将把 codex/gemini 安装并运行在 Windows 原生（而不是 WSL 内）。"
-  Write-Host "如果你计划在 WSL 内运行 codex/gemini，请退出并在 WSL 中运行:"
+  Write-Host "Please confirm: You will install and run codex/gemini in native Windows (not WSL)."
+  Write-Host "If you plan to run codex/gemini in WSL, exit and run in WSL:"
   Write-Host "   ./install.sh install"
   Write-Host "================================================================"
-  $reply = Read-Host "确认继续在 Windows 中安装？(y/N)"
+  $reply = Read-Host "Continue installation in Windows? (y/N)"
   if ($reply.Trim().ToLower() -notin @("y", "yes")) {
-    Write-Host "已取消安装"
+    Write-Host "Installation cancelled"
     exit 1
   }
 }

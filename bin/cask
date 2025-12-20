@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-cask - 将消息转发到 Codex 会话
+cask - Forward message to Codex session
 """
 from __future__ import annotations
 import json
@@ -19,7 +19,7 @@ from terminal import get_backend_for_session, get_pane_id_from_session
 
 
 def _usage() -> None:
-    print("用法: cask <消息>", file=sys.stderr)
+    print("Usage: cask <message>", file=sys.stderr)
 
 
 def _load_session() -> Optional[dict]:
@@ -48,10 +48,10 @@ def _load_session() -> Optional[dict]:
 def _resolve_session() -> Tuple[dict, str]:
     data = _load_session()
     if not data:
-        raise RuntimeError("❌ 未找到 Codex 会话，请先运行 ccb up codex")
+        raise RuntimeError("❌ Codex session not found, please run ccb up codex first")
     pane_id = get_pane_id_from_session(data)
     if not pane_id:
-        raise RuntimeError("❌ 会话配置无效")
+        raise RuntimeError("❌ Session config invalid")
     return data, pane_id
 
 
@@ -69,12 +69,12 @@ def main(argv: list[str]) -> int:
         data, pane_id = _resolve_session()
         backend = get_backend_for_session(data)
         if not backend:
-            raise RuntimeError("❌ 无法初始化终端后端")
+            raise RuntimeError("❌ Cannot initialize terminal backend")
         if not backend.is_alive(pane_id):
             terminal = data.get("terminal", "tmux")
-            raise RuntimeError(f"❌ {terminal} 会话不存在: {pane_id}\n提示: 请确认 ccb 正在运行")
+            raise RuntimeError(f"❌ {terminal} session not found: {pane_id}\nHint: Please confirm ccb is running")
         backend.send_text(pane_id, raw_command)
-        print(f"✅ 已发送到 Codex ({pane_id})")
+        print(f"✅ Sent to Codex ({pane_id})")
         return 0
     except Exception as exc:
         print(exc, file=sys.stderr)

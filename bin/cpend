@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-cpend - 查看 Codex 最新回复
+cpend - View latest Codex reply
 """
 
 import json
@@ -16,12 +16,12 @@ setup_windows_encoding()
 try:
     from codex_comm import CodexCommunicator
 except ImportError as exc:
-    print(f"导入失败: {exc}")
+    print(f"Import failed: {exc}")
     sys.exit(1)
 
 
 def _load_pending_state() -> dict:
-    """从 .codex-session 加载 cask-w 超时时保存的状态"""
+    """Load pending state saved by cask-w timeout from .codex-session"""
     session_file = Path.cwd() / ".codex-session"
     if not session_file.exists():
         return {}
@@ -34,7 +34,7 @@ def _load_pending_state() -> dict:
 
 
 def _clear_pending_state() -> None:
-    """清除 pending_state"""
+    """Clear pending_state"""
     session_file = Path.cwd() / ".codex-session"
     if not session_file.exists():
         return
@@ -69,10 +69,10 @@ def main() -> int:
         if output:
             print(output)
         else:
-            print('暂无 Codex 回复')
+            print('No Codex reply available')
         return 0
     except Exception as exc:
-        print(f"❌ 执行失败: {exc}")
+        print(f"❌ Execution failed: {exc}")
         return 1
 
 

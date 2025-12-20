@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-cping 命令入口点
-测试与 Codex 的连通性
+cping command entry point
+Test connectivity with Codex
 """
 
 import sys
@@ -25,13 +25,13 @@ try:
             return 0 if healthy else 1
 
         except Exception as e:
-            print(f"❌ 连通性测试失败: {e}")
+            print(f"❌ Connectivity test failed: {e}")
             return 1
 
     if __name__ == "__main__":
         sys.exit(main())
 
 except ImportError as e:
-    print(f"❌ 导入模块失败: {e}")
-    print("请确保 codex_comm.py 在同一目录下")
+    print(f"❌ Module import failed: {e}")
+    print("Please ensure codex_comm.py is in the same directory")
     sys.exit(1)

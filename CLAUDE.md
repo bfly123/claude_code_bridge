@@ -1,1 +1,1 @@
-- 该文件夹是 claude_code_bridge (ccb) 开发文件夹，要注意兼容性，同时修改代码注意同时修改install，安装使用install安装，完成后要git增加版本并推送
+- This is the claude_code_bridge (ccb) development folder. Pay attention to compatibility. When modifying code, also update install scripts. Use install.sh/install.ps1 to install. After completion, git commit and push.

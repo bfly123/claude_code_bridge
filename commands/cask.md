@@ -1,18 +1,18 @@
-通过 `cask` 命令将指令转发到 Codex 会话（支持 tmux / WezTerm，仅转发，不在当前 Claude 进程执行）。
+Forward commands to Codex session via `cask` command (supports tmux / WezTerm, forward only, does not execute in current Claude process).
 
-执行方式:
-- 沉默运行 `Bash(cask "<转发内容>")`，执行完毕后不做其他分析、推理或额外操作
-- 在终端中也可执行 `cask <转发内容>`，效果等同
+Execution:
+- Run silently `Bash(cask "<content>")`, no additional analysis or operations after execution
+- Can also run `cask <content>` in terminal with same effect
 
-参数说明:
-- `<转发内容>` 必填，会被转发到 Codex 会话（例如 `pwd`、`ls` 等命令）
-- ⚠️ 注意：cask 仅负责转发，不在本 Claude 进程执行，返回后立即结束
+Parameters:
+- `<content>` required, will be forwarded to Codex session (e.g. `pwd`, `ls` commands)
+- Note: cask only forwards, does not execute in Claude process, returns immediately after
 
-示例:
+Examples:
 - `Bash(cask "pwd")`
 - `Bash(cask "ls -la")`
 
-提示:
-- cask 发送命令后立即返回，不等待结果
-- 如需等待 Codex 回复，请使用 `/cask-w`
-- cask 返回后表示转发完成，无需继续执行任何操作
+Hints:
+- cask returns immediately after sending, does not wait for result
+- Use `/cask-w` if you need to wait for Codex reply
+- After cask returns, forwarding is complete, no further action needed

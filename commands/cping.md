@@ -1,19 +1,19 @@
-使用 `cping` 检查当前 Codex 会话是否健康，快速定位通信问题。
+Use `cping` to check if current Codex session is healthy, quickly locate communication issues.
 
-执行方式:
-- Claude 端运行 `Bash(cping)`，无需输出命令执行过程
-- 本地终端直接执行 `cping`
+Execution:
+- Run `Bash(cping)` on Claude side, no need to output command execution process
+- Run `cping` directly in local terminal
 
-检测内容:
-1. `.codex-session` 是否标记为活跃，运行目录是否存在
-2. tmux 模式：FIFO 管道是否仍可访问
-3. tmux 模式：Codex 侧进程是否存活（根据 `codex.pid` 验证）
-4. WezTerm 模式：pane 是否仍存在（根据 `wezterm cli list` 检测）
+Detection items:
+1. Is `.codex-session` marked as active, does runtime directory exist
+2. tmux mode: Is FIFO pipe still accessible
+3. tmux mode: Is Codex side process alive (verified by `codex.pid`)
+4. WezTerm mode: Does pane still exist (detected via `wezterm cli list`)
 
-输出说明:
-- 成功：`✅ Codex连接正常 (...)`
-- 失败：列出缺失的组件或异常信息，便于进一步排查
+Output:
+- Success: `Codex connection OK (...)`
+- Failure: Lists missing components or error info for further troubleshooting
 
-提示:
-- 若检测失败，可尝试重新运行 `ccb up codex` 或查看桥接日志
-- 在多次超时或无回复时，先执行 `cping` 再决定是否重启会话
+Hints:
+- If detection fails, try re-running `ccb up codex` or check bridge logs
+- On multiple timeouts or no response, run `cping` first before deciding to restart session
