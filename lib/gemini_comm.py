@@ -140,20 +140,39 @@ class GeminiLogReader:
         last_gemini_id: Optional[str] = None
         last_gemini_hash: Optional[str] = None
         if session and session.exists():
+            data: Optional[dict] = None
             try:
                 stat = session.stat()
                 mtime = stat.st_mtime
                 mtime_ns = getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000))
                 size = stat.st_size
-                with session.open("r", encoding="utf-8") as f:
-                    data = json.load(f)
+            except OSError:
+                stat = None
+
+            # The session JSON may be written in-place; retry briefly to avoid transient JSONDecodeError.
+            for attempt in range(10):
+                try:
+                    with session.open("r", encoding="utf-8") as f:
+                        loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        data = loaded
+                    break
+                except json.JSONDecodeError:
+                    if attempt < 9:
+                        time.sleep(min(self._poll_interval, 0.05))
+                    continue
+                except OSError:
+                    break
+
+            if data is None:
+                # Unknown baseline (parse failed). Let the wait loop establish a stable baseline first.
+                msg_count = -1
+            else:
                 msg_count = len(data.get("messages", []))
                 last = self._extract_last_gemini(data)
                 if last:
                     last_gemini_id, content = last
                     last_gemini_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
-            except (OSError, json.JSONDecodeError):
-                pass
         return {
             "session_path": session,
             "msg_count": msg_count,
@@ -191,6 +210,7 @@ class GeminiLogReader:
     def _read_since(self, state: Dict[str, Any], timeout: float, block: bool) -> Tuple[Optional[str], Dict[str, Any]]:
         deadline = time.time() + timeout
         prev_count = state.get("msg_count", 0)
+        unknown_baseline = isinstance(prev_count, int) and prev_count < 0
         prev_mtime = state.get("mtime", 0.0)
         prev_mtime_ns = state.get("mtime_ns")
         if prev_mtime_ns is None:
@@ -264,19 +284,56 @@ class GeminiLogReader:
                 messages = data.get("messages", [])
                 current_count = len(messages)
 
+                if unknown_baseline:
+                    prev_mtime = current_mtime
+                    prev_mtime_ns = current_mtime_ns
+                    prev_size = current_size
+                    prev_count = current_count
+                    last = self._extract_last_gemini(data)
+                    if last:
+                        prev_last_gemini_id, content = last
+                        prev_last_gemini_hash = hashlib.sha256(content.encode("utf-8")).hexdigest() if content else None
+                    unknown_baseline = False
+                    if not block:
+                        return None, {
+                            "session_path": session,
+                            "msg_count": prev_count,
+                            "mtime": prev_mtime,
+                            "mtime_ns": prev_mtime_ns,
+                            "size": prev_size,
+                            "last_gemini_id": prev_last_gemini_id,
+                            "last_gemini_hash": prev_last_gemini_hash,
+                        }
+                    time.sleep(self._poll_interval)
+                    if time.time() >= deadline:
+                        return None, {
+                            "session_path": session,
+                            "msg_count": prev_count,
+                            "mtime": prev_mtime,
+                            "mtime_ns": prev_mtime_ns,
+                            "size": prev_size,
+                            "last_gemini_id": prev_last_gemini_id,
+                            "last_gemini_hash": prev_last_gemini_hash,
+                        }
+                    continue
+
                 if current_count > prev_count:
                     for msg in messages[prev_count:]:
                         if msg.get("type") == "gemini":
                             content = msg.get("content", "").strip()
                             if content:
+                                content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                                msg_id = msg.get("id")
+                                if msg_id == prev_last_gemini_id and content_hash == prev_last_gemini_hash:
+                                    continue
                                 new_state = {
                                     "session_path": session,
                                     "msg_count": current_count,
                                     "mtime": current_mtime,
                                     "mtime_ns": current_mtime_ns,
                                     "size": current_size,
-                                    "last_gemini_id": msg.get("id"),
-                                    "last_gemini_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                                    "last_gemini_id": msg_id,
+                                    "last_gemini_hash": content_hash,
                                 }
                                 return content, new_state
                 else:
