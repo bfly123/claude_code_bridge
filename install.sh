@@ -662,9 +662,9 @@ install_claude_md_config() {
   mkdir -p "$HOME/.claude"
 
   # Use temp file to avoid Bash 3.2 heredoc parsing bug with single quotes
-  local ccb_tmpfile
-  ccb_tmpfile="$(mktemp)"
-  trap 'rm -f "$ccb_tmpfile"' RETURN
+  local ccb_tmpfile=""
+  ccb_tmpfile="$(mktemp)" || { echo "Failed to create temp file"; return 1; }
+  trap 'rm -f "${ccb_tmpfile:-}"' RETURN
   cat > "$ccb_tmpfile" << 'AI_RULES'
 <!-- CCB_CONFIG_START -->
 ## Codex Collaboration Rules
