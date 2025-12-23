@@ -56,16 +56,19 @@ def main(argv: list[str]) -> int:
     try:
         n = _parse_n(argv)
 
-        # Must use session-specific log path from .codex-session
+        # Try session-specific log path first, fallback to scanning latest
         log_path = _load_session_log_path()
-        if not log_path:
-            print("❌ No .codex-session found in current directory", file=sys.stderr)
-            return EXIT_ERROR
-        if not log_path.exists():
-            print(f"❌ Session log not found: {log_path}", file=sys.stderr)
-            return EXIT_ERROR
-
         reader = CodexLogReader(log_path=log_path)
+
+        # If specified log has no reply, try scanning for latest
+        if log_path and log_path.exists():
+            test_msg = reader.latest_message()
+            if not test_msg:
+                # Scan for latest log that might have replies
+                latest = reader._scan_latest()
+                if latest and latest != log_path:
+                    reader.set_preferred_log(latest)
+                    log_path = latest
 
         if n > 1:
             conversations = reader.latest_conversations(n)

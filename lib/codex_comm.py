@@ -123,8 +123,8 @@ class CodexLogReader:
 
     def latest_message(self) -> Optional[str]:
         """Get the latest reply directly"""
-        # Use preferred log if set, otherwise scan for latest
-        log_path = self._preferred_log if self._preferred_log and self._preferred_log.exists() else self._latest_log()
+        # Always use _latest_log() to detect newer sessions
+        log_path = self._latest_log()
         if not log_path or not log_path.exists():
             return None
         try:
@@ -295,8 +295,8 @@ class CodexLogReader:
 
     def latest_conversations(self, n: int = 1) -> List[Tuple[str, str]]:
         """Get the latest n conversations (question, reply) pairs"""
-        # Use preferred log if set, otherwise scan for latest
-        log_path = self._preferred_log if self._preferred_log and self._preferred_log.exists() else self._latest_log()
+        # Always use _latest_log() to detect newer sessions
+        log_path = self._latest_log()
         if not log_path or not log_path.exists():
             return []
 
