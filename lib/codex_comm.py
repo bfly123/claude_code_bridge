@@ -14,7 +14,7 @@ import time
 import shlex
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, List
 
 from terminal import get_backend_for_session, get_pane_id_from_session
 from ccb_config import apply_backend_env
@@ -273,6 +273,81 @@ class CodexLogReader:
             return message.strip()
         return None
 
+    @staticmethod
+    def _extract_user_message(entry: dict) -> Optional[str]:
+        """Extract user question from a JSONL entry"""
+        entry_type = entry.get("type")
+        payload = entry.get("payload", {})
+
+        if entry_type == "event_msg" and payload.get("type") == "user_message":
+            msg = payload.get("message", "")
+            if isinstance(msg, str) and msg.strip():
+                return msg.strip()
+
+        if entry_type == "response_item":
+            if payload.get("type") == "message" and payload.get("role") == "user":
+                content = payload.get("content") or []
+                texts = [item.get("text", "") for item in content if item.get("type") == "input_text"]
+                if texts:
+                    return "\n".join(filter(None, texts)).strip()
+        return None
+
+    def latest_conversations(self, n: int = 1) -> List[Tuple[str, str]]:
+        """Get the latest n conversations (question, reply) pairs"""
+        log_path = self._latest_log()
+        if not log_path or not log_path.exists():
+            return []
+
+        try:
+            with log_path.open("rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                buffer = bytearray()
+                position = handle.tell()
+                while position > 0 and len(buffer) < 1024 * 1024:
+                    read_size = min(8192, position)
+                    position -= read_size
+                    handle.seek(position)
+                    buffer = handle.read(read_size) + buffer
+                    if buffer.count(b"\n") >= n * 20:
+                        break
+                lines = buffer.decode("utf-8", errors="ignore").splitlines()
+        except OSError:
+            return []
+
+        questions: List[str] = []
+        replies: List[str] = []
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            user_msg = self._extract_user_message(entry)
+            if user_msg:
+                questions.append(user_msg)
+
+            ai_msg = self._extract_message(entry)
+            if ai_msg:
+                replies.append(ai_msg)
+
+        conversations: List[Tuple[str, str]] = []
+        q_idx = len(questions) - 1
+        r_idx = len(replies) - 1
+
+        while len(conversations) < n and r_idx >= 0:
+            reply = replies[r_idx]
+            question = questions[q_idx] if q_idx >= 0 else ""
+            conversations.append((question, reply))
+            q_idx -= 1
+            r_idx -= 1
+
+        conversations.reverse()
+        return conversations[-n:] if len(conversations) > n else conversations
+
 
 class CodexCommunicator:
     """Communicates with Codex bridge via FIFO and reads replies from logs"""
@@ -512,9 +587,25 @@ class CodexCommunicator:
             print(f"❌ Sync ask failed: {exc}")
             return None
 
-    def consume_pending(self, display: bool = True):
+    def consume_pending(self, display: bool = True, n: int = 1):
         current_path = self.log_reader.current_log_path()
         self._remember_codex_session(current_path)
+
+        if n > 1:
+            conversations = self.log_reader.latest_conversations(n)
+            if not conversations:
+                if display:
+                    print(t('no_reply_available', provider='Codex'))
+                return None
+            if display:
+                for i, (question, reply) in enumerate(conversations):
+                    if question:
+                        print(f"Q: {question}")
+                    print(f"A: {reply}")
+                    if i < len(conversations) - 1:
+                        print("---")
+            return conversations
+
         message = self.log_reader.latest_message()
         if message:
             self._remember_codex_session(self.log_reader.current_log_path())
@@ -667,7 +758,8 @@ def main() -> int:
     parser.add_argument("--timeout", type=int, default=30, help="Sync timeout in seconds")
     parser.add_argument("--ping", action="store_true", help="Test connectivity")
     parser.add_argument("--status", action="store_true", help="Show status")
-    parser.add_argument("--pending", action="store_true", help="Show pending reply")
+    parser.add_argument("--pending", nargs="?", const=1, type=int, metavar="N",
+                        help="Show pending reply (optionally last N conversations)")
 
     args = parser.parse_args()
 
@@ -681,8 +773,8 @@ def main() -> int:
             print("📊 Codex status:")
             for key, value in status.items():
                 print(f"   {key}: {value}")
-        elif args.pending:
-            comm.consume_pending()
+        elif args.pending is not None:
+            comm.consume_pending(n=args.pending)
         elif args.question:
             tokens = list(args.question)
             if tokens and tokens[0].lower() == "ask":

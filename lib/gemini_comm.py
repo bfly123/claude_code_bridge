@@ -11,7 +11,7 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, List
 
 from terminal import get_backend_for_session, get_pane_id_from_session
 from ccb_config import apply_backend_env
@@ -206,6 +206,37 @@ class GeminiLogReader:
         except (OSError, json.JSONDecodeError):
             pass
         return None
+
+    def latest_conversations(self, n: int = 1) -> List[Tuple[str, str]]:
+        """Get the latest n conversations (question, reply) pairs"""
+        session = self._latest_session()
+        if not session or not session.exists():
+            return []
+        try:
+            with session.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            messages = data.get("messages", [])
+        except (OSError, json.JSONDecodeError):
+            return []
+
+        conversations: List[Tuple[str, str]] = []
+        pending_question: Optional[str] = None
+
+        for msg in messages:
+            msg_type = msg.get("type")
+            content = msg.get("content", "")
+            if not isinstance(content, str):
+                content = str(content)
+            content = content.strip()
+
+            if msg_type == "user":
+                pending_question = content
+            elif msg_type == "gemini" and content:
+                question = pending_question or ""
+                conversations.append((question, content))
+                pending_question = None
+
+        return conversations[-n:] if len(conversations) > n else conversations
 
     def _read_since(self, state: Dict[str, Any], timeout: float, block: bool) -> Tuple[Optional[str], Dict[str, Any]]:
         deadline = time.time() + timeout
@@ -631,10 +662,26 @@ class GeminiCommunicator:
             print(f"❌ Sync ask failed: {exc}")
             return None
 
-    def consume_pending(self, display: bool = True):
+    def consume_pending(self, display: bool = True, n: int = 1):
         session_path = self.log_reader.current_session_path()
         if isinstance(session_path, Path):
             self._remember_gemini_session(session_path)
+
+        if n > 1:
+            conversations = self.log_reader.latest_conversations(n)
+            if not conversations:
+                if display:
+                    print(t('no_reply_available', provider='Gemini'))
+                return None
+            if display:
+                for i, (question, reply) in enumerate(conversations):
+                    if question:
+                        print(f"Q: {question}")
+                    print(f"A: {reply}")
+                    if i < len(conversations) - 1:
+                        print("---")
+            return conversations
+
         message = self.log_reader.latest_message()
         if not message:
             if display:
@@ -734,7 +781,8 @@ def main() -> int:
     parser.add_argument("--timeout", type=int, default=60, help="Sync timeout in seconds")
     parser.add_argument("--ping", action="store_true", help="Test connectivity")
     parser.add_argument("--status", action="store_true", help="View status")
-    parser.add_argument("--pending", action="store_true", help="View pending reply")
+    parser.add_argument("--pending", nargs="?", const=1, type=int, metavar="N",
+                        help="View pending reply (optionally last N conversations)")
 
     args = parser.parse_args()
 
@@ -748,8 +796,8 @@ def main() -> int:
             print("📊 Gemini status:")
             for key, value in status.items():
                 print(f"   {key}: {value}")
-        elif args.pending:
-            comm.consume_pending()
+        elif args.pending is not None:
+            comm.consume_pending(n=args.pending)
         elif args.question:
             question_text = " ".join(args.question).strip()
             if not question_text:
