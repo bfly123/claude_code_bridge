@@ -296,6 +296,15 @@ class WeztermBackend(TerminalBackend):
         enter_delay = _env_float("CCB_WEZTERM_ENTER_DELAY", 0.01)
         if enter_delay:
             time.sleep(enter_delay)
+        # Windows: \r \n \r\n as CLI args may be stripped by shell, use stdin directly
+        if is_windows():
+            subprocess.run(
+                [*self._cli_base_args(), "send-text", "--pane-id", pane_id, "--no-paste"],
+                input=b"\r",
+                check=False,
+            )
+            return
+        # Unix/macOS: try \r, \n, \r\n first
         for char in ["\r", "\n", "\r\n"]:
             try:
                 subprocess.run(
