@@ -584,6 +584,44 @@ install_bin_links() {
   echo "Created executable links in $BIN_DIR"
 }
 
+ensure_path_configured() {
+  # Check if BIN_DIR is already in PATH
+  if [[ ":$PATH:" == *":$BIN_DIR:"* ]]; then
+    return
+  fi
+
+  local shell_rc=""
+  local current_shell
+  current_shell="$(basename "${SHELL:-/bin/bash}")"
+
+  case "$current_shell" in
+    zsh)  shell_rc="$HOME/.zshrc" ;;
+    bash)
+      if [[ -f "$HOME/.bash_profile" ]]; then
+        shell_rc="$HOME/.bash_profile"
+      else
+        shell_rc="$HOME/.bashrc"
+      fi
+      ;;
+    *)    shell_rc="$HOME/.profile" ;;
+  esac
+
+  local path_line="export PATH=\"\$HOME/.local/bin:\$PATH\""
+
+  # Check if already configured in shell rc
+  if [[ -f "$shell_rc" ]] && grep -qF '.local/bin' "$shell_rc" 2>/dev/null; then
+    echo "PATH already configured in $shell_rc (restart terminal to apply)"
+    return
+  fi
+
+  # Add to shell rc
+  echo "" >> "$shell_rc"
+  echo "# Added by ccb installer" >> "$shell_rc"
+  echo "$path_line" >> "$shell_rc"
+  echo "✅ Added $BIN_DIR to PATH in $shell_rc"
+  echo "   Run: source $shell_rc  (or restart terminal)"
+}
+
 install_claude_commands() {
   local claude_dir
   claude_dir="$(detect_claude_dir)"
@@ -860,6 +898,7 @@ install_all() {
   save_wezterm_config
   copy_project
   install_bin_links
+  ensure_path_configured
   install_claude_commands
   install_claude_md_config
   install_settings_permissions
