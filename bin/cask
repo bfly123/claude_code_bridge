@@ -78,14 +78,14 @@ def main(argv: list[str]) -> int:
 
         healthy, status = comm._check_session_health_impl(probe_terminal=False)
         if not healthy:
-            raise RuntimeError(f"❌ Session error: {status}")
+            raise RuntimeError(f"[ERROR] Session error: {status}")
 
         _, state = comm._send_message(message)
         print("CCB_END_TURN", file=sys.stderr)
         reply, _ = comm.log_reader.wait_for_message(state, timeout)
         if not reply:
             if not quiet:
-                print(f"⏰ Timeout after {int(timeout)}s", file=sys.stderr)
+                print(f"[TIMEOUT] Timeout after {int(timeout)}s", file=sys.stderr)
             return EXIT_NO_REPLY
 
         if output_path:

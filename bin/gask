@@ -43,24 +43,24 @@ def main(argv: list[str]) -> int:
             try:
                 output_path = Path(next(it)).expanduser()
             except StopIteration:
-                print("❌ --output requires a file path", file=sys.stderr)
+                print("[ERROR] --output requires a file path", file=sys.stderr)
                 return EXIT_ERROR
             continue
         if token in ("-t", "--timeout"):
             try:
                 timeout = float(next(it))
             except StopIteration:
-                print("❌ --timeout requires a number", file=sys.stderr)
+                print("[ERROR] --timeout requires a number", file=sys.stderr)
                 return EXIT_ERROR
             except ValueError:
-                print("❌ --timeout must be a number", file=sys.stderr)
+                print("[ERROR] --timeout must be a number", file=sys.stderr)
                 return EXIT_ERROR
             continue
         parts.append(token)
 
     message = " ".join(parts).strip()
     if not message:
-        print("❌ Message cannot be empty", file=sys.stderr)
+        print("[ERROR] Message cannot be empty", file=sys.stderr)
         return EXIT_ERROR
 
     if timeout is None:
@@ -75,14 +75,14 @@ def main(argv: list[str]) -> int:
         comm = GeminiCommunicator(lazy_init=True)
         healthy, status = comm._check_session_health_impl(probe_terminal=False)
         if not healthy:
-            raise RuntimeError(f"❌ Session error: {status}")
+            raise RuntimeError(f"[ERROR] Session error: {status}")
 
         _, state = comm._send_message(message)
         print("CCB_END_TURN", file=sys.stderr)
         reply, _ = comm.log_reader.wait_for_message(state, timeout)
         if not reply:
             if not quiet:
-                print(f"⏰ Timeout after {int(timeout)}s", file=sys.stderr)
+                print(f"[TIMEOUT] Timeout after {int(timeout)}s", file=sys.stderr)
             return EXIT_NO_REPLY
 
         if output_path:
@@ -96,7 +96,7 @@ def main(argv: list[str]) -> int:
     except KeyboardInterrupt:
         return 130
     except Exception as exc:
-        print(f"❌ {exc}", file=sys.stderr)
+        print(f"[ERROR] {exc}", file=sys.stderr)
         return EXIT_ERROR
 
 

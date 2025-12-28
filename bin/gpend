@@ -63,7 +63,7 @@ def main(argv: list[str]) -> int:
         print(message)
         return EXIT_OK
     except Exception as exc:
-        print(f"❌ {t('execution_failed', error=exc)}", file=sys.stderr)
+        print(f"[ERROR] {t('execution_failed', error=exc)}", file=sys.stderr)
         return EXIT_ERROR
 
 
