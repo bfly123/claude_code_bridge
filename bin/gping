@@ -22,12 +22,12 @@ try:
             print(message)
             return 0 if healthy else 1
         except Exception as e:
-            print(f"❌ Gemini connectivity test failed: {e}")
+            print(f"[ERROR] Gemini connectivity test failed: {e}")
             return 1
 
     if __name__ == "__main__":
         sys.exit(main())
 
 except ImportError as e:
-    print(f"❌ Module import failed: {e}")
+    print(f"[ERROR] Module import failed: {e}")
     sys.exit(1)

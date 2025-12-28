@@ -25,13 +25,13 @@ try:
             return 0 if healthy else 1
 
         except Exception as e:
-            print(f"❌ Connectivity test failed: {e}")
+            print(f"[ERROR] Connectivity test failed: {e}")
             return 1
 
     if __name__ == "__main__":
         sys.exit(main())
 
 except ImportError as e:
-    print(f"❌ Module import failed: {e}")
+    print(f"[ERROR] Module import failed: {e}")
     print("Please ensure codex_comm.py is in the same directory")
     sys.exit(1)
