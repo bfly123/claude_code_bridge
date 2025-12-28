@@ -22,21 +22,25 @@ from cli_output import EXIT_ERROR, EXIT_NO_REPLY, EXIT_OK, atomic_write_text
 
 
 def _check_background_mode() -> bool:
-    """Check if running in background mode (stdout redirected to file)."""
+    """Check if running in background mode (non-interactive stdout)."""
     if os.environ.get("CCB_ALLOW_FOREGROUND") in ("1", "true", "yes"):
         return True
+    if os.environ.get("CLAUDECODE") != "1":
+        return True
     try:
+        if not sys.stdout.isatty():
+            return True
         import stat
         mode = os.fstat(sys.stdout.fileno()).st_mode
         if stat.S_ISREG(mode):
             return True
     except Exception:
         pass
-    if os.environ.get("CLAUDECODE") == "1":
-        print("[ERROR] gask must run with run_in_background=true", file=sys.stderr)
-        print("Use: Bash(gask \"...\", run_in_background=true)", file=sys.stderr)
-        return False
-    return True
+    print("[ERROR] gask must run with run_in_background=true in Claude Code", file=sys.stderr)
+    print('Use: Bash(gask "...", run_in_background=true)', file=sys.stderr)
+    print('Or use foreground sync: Bash(gask-w "...")', file=sys.stderr)
+    print("Override (debug only): CCB_ALLOW_FOREGROUND=1", file=sys.stderr)
+    return False
 
 
 def main(argv: list[str]) -> int:

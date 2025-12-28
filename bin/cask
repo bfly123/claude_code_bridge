@@ -22,24 +22,30 @@ def _usage() -> None:
 
 
 def _check_background_mode() -> bool:
-    """Check if running in background mode (stdout redirected to file)."""
+    """Check if running in background mode (non-interactive stdout)."""
     # Allow explicit override
     if os.environ.get("CCB_ALLOW_FOREGROUND") in ("1", "true", "yes"):
         return True
-    # Check if stdout is redirected to a file (background mode indicator)
+    # If not running inside Claude Code, allow normal CLI usage.
+    if os.environ.get("CLAUDECODE") != "1":
+        return True
+
+    # In Claude Code, require non-interactive stdout (file/pipe) to avoid blocking the turn.
     try:
+        if not sys.stdout.isatty():
+            return True
         import stat
         mode = os.fstat(sys.stdout.fileno()).st_mode
         if stat.S_ISREG(mode):  # stdout is a regular file = background mode
             return True
     except Exception:
         pass
-    # If CLAUDECODE is set but stdout is not a file, likely foreground mode
-    if os.environ.get("CLAUDECODE") == "1":
-        print("[ERROR] cask must run with run_in_background=true", file=sys.stderr)
-        print("Use: Bash(cask \"...\", run_in_background=true)", file=sys.stderr)
-        return False
-    return True  # Not in Claude Code, allow normal usage
+
+    print("[ERROR] cask must run with run_in_background=true in Claude Code", file=sys.stderr)
+    print('Use: Bash(cask "...", run_in_background=true)', file=sys.stderr)
+    print('Or use foreground sync: Bash(cask-w "...")', file=sys.stderr)
+    print("Override (debug only): CCB_ALLOW_FOREGROUND=1", file=sys.stderr)
+    return False
 
 
 def _parse_args(argv: list[str]) -> Tuple[Optional[Path], float, str, bool]:

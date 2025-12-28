@@ -182,11 +182,29 @@ class CodexLogReader:
 
     def _latest_log(self) -> Optional[Path]:
         preferred = self._preferred_log
-        # If preferred exists and is valid, use it directly (avoid scanning)
         if preferred and preferred.exists():
+            # If we're bound to a specific session id, prefer that log without cross-session scanning.
+            if self._session_id_filter:
+                self._debug(f"Using preferred log (bound): {preferred}")
+                return preferred
+
+            # Otherwise, keep following the most recently updated log for this work dir.
+            latest = self._scan_latest()
+            if latest and latest != preferred:
+                try:
+                    preferred_mtime = preferred.stat().st_mtime
+                    latest_mtime = latest.stat().st_mtime
+                    if latest_mtime > preferred_mtime:
+                        self._preferred_log = latest
+                        self._debug(f"Preferred log stale; switching to latest: {latest}")
+                        return latest
+                except OSError:
+                    self._preferred_log = latest
+                    self._debug(f"Preferred log stat failed; switching to latest: {latest}")
+                    return latest
             self._debug(f"Using preferred log: {preferred}")
             return preferred
-        # Only scan when no preferred or preferred is invalid
+
         self._debug("No valid preferred log, scanning...")
         latest = self._scan_latest()
         if latest:

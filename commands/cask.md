@@ -2,6 +2,8 @@ Send message to Codex and wait for reply via `cask` (sync mode).
 
 Designed for Claude Code: run with `run_in_background=true` so Claude can continue working while Codex processes.
 
+Foreground sync (when user explicitly requests): use `cask-w`.
+
 Workflow:
 1. Run `Bash(cask "<content>", run_in_background=true)` to start background task
 2. Tell user "Codex processing (task: xxx)" then IMMEDIATELY END your turn (IMPORTANT)

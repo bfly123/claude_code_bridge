@@ -115,6 +115,19 @@ class GeminiLogReader:
             self._preferred_session = latest
             self._debug(f"Scan found: {latest}")
             return latest
+        # Fallback: Windows/WSL path hash mismatch can cause per-project scan to miss sessions.
+        if os.environ.get("GEMINI_DISABLE_ANY_PROJECT_SCAN") not in ("1", "true", "yes"):
+            any_latest = self._scan_latest_session_any_project()
+            if any_latest:
+                self._preferred_session = any_latest
+                try:
+                    project_hash = any_latest.parent.parent.name
+                    if project_hash:
+                        self._project_hash = project_hash
+                except Exception:
+                    pass
+                self._debug(f"Fallback scan (any project) found: {any_latest}")
+                return any_latest
         return None
 
     def set_preferred_session(self, session_path: Optional[Path]) -> None:
