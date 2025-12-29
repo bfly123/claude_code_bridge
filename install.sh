@@ -889,7 +889,7 @@ install_all() {
   copy_project
   install_bin_links
   install_claude_commands
-  install_skills
+  # install_skills  # Disabled: use commands instead
   install_claude_md_config
   install_settings_permissions
   echo "✅ Installation complete"
