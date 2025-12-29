@@ -597,6 +597,28 @@ install_claude_commands() {
   echo "Updated Claude commands directory: $claude_dir"
 }
 
+install_skills() {
+  local skills_src="$REPO_ROOT/skills"
+  local skills_dst="$HOME/.claude/skills"
+
+  if [[ ! -d "$skills_src" ]]; then
+    return
+  fi
+
+  mkdir -p "$skills_dst"
+
+  for skill_dir in "$skills_src"/*/; do
+    if [[ -d "$skill_dir" ]]; then
+      local skill_name
+      skill_name="$(basename "$skill_dir")"
+      mkdir -p "$skills_dst/$skill_name"
+      cp -f "$skill_dir"/*.md "$skills_dst/$skill_name/" 2>/dev/null || true
+    fi
+  done
+
+  echo "Installed workflow skills to $skills_dst"
+}
+
 CCB_START_MARKER="<!-- CCB_CONFIG_START -->"
 CCB_END_MARKER="<!-- CCB_CONFIG_END -->"
 LEGACY_RULE_MARKER="## Codex 协作规则"
@@ -859,12 +881,14 @@ install_all() {
   copy_project
   install_bin_links
   install_claude_commands
+  install_skills
   install_claude_md_config
   install_settings_permissions
   echo "✅ Installation complete"
   echo "   Project dir    : $INSTALL_PREFIX"
   echo "   Executable dir : $BIN_DIR"
   echo "   Claude commands updated"
+  echo "   Workflow skills installed (/code, /dev, /bmad-pilot, /requirements-pilot)"
   echo "   Global CLAUDE.md configured with Codex collaboration rules"
   echo "   Global settings.json permissions added"
 }

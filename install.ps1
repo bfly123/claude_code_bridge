@@ -154,7 +154,7 @@ function Install-Native {
     New-Item -ItemType Directory -Path $binDir -Force | Out-Null
   }
 
-  $items = @("ccb", "lib", "bin", "commands")
+  $items = @("ccb", "lib", "bin", "commands", "skills")
   foreach ($item in $items) {
     $src = Join-Path $repoRoot $item
     $dst = Join-Path $InstallPrefix $item
@@ -229,6 +229,7 @@ function Install-Native {
 function Install-ClaudeConfig {
   $claudeDir = Join-Path $env:USERPROFILE ".claude"
   $commandsDir = Join-Path $claudeDir "commands"
+  $skillsDir = Join-Path $claudeDir "skills"
   $claudeMd = Join-Path $claudeDir "CLAUDE.md"
   $settingsJson = Join-Path $claudeDir "settings.json"
 
@@ -244,6 +245,21 @@ function Install-ClaudeConfig {
     Get-ChildItem -Path $srcCommands -Filter "*.md" | ForEach-Object {
       Copy-Item -Force $_.FullName (Join-Path $commandsDir $_.Name)
     }
+  }
+
+  # Install skills
+  $srcSkills = Join-Path $repoRoot "skills"
+  if (Test-Path $srcSkills) {
+    Get-ChildItem -Path $srcSkills -Directory | ForEach-Object {
+      $skillDst = Join-Path $skillsDir $_.Name
+      if (-not (Test-Path $skillDst)) {
+        New-Item -ItemType Directory -Path $skillDst -Force | Out-Null
+      }
+      Get-ChildItem -Path $_.FullName -Filter "*.md" | ForEach-Object {
+        Copy-Item -Force $_.FullName (Join-Path $skillDst $_.Name)
+      }
+    }
+    Write-Host "Installed workflow skills to $skillsDir"
   }
 
   $codexRules = @"
