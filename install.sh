@@ -102,6 +102,10 @@ CLAUDE_MARKDOWN=(
   gask-w.md
   gpend.md
   gping.md
+  code.md
+  dev.md
+  bmad-pilot.md
+  requirements-pilot.md
 )
 
 LEGACY_SCRIPTS=(
