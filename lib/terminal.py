@@ -287,14 +287,24 @@ class WeztermBackend(TerminalBackend):
 
     def _send_enter(self, pane_id: str) -> None:
         """Send Enter key reliably using stdin (cross-platform)"""
-        enter_delay = _env_float("CCB_WEZTERM_ENTER_DELAY", 0.01)
+        # Windows needs longer delay
+        default_delay = 0.05 if os.name == "nt" else 0.01
+        enter_delay = _env_float("CCB_WEZTERM_ENTER_DELAY", default_delay)
         if enter_delay:
             time.sleep(enter_delay)
-        subprocess.run(
-            [*self._cli_base_args(), "send-text", "--pane-id", pane_id, "--no-paste"],
-            input=b"\r",
-            check=False,
-        )
+
+        # Retry mechanism for reliability (Windows native occasionally drops Enter)
+        max_retries = 3
+        for attempt in range(max_retries):
+            result = subprocess.run(
+                [*self._cli_base_args(), "send-text", "--pane-id", pane_id, "--no-paste"],
+                input=b"\r",
+                capture_output=True,
+            )
+            if result.returncode == 0:
+                return
+            if attempt < max_retries - 1:
+                time.sleep(0.05)
 
     def send_text(self, pane_id: str, text: str) -> None:
         sanitized = text.replace("\r", "").strip()
