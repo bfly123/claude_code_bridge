@@ -312,14 +312,21 @@ class WeztermBackend(TerminalBackend):
             return
 
         has_newlines = "\n" in sanitized
-        is_long = len(sanitized) > 200
 
-        # Fast path: short single-line text -> use --no-paste directly
-        if not has_newlines and not is_long:
-            subprocess.run(
-                [*self._cli_base_args(), "send-text", "--pane-id", pane_id, "--no-paste", sanitized],
-                check=True,
-            )
+        # Single-line: always avoid paste mode (prevents Codex showing "[Pasted Content ...]").
+        # Use argv for short text; stdin for long text to avoid command-line length/escaping issues.
+        if not has_newlines:
+            if len(sanitized) <= 200:
+                subprocess.run(
+                    [*self._cli_base_args(), "send-text", "--pane-id", pane_id, "--no-paste", sanitized],
+                    check=True,
+                )
+            else:
+                subprocess.run(
+                    [*self._cli_base_args(), "send-text", "--pane-id", pane_id, "--no-paste"],
+                    input=sanitized.encode("utf-8"),
+                    check=True,
+                )
             self._send_enter(pane_id)
             return
 
