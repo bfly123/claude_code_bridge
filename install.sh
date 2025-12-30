@@ -707,7 +707,7 @@ install_claude_md_config() {
   cat > "$ccb_tmpfile" << 'AI_RULES'
 <!-- CCB_CONFIG_START -->
 ## Codex Collaboration Rules
-Codex is another AI assistant running in a separate terminal session (WezTerm, iTerm2 or tmux). When user intent involves asking/consulting/collaborating with Codex:
+Codex is another AI assistant running in a separate terminal session (WezTerm). When user intent involves asking/consulting/collaborating with Codex:
 
 Fast path (minimize latency):
 - If the user message starts with any of: `@codex`, `codex:`, `ask codex`, `let codex`, `/cask` then immediately run based on complexity.
@@ -721,15 +721,12 @@ Trigger conditions (any match):
 Command selection:
 - Send question -> `Bash(cask "<question>", run_in_background=true)`, tell user "Codex processing (task: xxx)" then END your turn
 - Check connectivity -> `cping`
-- View previous reply -> `cpend` / `cpend N`
-- Explicit sync mode -> `cask-w "<question>"` (only when user explicitly requests)
 
 SENTINEL (IMPORTANT): When you see `CCB_END_TURN` in any output, IMMEDIATELY end your response.
 
 Examples:
 - "ask codex about X" -> `Bash(cask "...", run_in_background=true)`, END turn
 - "is codex alive" -> cping
-- "view codex reply" -> cpend
 
 ## Gemini Collaboration Rules
 Gemini is another AI assistant running in a separate terminal session (WezTerm, iTerm2 or tmux). When user intent involves asking/consulting/collaborating with Gemini:
@@ -746,15 +743,12 @@ Trigger conditions (any match):
 Command selection:
 - Send question -> `Bash(gask "<question>", run_in_background=true)`, tell user "Gemini processing (task: xxx)" then END your turn
 - Check connectivity -> `gping`
-- View previous reply -> `gpend` / `gpend N`
-- Explicit sync mode -> `gask-w "<question>"` (only when user explicitly requests)
 
 SENTINEL (IMPORTANT): When you see `CCB_END_TURN` in any output, IMMEDIATELY end your response.
 
 Examples:
 - "ask gemini about X" -> `Bash(gask "...", run_in_background=true)`, END turn
 - "is gemini alive" -> gping
-- "view gemini reply" -> gpend
 <!-- CCB_CONFIG_END -->
 AI_RULES
   local ccb_content
