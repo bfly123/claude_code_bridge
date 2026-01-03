@@ -662,7 +662,69 @@ class AILauncher:
 
     def _build_opencode_start_cmd(self) -> str:
         # OpenCode CLI (TUI). Allow override via env for custom wrappers.
-        return (os.environ.get("OPENCODE_START_CMD") or "opencode").strip() or "opencode"
+        cmd = (os.environ.get("OPENCODE_START_CMD") or "opencode").strip() or "opencode"
+
+        # Auto mode: relax permissions and enable web tools via config file.
+        if self.auto:
+            self._ensure_opencode_auto_config()
+
+        # Resume mode: continue last session
+        if self.resume:
+            cmd = f"{cmd} --continue"
+
+        return cmd
+
+    def _ensure_opencode_auto_config(self) -> None:
+        """
+        Ensure ~/.config/opencode/opencode.json exists with relaxed permissions and web tools enabled.
+        Best-effort: never raise (should not block startup).
+        """
+        try:
+            config_path = Path.home() / ".config" / "opencode" / "opencode.json"
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+
+            desired = {
+                "permission": {
+                    "bash": "allow",
+                    "edit": "allow",
+                    "webfetch": "allow",
+                    "read": "allow",
+                    "write": "allow",
+                },
+                "tools": {
+                    "webfetch": True,
+                    "websearch": True,
+                },
+            }
+
+            current: dict = {}
+            if config_path.exists():
+                try:
+                    current_raw = config_path.read_text(encoding="utf-8")
+                    current_obj = json.loads(current_raw)
+                    if isinstance(current_obj, dict):
+                        current = current_obj
+                except Exception:
+                    current = {}
+
+            perm = current.get("permission")
+            if not isinstance(perm, dict):
+                perm = {}
+            perm.update(desired["permission"])
+            current["permission"] = perm
+
+            tools = current.get("tools")
+            if not isinstance(tools, dict):
+                tools = {}
+            tools.update(desired["tools"])
+            current["tools"] = tools
+
+            tmp_path = config_path.with_suffix(".tmp")
+            tmp_path.write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            os.replace(tmp_path, config_path)
+        except Exception as exc:
+            # Non-fatal; OpenCode can still run with interactive permissions.
+            print(f"⚠️ Failed to update OpenCode config: {exc}", file=sys.stderr)
 
     def _start_codex(self, tmux_session: str) -> bool:
         runtime = self.runtime_dir / "codex"
