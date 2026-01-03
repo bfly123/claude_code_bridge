@@ -15,8 +15,16 @@ from pathlib import Path
 from typing import Optional, Tuple, Dict, Any, List
 
 from terminal import get_backend_for_session, get_pane_id_from_session
-from ccb_config import apply_backend_env
+from ccb_config import apply_backend_env, get_bool_env
 from i18n import t
+from fs_watch import FileChangeWaiter
+from mailbox import (
+    build_mailbox_prompt,
+    looks_like_cannot_read_file,
+    mailbox_enabled,
+    mailbox_threshold,
+    write_mailbox_instruction,
+)
 
 apply_backend_env()
 
@@ -41,6 +49,7 @@ class GeminiLogReader:
     def __init__(self, root: Path = GEMINI_ROOT, work_dir: Optional[Path] = None):
         self.root = Path(root).expanduser()
         self.work_dir = work_dir or Path.cwd()
+        self._project_session_file = (Path(work_dir) if work_dir else Path.cwd()) / ".gemini-session"
         forced_hash = os.environ.get("GEMINI_PROJECT_HASH", "").strip()
         self._project_hash = forced_hash or _get_project_hash(self.work_dir)
         self._preferred_session: Optional[Path] = None
@@ -56,6 +65,12 @@ class GeminiLogReader:
         except Exception:
             force = 1.0
         self._force_read_interval = min(5.0, max(0.2, force))
+        self._change_waiter = FileChangeWaiter(
+            [],
+            enabled=get_bool_env("CCB_INOTIFY", False),
+            poll_interval=self._poll_interval,
+            debug_name="gemini",
+        )
 
     @staticmethod
     def _debug_enabled() -> bool:
@@ -294,7 +309,11 @@ class GeminiLogReader:
                         "last_gemini_id": prev_last_gemini_id,
                         "last_gemini_hash": prev_last_gemini_hash,
                     }
-                time.sleep(self._poll_interval)
+                remaining = max(0.0, deadline - time.time())
+                chats_dir = self._chats_dir()
+                watch_paths = [p for p in [chats_dir, self._project_session_file] if p]
+                self._change_waiter.update_paths(watch_paths)
+                self._change_waiter.wait(min(self._poll_interval, remaining) if remaining else self._poll_interval)
                 if time.time() >= deadline:
                     return None, state
                 continue
@@ -308,7 +327,11 @@ class GeminiLogReader:
                 # Use file size as additional change signal.
                 if block and current_mtime_ns <= prev_mtime_ns and current_size == prev_size:
                     if time.time() - last_forced_read < self._force_read_interval:
-                        time.sleep(self._poll_interval)
+                        remaining = max(0.0, deadline - time.time())
+                        chats_dir = self._chats_dir()
+                        watch_paths = [p for p in [session, chats_dir, self._project_session_file] if p]
+                        self._change_waiter.update_paths(watch_paths)
+                        self._change_waiter.wait(min(self._poll_interval, remaining) if remaining else self._poll_interval)
                         if time.time() >= deadline:
                             return None, {
                                 "session_path": session,
@@ -418,6 +441,7 @@ class GeminiLogReader:
                             "last_gemini_id": last_gemini_id,
                             "last_gemini_hash": last_gemini_hash,
                         }
+                        self._change_waiter.reset_backoff()
                         return last_gemini_content, new_state
                 else:
                     # Some versions write empty gemini message first, then update content in-place.
@@ -436,6 +460,7 @@ class GeminiLogReader:
                                     "last_gemini_id": last_id,
                                     "last_gemini_hash": current_hash,
                                 }
+                                self._change_waiter.reset_backoff()
                                 return content, new_state
 
                 prev_mtime = current_mtime
@@ -461,7 +486,25 @@ class GeminiLogReader:
                     "last_gemini_hash": prev_last_gemini_hash,
                 }
 
-            time.sleep(self._poll_interval)
+            remaining = max(0.0, deadline - time.time())
+            if remaining <= 0:
+                return None, {
+                    "session_path": session,
+                    "msg_count": prev_count,
+                    "mtime": prev_mtime,
+                    "mtime_ns": prev_mtime_ns,
+                    "size": prev_size,
+                    "last_gemini_id": prev_last_gemini_id,
+                    "last_gemini_hash": prev_last_gemini_hash,
+                }
+            chats_dir = self._chats_dir()
+            watch_paths = [p for p in [session, chats_dir, self._project_session_file] if p]
+            self._change_waiter.update_paths(watch_paths)
+            next_rescan_due = max(0.0, rescan_interval - (time.time() - last_rescan))
+            wait_for = min(remaining, max(0.01, next_rescan_due))
+            woke = self._change_waiter.wait(wait_for)
+            if woke and self._change_waiter.overflowed:
+                last_rescan = 0.0
             if time.time() >= deadline:
                 return None, {
                     "session_path": session,
@@ -605,6 +648,15 @@ class GeminiCommunicator:
         self.backend.send_text(self.pane_id, content)
         return True
 
+    def _send_via_file(self, content: str) -> Optional[Path]:
+        try:
+            path = write_mailbox_instruction(content)
+            prompt = build_mailbox_prompt(path)
+            self._send_via_terminal(prompt)
+            return path
+        except Exception:
+            return None
+
     def _send_message(self, content: str) -> Tuple[str, Dict[str, Any]]:
         marker = self._generate_marker()
         state = self.log_reader.capture_state()
@@ -614,13 +666,51 @@ class GeminiCommunicator:
     def _generate_marker(self) -> str:
         return f"{self.marker_prefix}-{int(time.time())}-{os.getpid()}"
 
+    def _handle_auto_cwd(self, content: str) -> str:
+        """Auto-sync CWD if enabled and changed"""
+        if not get_bool_env("CCB_AUTO_CWD_SYNC", False):
+            return content
+
+        try:
+            current_cwd = str(Path.cwd().resolve())
+        except Exception:
+            return content
+
+        last_cwd = self.session_info.get("last_work_dir")
+        if last_cwd == current_cwd:
+            return content
+
+        if not current_cwd or not os.path.exists(current_cwd):
+            if GeminiLogReader._debug_enabled():
+                print(f"⚠️ Auto-CWD: Skipping invalid CWD: {current_cwd}", file=sys.stderr)
+            return content
+
+        print(f"🔄 Auto-sync CWD: {current_cwd}")
+        
+        self.session_info["last_work_dir"] = current_cwd
+        # Trigger save if possible (best effort via _remember_gemini_session later)
+        if self.project_session_file:
+             # We can force a save if we have a session path, but usually ask_* calls _remember 
+             # shortly after. To be safe, if we have a current session path, we can update it.
+             # However, _remember_gemini_session requires a path.
+             curr = self.log_reader.current_session_path()
+             if curr:
+                 self._remember_gemini_session(curr)
+
+        return f"cd {current_cwd}\n{content}"
+
     def ask_async(self, question: str) -> bool:
         try:
             healthy, status = self._check_session_health_impl(probe_terminal=False)
             if not healthy:
                 raise RuntimeError(f"❌ Session error: {status}")
 
-            self._send_via_terminal(question)
+            question = self._handle_auto_cwd(question)
+            if mailbox_enabled() and len(question) > mailbox_threshold():
+                if self._send_via_file(question) is None:
+                    self._send_via_terminal(question)
+            else:
+                self._send_via_terminal(question)
             print(f"✅ Sent to Gemini")
             print("Hint: Use gpend to view reply")
             return True
@@ -635,7 +725,16 @@ class GeminiCommunicator:
                 raise RuntimeError(f"❌ Session error: {status}")
 
             print(f"🔔 {t('sending_to', provider='Gemini')}", flush=True)
-            self._send_via_terminal(question)
+            question = self._handle_auto_cwd(question)
+            mailbox_path: Optional[Path] = None
+            used_mailbox = mailbox_enabled() and len(question) > mailbox_threshold()
+            if used_mailbox:
+                mailbox_path = self._send_via_file(question)
+                if mailbox_path is None:
+                    used_mailbox = False
+                    self._send_via_terminal(question)
+            else:
+                self._send_via_terminal(question)
             # Capture state after sending to reduce "question → send" latency.
             state = self.log_reader.capture_state()
 
@@ -651,8 +750,23 @@ class GeminiCommunicator:
                     if isinstance(session_path, Path):
                         self._remember_gemini_session(session_path)
                     if message:
+                        if used_mailbox and looks_like_cannot_read_file(message):
+                            if mailbox_path:
+                                try:
+                                    mailbox_path.unlink()
+                                except Exception:
+                                    pass
+                            used_mailbox = False
+                            self._send_via_terminal(question)
+                            state = self.log_reader.capture_state()
+                            continue
                         print(f"🤖 {t('reply_from', provider='Gemini')}")
                         print(message)
+                        if used_mailbox and mailbox_path:
+                            try:
+                                mailbox_path.unlink()
+                            except Exception:
+                                pass
                         return message
                     elapsed = int(time.time() - start_time)
                     if elapsed >= last_hint + 30:
@@ -660,16 +774,60 @@ class GeminiCommunicator:
                         print(f"⏳ Still waiting... ({elapsed}s)")
 
             print(f"⏳ Waiting for Gemini reply (timeout {wait_timeout}s)...")
+            start_time = time.time()
             message, new_state = self.log_reader.wait_for_message(state, float(wait_timeout))
             session_path = (new_state or {}).get("session_path") if isinstance(new_state, dict) else None
             if isinstance(session_path, Path):
                 self._remember_gemini_session(session_path)
             if message:
+                if used_mailbox and looks_like_cannot_read_file(message):
+                    if mailbox_path:
+                        try:
+                            mailbox_path.unlink()
+                        except Exception:
+                            pass
+                    elapsed = time.time() - start_time
+                    remaining = max(0.0, float(wait_timeout) - elapsed)
+                    self._send_via_terminal(question)
+                    state = self.log_reader.capture_state()
+                    message, new_state = self.log_reader.wait_for_message(state, remaining)
+                    session_path = (new_state or {}).get("session_path") if isinstance(new_state, dict) else None
+                    if isinstance(session_path, Path):
+                        self._remember_gemini_session(session_path)
+                    if message:
+                        print(f"🤖 {t('reply_from', provider='Gemini')}")
+                        print(message)
+                        return message
+                    print(f"⏰ {t('timeout_no_reply', provider='Gemini')}")
+                    if self.backend and self.pane_id:
+                        try:
+                            snapshot = self.backend.capture_pane(self.pane_id, lines=15)
+                            if snapshot:
+                                print("\n[Last 15 lines of backend terminal]")
+                                print(snapshot)
+                                print("-" * 40)
+                        except Exception:
+                            pass
+                    return None
                 print(f"🤖 {t('reply_from', provider='Gemini')}")
                 print(message)
+                if used_mailbox and mailbox_path:
+                    try:
+                        mailbox_path.unlink()
+                    except Exception:
+                        pass
                 return message
 
             print(f"⏰ {t('timeout_no_reply', provider='Gemini')}")
+            if self.backend and self.pane_id:
+                try:
+                    snapshot = self.backend.capture_pane(self.pane_id, lines=15)
+                    if snapshot:
+                        print("\n[Last 15 lines of backend terminal]")
+                        print(snapshot)
+                        print("-" * 40)
+                except Exception:
+                    pass
             return None
         except Exception as exc:
             print(f"❌ Sync ask failed: {exc}")
@@ -740,6 +898,12 @@ class GeminiCommunicator:
             session_id = ""
         if session_id and data.get("gemini_session_id") != session_id:
             data["gemini_session_id"] = session_id
+            updated = True
+            
+        # Save last_work_dir
+        last_work_dir = self.session_info.get("last_work_dir")
+        if last_work_dir and data.get("last_work_dir") != last_work_dir:
+            data["last_work_dir"] = last_work_dir
             updated = True
 
         if not updated:

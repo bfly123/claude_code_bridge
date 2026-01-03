@@ -15,9 +15,17 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from ccb_config import apply_backend_env
+from ccb_config import apply_backend_env, get_bool_env
 from i18n import t
 from terminal import get_backend_for_session, get_pane_id_from_session
+from fs_watch import FileChangeWaiter
+from mailbox import (
+    build_mailbox_prompt,
+    looks_like_cannot_read_file,
+    mailbox_enabled,
+    mailbox_threshold,
+    write_mailbox_instruction,
+)
 
 apply_backend_env()
 
@@ -106,6 +114,12 @@ class OpenCodeLogReader:
         except Exception:
             force = 1.0
         self._force_read_interval = min(5.0, max(0.2, force))
+        self._change_waiter = FileChangeWaiter(
+            [],
+            enabled=get_bool_env("CCB_INOTIFY", False),
+            poll_interval=self._poll_interval,
+            debug_name="opencode",
+        )
 
     def _session_dir(self) -> Path:
         return self.root / "session" / self.project_id
@@ -368,7 +382,9 @@ class OpenCodeLogReader:
             if not session_entry:
                 if not block:
                     return None, state
-                time.sleep(self._poll_interval)
+                remaining = max(0.0, deadline - time.time())
+                self._change_waiter.update_paths([self._session_dir()])
+                self._change_waiter.wait(min(self._poll_interval, remaining) if remaining else self._poll_interval)
                 if time.time() >= deadline:
                     return None, state
                 continue
@@ -385,7 +401,13 @@ class OpenCodeLogReader:
             if not current_session_id:
                 if not block:
                     return None, state
-                time.sleep(self._poll_interval)
+                remaining = max(0.0, deadline - time.time())
+                watch_paths = [self._session_dir()]
+                path = session_entry.get("path")
+                if isinstance(path, Path):
+                    watch_paths.append(path)
+                self._change_waiter.update_paths(watch_paths)
+                self._change_waiter.wait(min(self._poll_interval, remaining) if remaining else self._poll_interval)
                 if time.time() >= deadline:
                     return None, state
                 continue
@@ -409,6 +431,7 @@ class OpenCodeLogReader:
                     # Preserve session binding
                     if session_id:
                         new_state["session_id"] = session_id
+                    self._change_waiter.reset_backoff()
                     return reply, new_state
 
                 # Update state baseline even if reply isn't ready yet.
@@ -418,7 +441,19 @@ class OpenCodeLogReader:
             if not block:
                 return None, state
 
-            time.sleep(self._poll_interval)
+            remaining = max(0.0, deadline - time.time())
+            if remaining <= 0:
+                return None, state
+            watch_paths = [self._session_dir()]
+            path = session_entry.get("path")
+            if isinstance(path, Path):
+                watch_paths.append(path)
+            self._change_waiter.update_paths(watch_paths)
+            next_forced_due = max(0.0, self._force_read_interval - (time.time() - last_forced_read))
+            wait_for = min(remaining, max(0.01, next_forced_due))
+            woke = self._change_waiter.wait(wait_for)
+            if woke and self._change_waiter.overflowed:
+                last_forced_read = 0.0
             if time.time() >= deadline:
                 return None, state
 
@@ -541,6 +576,15 @@ class OpenCodeCommunicator:
             raise RuntimeError("Terminal session not configured")
         self.backend.send_text(self.pane_id, content)
 
+    def _send_via_file(self, content: str) -> Optional[Path]:
+        try:
+            path = write_mailbox_instruction(content)
+            prompt = build_mailbox_prompt(path)
+            self._send_via_terminal(prompt)
+            return path
+        except Exception:
+            return None
+
     def _send_message(self, content: str) -> Tuple[str, Dict[str, Any]]:
         marker = self._generate_marker()
         state = self.log_reader.capture_state()
@@ -550,12 +594,90 @@ class OpenCodeCommunicator:
     def _generate_marker(self) -> str:
         return f"{self.marker_prefix}-{int(time.time())}-{os.getpid()}"
 
+    def _remember_opencode_session(self) -> None:
+        if not self.project_session_file:
+            return
+
+        project_file = Path(self.project_session_file)
+        if not project_file.exists():
+            return
+
+        try:
+            with project_file.open("r", encoding="utf-8-sig") as handle:
+                data = json.load(handle)
+        except Exception:
+            return
+
+        updated = False
+
+        # Save last_work_dir
+        last_work_dir = self.session_info.get("last_work_dir")
+        if last_work_dir and data.get("last_work_dir") != last_work_dir:
+            data["last_work_dir"] = last_work_dir
+            updated = True
+
+        if not updated:
+            return
+
+        tmp_file = project_file.with_suffix(".tmp")
+        try:
+            with tmp_file.open("w", encoding="utf-8") as handle:
+                json.dump(data, handle, ensure_ascii=False, indent=2)
+            os.replace(tmp_file, project_file)
+        except PermissionError as e:
+            print(f"⚠️  Cannot update {project_file.name}: {e}", file=sys.stderr)
+            print(f"💡 Try: sudo chown $USER:$USER {project_file}", file=sys.stderr)
+            if tmp_file.exists():
+                try:
+                    tmp_file.unlink()
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"⚠️  Failed to update {project_file.name}: {e}", file=sys.stderr)
+            if tmp_file.exists():
+                try:
+                    tmp_file.unlink()
+                except Exception:
+                    pass
+
+    def _handle_auto_cwd(self, content: str) -> str:
+        """Auto-sync CWD if enabled and changed"""
+        if os.environ.get("CCB_AUTO_CWD_SYNC") != "1":
+            return content
+
+        try:
+            current_cwd = str(Path.cwd().resolve())
+        except Exception:
+            return content
+
+        last_cwd = self.session_info.get("last_work_dir")
+        if last_cwd == current_cwd:
+            return content
+
+        if not current_cwd or not os.path.exists(current_cwd):
+            if OpenCodeLogReader._debug_enabled():
+                print(f"⚠️ Auto-CWD: Skipping invalid CWD: {current_cwd}", file=sys.stderr)
+            return content
+
+        print(f"🔄 Auto-sync CWD: {current_cwd}")
+
+        self.session_info["last_work_dir"] = current_cwd
+        self._remember_opencode_session()
+
+        return f"cd {current_cwd}\n{content}"
+
     def ask_async(self, question: str) -> bool:
         try:
             healthy, status = self._check_session_health_impl(probe_terminal=False)
             if not healthy:
                 raise RuntimeError(f"❌ Session error: {status}")
-            self._send_via_terminal(question)
+            
+            question = self._handle_auto_cwd(question)
+            if mailbox_enabled() and len(question) > mailbox_threshold():
+                if self._send_via_file(question) is None:
+                    self._send_via_terminal(question)
+            else:
+                self._send_via_terminal(question)
             print("✅ Sent to OpenCode")
             print("Hint: Use opend to view reply")
             return True
@@ -570,17 +692,66 @@ class OpenCodeCommunicator:
                 raise RuntimeError(f"❌ Session error: {status}")
 
             print(f"🔔 {t('sending_to', provider='OpenCode')}", flush=True)
-            _, state = self._send_message(question)
+            question = self._handle_auto_cwd(question)
+            mailbox_path: Optional[Path] = None
+            used_mailbox = mailbox_enabled() and len(question) > mailbox_threshold()
+            if used_mailbox:
+                state = self.log_reader.capture_state()
+                mailbox_path = self._send_via_file(question)
+                if mailbox_path is None:
+                    used_mailbox = False
+                    _, state = self._send_message(question)
+            else:
+                _, state = self._send_message(question)
             wait_timeout = self.timeout if timeout is None else int(timeout)
             print(f"⏳ Waiting for OpenCode reply (timeout {wait_timeout}s)...")
+            start_time = time.time()
             message, _ = self.log_reader.wait_for_message(state, float(wait_timeout))
             if message:
+                if used_mailbox and looks_like_cannot_read_file(message):
+                    if mailbox_path:
+                        try:
+                            mailbox_path.unlink()
+                        except Exception:
+                            pass
+                    elapsed = time.time() - start_time
+                    remaining = max(0.0, float(wait_timeout) - elapsed)
+                    _, state = self._send_message(question)
+                    message, _ = self.log_reader.wait_for_message(state, remaining)
+                    if message:
+                        print(f"🤖 {t('reply_from', provider='OpenCode')}")
+                        print(message)
+                        return message
+                    print(f"⏰ {t('timeout_no_reply', provider='OpenCode')}")
+                    if self.backend and self.pane_id:
+                        try:
+                            snapshot = self.backend.capture_pane(self.pane_id, lines=15)
+                            if snapshot:
+                                print("\n[Last 15 lines of backend terminal]")
+                                print(snapshot)
+                                print("-" * 40)
+                        except Exception:
+                            pass
+                    return None
                 print(f"🤖 {t('reply_from', provider='OpenCode')}")
                 print(message)
+                if used_mailbox and mailbox_path:
+                    try:
+                        mailbox_path.unlink()
+                    except Exception:
+                        pass
                 return message
             print(f"⏰ {t('timeout_no_reply', provider='OpenCode')}")
+            if self.backend and self.pane_id:
+                try:
+                    snapshot = self.backend.capture_pane(self.pane_id, lines=15)
+                    if snapshot:
+                        print("\n[Last 15 lines of backend terminal]")
+                        print(snapshot)
+                        print("-" * 40)
+                except Exception:
+                    pass
             return None
         except Exception as exc:
             print(f"❌ Sync ask failed: {exc}")
             return None
-

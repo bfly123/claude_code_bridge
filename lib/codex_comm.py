@@ -17,8 +17,9 @@ from pathlib import Path
 from typing import Optional, Tuple, Dict, Any, List
 
 from terminal import get_backend_for_session, get_pane_id_from_session
-from ccb_config import apply_backend_env
+from ccb_config import apply_backend_env, get_bool_env
 from i18n import t
+from fs_watch import FileChangeWaiter
 
 apply_backend_env()
 
@@ -37,12 +38,20 @@ class CodexLogReader:
         self.root = Path(root).expanduser()
         self._preferred_log = self._normalize_path(log_path)
         self._session_id_filter = session_id_filter
-        self._work_dir = self._normalize_work_dir(work_dir)
+        self._work_dir_path = Path(work_dir or Path.cwd())
+        self._work_dir = self._normalize_work_dir(self._work_dir_path)
+        self._project_session_file = self._work_dir_path / ".codex-session"
         try:
             poll = float(os.environ.get("CODEX_POLL_INTERVAL", "0.05"))
         except Exception:
             poll = 0.05
         self._poll_interval = min(0.5, max(0.01, poll))
+        self._change_waiter = FileChangeWaiter(
+            [],
+            enabled=get_bool_env("CCB_INOTIFY", False),
+            poll_interval=self._poll_interval,
+            debug_name="codex",
+        )
 
     @staticmethod
     def _debug_enabled() -> bool:
@@ -295,7 +304,9 @@ class CodexLogReader:
             except FileNotFoundError:
                 if not block:
                     return None, {"log_path": None, "offset": 0}
-                time.sleep(self._poll_interval)
+                remaining = max(0.0, deadline - time.time())
+                self._change_waiter.update_paths([self.root, self._project_session_file])
+                self._change_waiter.wait(min(self._poll_interval, remaining) if remaining else self._poll_interval)
                 continue
 
             try:
@@ -317,7 +328,9 @@ class CodexLogReader:
                     offset = size if isinstance(size, int) else 0
                     if not block:
                         return None, {"log_path": log_path, "offset": offset}
-                    time.sleep(self._poll_interval)
+                    remaining = max(0.0, deadline - time.time())
+                    self._change_waiter.update_paths([log_path, self._project_session_file])
+                    self._change_waiter.wait(min(self._poll_interval, remaining) if remaining else self._poll_interval)
                     continue
                 while True:
                     if block and time.time() >= deadline:
@@ -340,6 +353,7 @@ class CodexLogReader:
                         continue
                     message = self._extract_message(entry)
                     if message is not None:
+                        self._change_waiter.reset_backoff()
                         return message, {"log_path": log_path, "offset": offset}
 
             if time.time() - last_rescan >= rescan_interval:
@@ -353,7 +367,10 @@ class CodexLogReader:
                     offset = 0
                     if not block:
                         return None, {"log_path": current_path, "offset": offset}
-                    time.sleep(self._poll_interval)
+                    # Wait briefly to let writers settle, but prefer inotify wakeups.
+                    remaining = max(0.0, deadline - time.time()) if block else 0.0
+                    self._change_waiter.update_paths([current_path, self._project_session_file])
+                    self._change_waiter.wait(min(self._poll_interval, remaining) if remaining else self._poll_interval)
                     last_rescan = time.time()
                     continue
                 last_rescan = time.time()
@@ -361,7 +378,18 @@ class CodexLogReader:
             if not block:
                 return None, {"log_path": log_path, "offset": offset}
 
-            time.sleep(self._poll_interval)
+            remaining = max(0.0, deadline - time.time())
+            if remaining <= 0:
+                return None, {"log_path": log_path, "offset": offset}
+            # Update watched path on each iteration to handle rotation/replacement.
+            self._change_waiter.update_paths([log_path, self._project_session_file])
+            # Ensure we still periodically rescan for session rotation.
+            next_rescan_due = max(0.0, rescan_interval - (time.time() - last_rescan))
+            wait_for = min(remaining, max(0.01, next_rescan_due))
+            woke = self._change_waiter.wait(wait_for)
+            if woke and self._change_waiter.overflowed:
+                # We may have missed events; force a rescan on next loop.
+                last_rescan = 0.0
             if time.time() >= deadline:
                 return None, {"log_path": log_path, "offset": offset}
 
@@ -581,6 +609,11 @@ class CodexCommunicator:
 
     def _check_session_health_impl(self, probe_terminal: bool):
         try:
+            # Check if session has ended (from session_info)
+            ended_at = self.session_info.get("ended_at") if isinstance(self.session_info, dict) else None
+            if ended_at:
+                return False, f"Session ended at {ended_at}"
+
             if not self.runtime_dir.exists():
                 return False, "Runtime directory does not exist"
 
@@ -653,12 +686,47 @@ class CodexCommunicator:
     def _generate_marker(self) -> str:
         return f"{self.marker_prefix}-{int(time.time())}-{os.getpid()}"
 
+    def _handle_auto_cwd(self, content: str) -> str:
+        """Auto-sync CWD if enabled and changed"""
+        if os.environ.get("CCB_AUTO_CWD_SYNC") != "1":
+            return content
+
+        try:
+            current_cwd = str(Path.cwd().resolve())
+        except Exception:
+            return content
+
+        last_cwd = self.session_info.get("last_work_dir")
+        if last_cwd == current_cwd:
+            return content
+
+        # Safety check: ensure directory exists and is not empty
+        if not current_cwd or not os.path.exists(current_cwd):
+            if CodexLogReader._debug_enabled():
+                print(f"⚠️ Auto-CWD: Skipping invalid CWD: {current_cwd}", file=sys.stderr)
+            return content
+
+        # Inject cd command
+        print(f"🔄 Auto-sync CWD: {current_cwd}")
+        
+        # Persist new CWD
+        self.session_info["last_work_dir"] = current_cwd
+        # We rely on _remember_codex_session being called after ask_* to save this,
+        # but we can also trigger a partial save here if needed.
+        # For now, we update session_info and let the next _remember_call save it,
+        # OR we force a save now.
+        if self.project_session_file:
+             self._remember_codex_session(None)
+
+        return f"cd {current_cwd}\n{content}"
+
     def ask_async(self, question: str) -> bool:
         try:
             healthy, status = self._check_session_health_impl(probe_terminal=False)
             if not healthy:
                 raise RuntimeError(f"❌ Session error: {status}")
 
+            question = self._handle_auto_cwd(question)
             marker, state = self._send_message(question)
             log_hint = state.get("log_path") or self.log_reader.current_log_path()
             self._remember_codex_session(log_hint)
@@ -676,6 +744,7 @@ class CodexCommunicator:
                 raise RuntimeError(f"❌ Session error: {status}")
 
             print(f"🔔 {t('sending_to', provider='Codex')}", flush=True)
+            question = self._handle_auto_cwd(question)
             marker, state = self._send_message(question)
             wait_timeout = self.timeout if timeout is None else int(timeout)
             if wait_timeout == 0:
@@ -710,6 +779,15 @@ class CodexCommunicator:
                 return message
 
             print(f"⏰ {t('timeout_no_reply', provider='Codex')}")
+            if self.backend and self.pane_id:
+                try:
+                    snapshot = self.backend.capture_pane(self.pane_id, lines=15)
+                    if snapshot:
+                        print("\n[Last 15 lines of backend terminal]")
+                        print(snapshot)
+                        print("-" * 40)
+                except Exception:
+                    pass
             return None
         except Exception as exc:
             print(f"❌ Sync ask failed: {exc}")
@@ -814,6 +892,12 @@ class CodexCommunicator:
             pass
         if data.get("active") is False:
             data["active"] = True
+            updated = True
+        
+        # Save last_work_dir
+        last_work_dir = self.session_info.get("last_work_dir")
+        if last_work_dir and data.get("last_work_dir") != last_work_dir:
+            data["last_work_dir"] = last_work_dir
             updated = True
 
         if updated:
