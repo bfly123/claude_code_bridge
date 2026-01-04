@@ -34,9 +34,9 @@ $script:SCRIPTS_TO_LINK = @(
 )
 
 $script:CLAUDE_MARKDOWN = @(
-  "cask.md", "cask-w.md", "cpend.md", "cping.md",
-  "gask.md", "gask-w.md", "gpend.md", "gping.md",
-  "oask.md", "oask-w.md", "opend.md", "oping.md"
+  "cask-w.md", "cpend.md", "cping.md",
+  "gask-w.md", "gpend.md", "gping.md",
+  "oask-w.md", "opend.md", "oping.md"
 )
 
 $script:LEGACY_SCRIPTS = @(
