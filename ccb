@@ -676,25 +676,21 @@ class AILauncher:
 
     def _ensure_opencode_auto_config(self) -> None:
         """
-        Ensure ~/.config/opencode/opencode.json exists with relaxed permissions and web tools enabled.
+        Ensure project-local opencode.json exists with full allow permissions (auto mode).
         Best-effort: never raise (should not block startup).
         """
         try:
-            config_path = Path.home() / ".config" / "opencode" / "opencode.json"
-            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path = Path.cwd() / "opencode.json"
 
             desired = {
                 "permission": {
-                    "bash": "allow",
                     "edit": "allow",
+                    "bash": "allow",
+                    "skill": "allow",
                     "webfetch": "allow",
-                    "read": "allow",
-                    "write": "allow",
-                },
-                "tools": {
-                    "webfetch": True,
-                    "websearch": True,
-                },
+                    "doom_loop": "allow",
+                    "external_directory": "allow",
+                }
             }
 
             current: dict = {}
@@ -707,17 +703,7 @@ class AILauncher:
                 except Exception:
                     current = {}
 
-            perm = current.get("permission")
-            if not isinstance(perm, dict):
-                perm = {}
-            perm.update(desired["permission"])
-            current["permission"] = perm
-
-            tools = current.get("tools")
-            if not isinstance(tools, dict):
-                tools = {}
-            tools.update(desired["tools"])
-            current["tools"] = tools
+            current["permission"] = dict(desired["permission"])
 
             tmp_path = config_path.with_suffix(".tmp")
             tmp_path.write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
