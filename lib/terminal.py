@@ -35,6 +35,54 @@ def is_wsl() -> bool:
         return False
 
 
+def _choose_wezterm_cli_cwd() -> str | None:
+    """
+    Pick a safe cwd for launching Windows `wezterm.exe` from inside WSL.
+
+    When a Windows binary is launched via WSL interop from a WSL cwd (e.g. /home/...),
+    Windows may treat the process cwd as a UNC path like \\\\wsl.localhost\\...,
+    which can confuse WezTerm's WSL relay and produce noisy `chdir(/wsl.localhost/...) failed 2`.
+    Using a Windows-mounted path like /mnt/c avoids that.
+    """
+    override = (os.environ.get("CCB_WEZTERM_CLI_CWD") or "").strip()
+    candidates = [override] if override else []
+    candidates.extend(["/mnt/c", "/mnt/d", "/mnt"])
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            p = Path(candidate)
+            if p.is_dir():
+                return str(p)
+        except Exception:
+            continue
+    return None
+
+
+def _extract_wsl_path_from_unc_like_path(raw: str) -> str | None:
+    """
+    Convert UNC-like WSL paths into a WSL-internal absolute path.
+
+    Supports forms commonly seen in Git Bash/MSYS and Windows:
+      - /wsl.localhost/Ubuntu-24.04/home/user/...
+      - \\\\wsl.localhost\\Ubuntu-24.04\\home\\user\\...
+      - /wsl$/Ubuntu-24.04/home/user/...
+    Returns a POSIX absolute path like: /home/user/...
+    """
+    if not raw:
+        return None
+
+    m = re.match(r'^(?:[/\\]{1,2})(?:wsl\.localhost|wsl\$)[/\\]([^/\\]+)(.*)$', raw, re.IGNORECASE)
+    if not m:
+        return None
+    remainder = m.group(2).replace("\\", "/")
+    if not remainder:
+        return "/"
+    if not remainder.startswith("/"):
+        remainder = "/" + remainder
+    return remainder
+
+
 def _load_cached_wezterm_bin() -> str | None:
     """Load cached WezTerm path from installation"""
     config = Path.home() / ".config/ccb/env"
@@ -363,14 +411,16 @@ class WeztermBackend(TerminalBackend):
     def create_pane(self, cmd: str, cwd: str, direction: str = "right", percent: int = 50, parent_pane: Optional[str] = None) -> str:
         args = [*self._cli_base_args(), "split-pane"]
         force_wsl = os.environ.get("CCB_BACKEND_ENV", "").lower() == "wsl"
+        wsl_unc_cwd = _extract_wsl_path_from_unc_like_path(cwd)
+        # If the caller is in a WSL UNC path (e.g. Git Bash `/wsl.localhost/...`),
+        # default to launching via wsl.exe so the new pane lands in the real WSL path.
+        if is_windows() and wsl_unc_cwd and not force_wsl:
+            force_wsl = True
         use_wsl_launch = (is_wsl() and _is_windows_wezterm()) or (force_wsl and is_windows())
         if use_wsl_launch:
             in_wsl_pane = bool(os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP"))
-            wsl_cwd = cwd
-            wsl_localhost_match = re.match(r'^[/\\]{1,2}wsl\.localhost[/\\][^/\\]+(.+)$', cwd, re.IGNORECASE)
-            if wsl_localhost_match:
-                wsl_cwd = wsl_localhost_match.group(1).replace('\\', '/')
-            elif "\\" in cwd or (len(cwd) > 2 and cwd[1] == ":"):
+            wsl_cwd = wsl_unc_cwd or cwd
+            if wsl_unc_cwd is None and ("\\" in cwd or (len(cwd) > 2 and cwd[1] == ":")):
                 try:
                     wslpath_cmd = ["wslpath", "-a", cwd] if is_wsl() else ["wsl.exe", "wslpath", "-a", cwd]
                     result = subprocess.run(wslpath_cmd, capture_output=True, text=True, check=True, encoding="utf-8", errors="replace")
@@ -384,7 +434,8 @@ class WeztermBackend(TerminalBackend):
             args.extend(["--percent", str(percent)])
             if parent_pane:
                 args.extend(["--pane-id", parent_pane])
-            startup_script = f"cd {shlex.quote(wsl_cwd)} && exec {cmd}"
+            # Do not `exec` here: `cmd` may be a compound shell snippet (e.g. keep-open wrappers).
+            startup_script = f"cd {shlex.quote(wsl_cwd)} && {cmd}"
             if in_wsl_pane:
                 args.extend(["--", "bash", "-l", "-i", "-c", startup_script])
             else:
@@ -401,7 +452,18 @@ class WeztermBackend(TerminalBackend):
             shell, flag = _default_shell()
             args.extend(["--", shell, flag, cmd])
         try:
-            result = subprocess.run(args, capture_output=True, text=True, check=True, encoding="utf-8", errors="replace")
+            run_cwd = None
+            if is_wsl() and _is_windows_wezterm():
+                run_cwd = _choose_wezterm_cli_cwd()
+            result = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                check=True,
+                encoding="utf-8",
+                errors="replace",
+                cwd=run_cwd,
+            )
             return result.stdout.strip()
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"WezTerm split-pane failed:\nCommand: {' '.join(args)}\nStderr: {e.stderr}") from e
