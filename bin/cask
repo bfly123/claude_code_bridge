@@ -184,9 +184,13 @@ def main(argv: list[str]) -> int:
         if not healthy:
             raise RuntimeError(f"[ERROR] Session error: {status}")
 
-        # Use per-provider lock to serialize request-response cycles
-        lock_timeout = float(os.environ.get("CCB_LOCK_TIMEOUT", "60.0"))
-        with ProviderLock("codex", timeout=lock_timeout):
+        # Use per-provider lock to serialize request-response cycles (non-blocking)
+        lock = ProviderLock("codex")
+        if not lock.try_acquire():
+            print("[ERROR] Another cask request is in progress. Please wait and try again.", file=sys.stderr)
+            return EXIT_ERROR
+
+        try:
             # Clear output file if specified (avoid stale content)
             if output_path and output_path.exists():
                 output_path.write_text("")
@@ -204,6 +208,8 @@ def main(argv: list[str]) -> int:
             if output_path:
                 atomic_write_text(output_path, reply + "\n")
                 return exit_code
+        finally:
+            lock.release()
 
         sys.stdout.write(reply)
         if not reply.endswith("\n"):

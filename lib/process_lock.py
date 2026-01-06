@@ -93,6 +93,30 @@ class ProviderLock:
             pass
         return False
 
+    def try_acquire(self) -> bool:
+        """Try to acquire lock without blocking. Returns immediately.
+
+        Returns:
+            True if lock acquired, False if lock is held by another process
+        """
+        self.lock_dir.mkdir(parents=True, exist_ok=True)
+        self._fd = os.open(str(self.lock_file), os.O_CREAT | os.O_RDWR)
+
+        if self._try_acquire_once():
+            return True
+
+        # Check for stale lock
+        if self._check_stale_lock():
+            os.close(self._fd)
+            self._fd = os.open(str(self.lock_file), os.O_CREAT | os.O_RDWR)
+            if self._try_acquire_once():
+                return True
+
+        # Failed - close fd
+        os.close(self._fd)
+        self._fd = None
+        return False
+
     def acquire(self) -> bool:
         """Acquire the lock, waiting up to timeout seconds.
 

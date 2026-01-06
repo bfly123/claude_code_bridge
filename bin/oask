@@ -4,14 +4,12 @@ oask - Send message to OpenCode and wait for reply (sync).
 
 Designed to be used with Claude Code's run_in_background=true.
 If --output is provided, the reply is written atomically to that file and stdout stays empty.
-
-Note: OpenCode uses time.completed timestamp to indicate message completion,
-so we don't need to wait for COMPLETION_MARKER like cask/gask do.
 """
 from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -26,12 +24,56 @@ from process_lock import ProviderLock
 COMPLETION_MARKER = (os.environ.get("CCB_EXECUTION_COMPLETE_MARKER") or "[EXECUTION_COMPLETE]").strip() or "[EXECUTION_COMPLETE]"
 
 
+def _has_completion_marker(text: str) -> bool:
+    """Check if last line equals COMPLETION_MARKER (strict match)."""
+    lines = text.rstrip().splitlines()
+    return bool(lines) and lines[-1].strip() == COMPLETION_MARKER
+
+
 def _strip_completion_marker(text: str) -> str:
-    """Remove trailing marker line if present (cleanup only)."""
+    """Remove only the trailing marker line, not all occurrences."""
     lines = text.rstrip().splitlines()
     if lines and lines[-1].strip() == COMPLETION_MARKER:
         return "\n".join(lines[:-1]).rstrip()
     return text.rstrip()
+
+
+def _wait_for_complete_reply(log_reader, state: dict, timeout: float, quiet: bool):
+    """Wait until reply ends with COMPLETION_MARKER or timeout."""
+    from cli_output import EXIT_NO_REPLY, EXIT_OK
+
+    # Pre-check: try to read existing messages (may have arrived before we started)
+    existing_reply = None
+    try:
+        existing_reply, state = log_reader.wait_for_message(state, timeout=0.1)
+        if existing_reply and _has_completion_marker(existing_reply):
+            return _strip_completion_marker(existing_reply), EXIT_OK
+    except Exception:
+        pass
+
+    deadline = time.time() + timeout
+    chunks = []
+    if existing_reply:
+        chunks.append(existing_reply)
+
+    while True:
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            break
+        reply, state = log_reader.wait_for_message(state, remaining)
+        if reply is None:
+            continue
+        chunks.append(reply)
+        if _has_completion_marker(reply):
+            combined = "\n".join(chunks)
+            return _strip_completion_marker(combined), EXIT_OK
+
+    if chunks:
+        if not quiet:
+            print("[WARN] Marker not detected, returning partial reply", file=sys.stderr)
+        combined = "\n".join(chunks)
+        return _strip_completion_marker(combined), EXIT_NO_REPLY
+    return None, EXIT_NO_REPLY
 
 
 def _with_completion_marker_request(message: str) -> str:
@@ -127,9 +169,13 @@ def main(argv: list[str]) -> int:
         if not healthy:
             raise RuntimeError(f"[ERROR] Session error: {status}")
 
-        # Use per-provider lock to serialize request-response cycles
-        lock_timeout = float(os.environ.get("CCB_LOCK_TIMEOUT", "60.0"))
-        with ProviderLock("opencode", timeout=lock_timeout):
+        # Use per-provider lock to serialize request-response cycles (non-blocking)
+        lock = ProviderLock("opencode")
+        if not lock.try_acquire():
+            print("[ERROR] Another oask request is in progress. Please wait and try again.", file=sys.stderr)
+            return EXIT_ERROR
+
+        try:
             # Clear output file if specified (avoid stale content)
             if output_path and output_path.exists():
                 output_path.write_text("")
@@ -137,27 +183,23 @@ def main(argv: list[str]) -> int:
             # Reset log state to ignore any messages before lock acquisition
             comm.log_reader.capture_state()
 
-            # Send message with marker hint (OpenCode uses timestamp for completion, not marker)
             _, state = comm._send_message(_with_completion_marker_request(message))
-
-            # Wait for reply using OpenCode's time.completed timestamp
-            reply, _ = comm.log_reader.wait_for_message(state, timeout)
-            if not reply:
+            reply, exit_code = _wait_for_complete_reply(comm.log_reader, state, timeout, quiet)
+            if reply is None:
                 if not quiet:
                     print(f"[TIMEOUT] Timeout after {int(timeout)}s", file=sys.stderr)
-                return EXIT_NO_REPLY
-
-            # Strip marker if present (cleanup)
-            reply = _strip_completion_marker(reply)
+                return exit_code
 
             if output_path:
                 atomic_write_text(output_path, reply + "\n")
-                return EXIT_OK
+                return exit_code
+        finally:
+            lock.release()
 
         sys.stdout.write(reply)
         if not reply.endswith("\n"):
             sys.stdout.write("\n")
-        return EXIT_OK
+        return exit_code
     except KeyboardInterrupt:
         return 130
     except Exception as exc:
