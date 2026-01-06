@@ -21,7 +21,7 @@ from compat import setup_windows_encoding
 setup_windows_encoding()
 from process_lock import ProviderLock
 
-COMPLETION_MARKER = (os.environ.get("CCB_EXECUTION_COMPLETE_MARKER") or "[EXECUTION_COMPLETE]").strip() or "[EXECUTION_COMPLETE]"
+COMPLETION_MARKER = (os.environ.get("CCB_EXECUTION_COMPLETE_MARKER") or "EXECUTION_COMPLETE").strip() or "EXECUTION_COMPLETE"
 
 SUPERVISOR_PROMPT = """## Executor Mode: codex+opencode
 You are the SUPERVISOR, NOT the executor.
@@ -53,15 +53,15 @@ def _get_executor_from_roles() -> Optional[str]:
 
 
 def _has_completion_marker(text: str) -> bool:
-    """Check if last line equals COMPLETION_MARKER (strict match)."""
+    """Check if last line contains COMPLETION_MARKER (flexible match)."""
     lines = text.rstrip().splitlines()
-    return bool(lines) and lines[-1].strip() == COMPLETION_MARKER
+    return bool(lines) and COMPLETION_MARKER in lines[-1]
 
 
 def _strip_completion_marker(text: str) -> str:
-    """Remove only the trailing marker line, not all occurrences."""
+    """Remove the trailing marker line if it contains COMPLETION_MARKER."""
     lines = text.rstrip().splitlines()
-    if lines and lines[-1].strip() == COMPLETION_MARKER:
+    if lines and COMPLETION_MARKER in lines[-1]:
         return "\n".join(lines[:-1]).rstrip()
     return text.rstrip()
 

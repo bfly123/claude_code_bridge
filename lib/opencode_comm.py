@@ -603,9 +603,14 @@ class OpenCodeLogReader:
             payload = session_entry.get("payload") or {}
             current_session_id = payload.get("id") if isinstance(payload.get("id"), str) else None
             if session_id and current_session_id and current_session_id != session_id:
-                # User may have switched sessions; keep following the state-bound session if possible.
-                # If that session is no longer the latest, we still try to read it (best-effort) by sticking to session_id.
-                current_session_id = session_id
+                # Check if new session has a completed reply - if so, follow it
+                new_reply = self._find_new_assistant_reply(current_session_id, {"assistant_count": 0})
+                if new_reply:
+                    # New session has reply, switch to it
+                    session_id = current_session_id
+                else:
+                    # No reply in new session yet, keep old session
+                    current_session_id = session_id
             elif not session_id:
                 session_id = current_session_id
 
