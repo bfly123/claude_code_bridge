@@ -271,6 +271,58 @@ function Install-Native {
     Write-Host "Added $binDir to user PATH"
   }
 
+  # Git version injection
+  function Get-GitVersionInfo {
+    param([string]$RepoRoot)
+
+    $commit = ""
+    $date = ""
+
+    # 方法1: 本地 Git
+    if (Get-Command git -ErrorAction SilentlyContinue) {
+      if (Test-Path (Join-Path $RepoRoot ".git")) {
+        try {
+          $commit = (git -C $RepoRoot log -1 --format='%h' 2>$null)
+          $date = (git -C $RepoRoot log -1 --format='%cs' 2>$null)
+        } catch {}
+      }
+    }
+
+    # 方法2: 环境变量
+    if (-not $commit -and $env:CCB_GIT_COMMIT) {
+      $commit = $env:CCB_GIT_COMMIT
+      $date = $env:CCB_GIT_DATE
+    }
+
+    # 方法3: GitHub API
+    if (-not $commit) {
+      try {
+        $api = "https://api.github.com/repos/bfly123/claude_code_bridge/commits/main"
+        $response = Invoke-RestMethod -Uri $api -TimeoutSec 5 -ErrorAction Stop
+        $commit = $response.sha.Substring(0,7)
+        $date = $response.commit.committer.date.Substring(0,10)
+      } catch {}
+    }
+
+    return @{Commit=$commit; Date=$date}
+  }
+
+  # 注入版本信息到 ccb 文件
+  $verInfo = Get-GitVersionInfo -RepoRoot $repoRoot
+  if ($verInfo.Commit) {
+    $ccbPath = Join-Path $InstallPrefix "ccb"
+    if (Test-Path $ccbPath) {
+      try {
+        $content = Get-Content $ccbPath -Raw -Encoding UTF8
+        $content = $content -replace 'GIT_COMMIT = ""', "GIT_COMMIT = `"$($verInfo.Commit)`""
+        $content = $content -replace 'GIT_DATE = ""', "GIT_DATE = `"$($verInfo.Date)`""
+        [System.IO.File]::WriteAllText($ccbPath, $content, [System.Text.UTF8Encoding]::new($false))
+        Write-Host "Injected version info: $($verInfo.Commit) $($verInfo.Date)"
+      } catch {
+        Write-Warning "Failed to inject version info: $_"
+      }
+    }
+  }
   Install-ClaudeConfig
 
   Write-Host ""

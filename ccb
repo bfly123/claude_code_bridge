@@ -1093,6 +1093,11 @@ exec tmux attach -t "$TMUX_SESSION"
         elif self.auto:
             # Auto mode without CCA: bypass all permissions
             cmd.append("--dangerously-skip-permissions")
+        else:
+            # If CCA (Claude Code Autoflow) is installed, start Claude in plan mode
+            cca_path, _ = _detect_cca()
+            if cca_path:
+                cmd.extend(["--permission-mode", "plan"])
         if self.resume:
             _, has_history = self._get_latest_claude_session_id()
             if has_history:
@@ -1508,6 +1513,21 @@ def _detect_cca() -> tuple[str | None, str | None]:
         Path.home() / ".local/share/claude_code_autoflow",
         Path.home() / ".local/bin/cca",
     ]
+    # Windows 特定路径
+    if platform.system() == "Windows":
+        localappdata = os.environ.get("LOCALAPPDATA", "")
+        if localappdata:
+            candidates.extend([
+                Path(localappdata) / "cca",
+                Path(localappdata) / "claude_code_autoflow",
+                Path(localappdata) / "cca" / "bin" / "cca.cmd",
+                Path(localappdata) / "cca" / "cca.ps1",
+            ])
+        # 回退路径
+        candidates.extend([
+            Path.home() / "AppData/Local/cca",
+            Path.home() / "AppData/Local/claude_code_autoflow",
+        ])
     for p in candidates:
         if p.exists():
             return str(p), str(p.parent if p.is_file() else p)
@@ -1531,9 +1551,30 @@ def _get_cca_version(cca_path: str) -> str | None:
 def cmd_version(args):
     """Show version info and check for updates"""
     script_root = Path(__file__).resolve().parent
-    default_install_dir = Path.home() / ".local/share/codex-dual"
-    install_dir = Path(os.environ.get("CODEX_INSTALL_PREFIX") or default_install_dir).expanduser()
-    if (script_root / "install.sh").exists():
+    # 候选目录列表（优先级递减）
+    candidates = [
+        script_root,  # 当前脚本目录
+        Path(os.environ.get("CODEX_INSTALL_PREFIX", "")).expanduser() if os.environ.get("CODEX_INSTALL_PREFIX") else None,
+        Path.home() / ".local/share/codex-dual",  # Linux/macOS
+    ]
+
+    # Windows 特定路径
+    if platform.system() == "Windows":
+        localappdata = os.environ.get("LOCALAPPDATA", "")
+        if localappdata:
+            candidates.extend([
+                Path(localappdata) / "codex-dual",
+                Path(localappdata) / "claude-code-bridge",
+            ])
+        candidates.append(Path.home() / "AppData/Local/codex-dual")
+
+    # 选择第一个包含 ccb 文件的目录
+    install_dir = None
+    for candidate in candidates:
+        if candidate and (candidate / "ccb").exists():
+            install_dir = candidate
+            break
+    if not install_dir:
         install_dir = script_root
 
     local_info = _get_version_info(install_dir)
@@ -1596,6 +1637,16 @@ def _update_cca(silent: bool = False) -> int:
     # Fresh install via tarball
     if not silent:
         print("📦 Installing CCA from GitHub...")
+    # 根据操作系统选择安装目录
+    if platform.system() == "Windows":
+        # Windows: 使用 %LOCALAPPDATA%\cca
+        localappdata = os.environ.get("LOCALAPPDATA", "")
+        if localappdata:
+            install_dir = Path(localappdata) / "cca"
+        else:
+            install_dir = Path.home() / "AppData/Local/cca"
+    else:
+        # Unix/Linux/macOS: 使用 ~/.local/share/claude_code_autoflow
     install_dir = Path.home() / ".local/share/claude_code_autoflow"
     tarball_url = f"{cca_repo}/archive/refs/heads/main.tar.gz"
 
@@ -1609,9 +1660,35 @@ def _update_cca(silent: bool = False) -> int:
             if install_dir.exists():
                 shutil.rmtree(install_dir)
             shutil.copytree(extracted, install_dir)
+            # 根据操作系统选择安装脚本
+            if platform.system() == "Windows":
+                # Windows: 优先使用 install.ps1
+                install_script = install_dir / "install.ps1"
+                if install_script.exists():
+                    result = subprocess.run(
+                        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                         "-File", str(install_script), "install"],
+                        cwd=str(install_dir),
+                        check=False
+                    )
+                    if result.returncode != 0:
+                        print("⚠️  PowerShell installation had issues, but CCA files are copied")
+                else:
+                    # 回退：直接使用 cca.ps1
+                    cca_script = install_dir / "cca.ps1"
+                    if cca_script.exists():
+                        print("⚠️  install.ps1 not found, but cca.ps1 is available")
+                        print(f"   You can run: powershell -File \"{cca_script}\" <command>")
+                    else:
+                        print("⚠️  Neither install.ps1 nor cca.ps1 found")
+                        print(f"   Files extracted to: {install_dir}")
+            else:
+                # Unix/Linux/macOS: 使用 install.sh
             install_script = install_dir / "install.sh"
             if install_script.exists():
-                subprocess.run(["bash", str(install_script), "install"], cwd=install_dir)
+                    subprocess.run(["bash", str(install_script), "install"], cwd=str(install_dir))
+                else:
+                    print("⚠️  install.sh not found")
         print("✅ CCA installed successfully")
         print(f"   Path: {install_dir}")
         return 0
