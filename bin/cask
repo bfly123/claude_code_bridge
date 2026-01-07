@@ -219,10 +219,6 @@ def main(argv: list[str]) -> int:
             return EXIT_ERROR
 
         try:
-            # Clear output file if specified (avoid stale content)
-            if output_path and output_path.exists():
-                output_path.write_text("")
-
             # Reset log state to ignore any messages before lock acquisition
             comm.log_reader.capture_state()
 
@@ -239,7 +235,9 @@ def main(argv: list[str]) -> int:
                 return exit_code
 
             if output_path:
-                atomic_write_text(output_path, reply + "\n")
+                pending_path = Path(str(output_path) + ".pending")
+                atomic_write_text(pending_path, reply + "\n")
+                pending_path.replace(output_path)
                 return exit_code
         finally:
             lock.release()
