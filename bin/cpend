@@ -18,7 +18,8 @@ from i18n import t
 
 try:
     from cli_output import EXIT_ERROR, EXIT_NO_REPLY, EXIT_OK
-    from codex_comm import CodexLogReader
+    from codex_comm import CodexLogReader, SESSION_ID_PATTERN
+    from pane_registry import load_registry_by_session_id, load_registry_by_claude_pane
 except ImportError as exc:
     print(f"Import failed: {exc}")
     sys.exit(1)
@@ -33,19 +34,59 @@ def _debug(message: str) -> None:
     print(f"[DEBUG] {message}", file=sys.stderr)
 
 
-def _load_session_log_path() -> Path | None:
+def _load_session_log_path() -> tuple[Path | None, str | None]:
     """Load codex_session_path from .codex-session if exists"""
     session_file = Path.cwd() / ".codex-session"
     if not session_file.exists():
-        return None
+        return None, None
     try:
         with session_file.open("r", encoding="utf-8-sig") as f:
             data = json.load(f)
         path_str = data.get("codex_session_path")
+        session_id = data.get("codex_session_id")
         if path_str:
-            return Path(path_str).expanduser()
+            return Path(path_str).expanduser(), session_id
     except Exception as exc:
         _debug(f"Failed to read .codex-session ({session_file}): {exc}")
+    return None, None
+
+
+def _load_registry_log_path() -> tuple[Path | None, dict | None]:
+    session_id = (os.environ.get("CODEX_SESSION_ID") or "").strip()
+    if session_id:
+        record = load_registry_by_session_id(session_id)
+        if record:
+            path_str = record.get("codex_session_path")
+            if path_str:
+                path = Path(path_str).expanduser()
+                _debug(f"Using registry by CODEX_SESSION_ID: {path}")
+                return path, record
+
+    pane_id = (os.environ.get("WEZTERM_PANE") or "").strip()
+    if pane_id:
+        record = load_registry_by_claude_pane(pane_id)
+        if record:
+            path_str = record.get("codex_session_path")
+            if path_str:
+                path = Path(path_str).expanduser()
+                _debug(f"Using registry by WEZTERM_PANE: {path}")
+                return path, record
+    return None, None
+
+
+def _derive_session_filter(log_path: Path | None, registry_record: dict | None, session_id: str | None) -> str | None:
+    if registry_record:
+        reg_id = registry_record.get("codex_session_id")
+        if isinstance(reg_id, str) and reg_id:
+            return reg_id
+    if session_id:
+        return session_id
+    if log_path:
+        for source in (log_path.stem, log_path.name):
+            match = SESSION_ID_PATTERN.search(source)
+            if match:
+                return match.group(0)
+        return log_path.name
     return None
 
 def _parse_n(argv: list[str]) -> int:
@@ -66,22 +107,15 @@ def main(argv: list[str]) -> int:
     try:
         n = _parse_n(argv)
 
-        # Try session-specific log path first, fallback to scanning latest
-        log_path = _load_session_log_path()
-        if log_path:
-            _debug(f"Using codex_session_path from .codex-session: {log_path}")
-        reader = CodexLogReader(log_path=log_path)
+        registry_log_path, registry_record = _load_registry_log_path()
+        session_log_path, session_id = _load_session_log_path()
 
-        # If specified log has no reply, try scanning for latest
-        if log_path and log_path.exists():
-            test_msg = reader.latest_message()
-            if not test_msg:
-                # Scan for latest log that might have replies
-                latest = reader._scan_latest()
-                if latest and latest != log_path:
-                    reader.set_preferred_log(latest)
-                    log_path = latest
-                    _debug(f"Preferred log had no reply; switching to latest: {log_path}")
+        log_path = registry_log_path or session_log_path
+        if not registry_log_path and log_path:
+            _debug(f"Using codex_session_path from .codex-session: {log_path}")
+
+        session_filter = _derive_session_filter(log_path, registry_record, session_id)
+        reader = CodexLogReader(log_path=log_path, session_id_filter=session_filter)
 
         if n > 1:
             conversations = reader.latest_conversations(n)

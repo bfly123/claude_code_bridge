@@ -8,9 +8,11 @@ If --output is provided, the reply is written atomically to that file and stdout
 from __future__ import annotations
 import json
 import os
+import re
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -19,9 +21,8 @@ lib_dir = script_dir.parent / "lib"
 sys.path.insert(0, str(lib_dir))
 from compat import setup_windows_encoding
 setup_windows_encoding()
-from process_lock import ProviderLock
 
-COMPLETION_MARKER = (os.environ.get("CCB_EXECUTION_COMPLETE_MARKER") or "EXECUTION_COMPLETE").strip() or "EXECUTION_COMPLETE"
+COMPLETION_MARKER_BASE = (os.environ.get("CCB_EXECUTION_COMPLETE_MARKER") or "EXECUTION_COMPLETE").strip() or "EXECUTION_COMPLETE"
 
 SUPERVISOR_PROMPT = """## Executor Mode: codex+opencode
 You are the SUPERVISOR, NOT the executor.
@@ -52,40 +53,64 @@ def _get_executor_from_roles() -> Optional[str]:
     return None
 
 
-def _has_completion_marker(text: str) -> bool:
-    """Check if last line contains COMPLETION_MARKER (flexible match)."""
-    lines = text.rstrip().splitlines()
-    return bool(lines) and COMPLETION_MARKER in lines[-1]
+def _build_markers(request_id: str) -> tuple[str, str]:
+    start_marker = f"{COMPLETION_MARKER_BASE}:BEGIN:{request_id}"
+    end_marker = f"{COMPLETION_MARKER_BASE}:END:{request_id}"
+    return start_marker, end_marker
 
 
-def _strip_completion_marker(text: str) -> str:
-    """Remove the trailing marker line if it contains COMPLETION_MARKER."""
-    lines = text.rstrip().splitlines()
-    if lines and COMPLETION_MARKER in lines[-1]:
-        lines[-1] = lines[-1].replace(COMPLETION_MARKER, "").rstrip()
-        if not lines[-1]:
-            lines = lines[:-1]
-        return "\n".join(lines).rstrip()
-    return text.rstrip()
+def _marker_regex(marker: str) -> re.Pattern:
+    escaped = [re.escape(ch) for ch in marker]
+    pattern = r"\s*".join(escaped)
+    return re.compile(pattern, re.DOTALL)
 
 
-def _wait_for_complete_reply(log_reader, state: dict, timeout: float, quiet: bool):
-    """Wait until reply ends with COMPLETION_MARKER or timeout."""
+def _marker_in_text(text: str, marker: str) -> bool:
+    return bool(_marker_regex(marker).search(text))
+
+
+def _strip_markers(text: str, start_marker: str, end_marker: str) -> str:
+    """Remove marker lines (start/end) from the reply."""
+    for marker in (start_marker, end_marker):
+        text = _marker_regex(marker).sub("", text)
+    return text.strip()
+
+
+def _wait_for_complete_reply(log_reader, state: dict, timeout: float, quiet: bool,
+                             start_marker: str, end_marker: str):
+    """Wait until reply ends with end_marker or timeout."""
     from cli_output import EXIT_NO_REPLY, EXIT_OK
-
-    # Pre-check: try to read existing messages (may have arrived before we started)
-    existing_reply = None
-    try:
-        existing_reply, state = log_reader.wait_for_message(state, timeout=0.1)
-        if existing_reply and _has_completion_marker(existing_reply):
-            return _strip_completion_marker(existing_reply), EXIT_OK
-    except Exception:
-        pass
 
     deadline = time.time() + timeout
     chunks = []
-    if existing_reply:
-        chunks.append(existing_reply)
+    collecting = False
+
+    def _handle_reply(reply: str) -> Optional[str]:
+        nonlocal collecting, chunks
+        has_start = _marker_in_text(reply, start_marker)
+        has_end = _marker_in_text(reply, end_marker)
+        if not collecting:
+            if has_start or has_end:
+                collecting = True
+                chunks.append(reply)
+            else:
+                return None
+        else:
+            chunks.append(reply)
+        if has_end:
+            combined = "\n".join(chunks)
+            return _strip_markers(combined, start_marker, end_marker)
+        return None
+
+    # Pre-check: try to read existing messages (may have arrived before we started)
+    try:
+        existing_reply, state = log_reader.wait_for_message(state, timeout=0.1)
+        if existing_reply:
+            result = _handle_reply(existing_reply)
+            if result is not None:
+                return result, EXIT_OK
+    except Exception:
+        pass
 
     while True:
         remaining = deadline - time.time()
@@ -94,29 +119,30 @@ def _wait_for_complete_reply(log_reader, state: dict, timeout: float, quiet: boo
         reply, state = log_reader.wait_for_message(state, remaining)
         if reply is None:
             continue
-        chunks.append(reply)
-        if _has_completion_marker(reply):
-            combined = "\n".join(chunks)
-            return _strip_completion_marker(combined), EXIT_OK
+        result = _handle_reply(reply)
+        if result is not None:
+            return result, EXIT_OK
 
-    if chunks:
+    if chunks and collecting:
         if not quiet:
-            print("[WARN] Marker not detected, returning partial reply", file=sys.stderr)
+            print("[WARN] cask_marker_missing: marker not detected for this request, returning partial reply", file=sys.stderr)
         combined = "\n".join(chunks)
-        return _strip_completion_marker(combined), EXIT_NO_REPLY
+        return _strip_markers(combined, start_marker, end_marker), EXIT_NO_REPLY
     return None, EXIT_NO_REPLY
 
 
-def _with_completion_marker_request(message: str) -> str:
+def _with_completion_marker_request(message: str, start_marker: str, end_marker: str) -> str:
     if not message:
         return message
-    if COMPLETION_MARKER in message:
+    if start_marker in message or end_marker in message:
         return message
     return (
         f"{message}\n\n"
         "IMPORTANT:\n"
         "- You MUST reply with a final response (do not stay silent).\n"
-        f"- End your reply with this exact line (verbatim):\n{COMPLETION_MARKER}\n"
+        f"- Begin your reply with this exact line (verbatim):\n{start_marker}\n"
+        f"- End your reply with this exact line (verbatim):\n{end_marker}\n"
+        "- Reply in a single message if possible.\n"
     )
 
 def _usage() -> None:
@@ -215,35 +241,29 @@ def main(argv: list[str]) -> int:
         if not healthy:
             raise RuntimeError(f"[ERROR] Session error: {status}")
 
-        # Use per-provider lock to serialize request-response cycles (non-blocking)
-        lock = ProviderLock("codex")
-        if not lock.try_acquire():
-            print("[ERROR] Another cask request is in progress. Please wait and try again.", file=sys.stderr)
-            return EXIT_ERROR
+        # Reset log state to ignore any messages before request dispatch
+        comm.log_reader.capture_state()
 
-        try:
-            # Reset log state to ignore any messages before lock acquisition
-            comm.log_reader.capture_state()
+        # Check if supervisor mode is enabled via roles config
+        executor = _get_executor_from_roles()
+        if executor == "codex+opencode":
+            message = SUPERVISOR_PROMPT + message
 
-            # Check if supervisor mode is enabled via roles config
-            executor = _get_executor_from_roles()
-            if executor == "codex+opencode":
-                message = SUPERVISOR_PROMPT + message
+        request_id = uuid.uuid4().hex
+        start_marker, end_marker = _build_markers(request_id)
 
-            _, state = comm._send_message(_with_completion_marker_request(message))
-            reply, exit_code = _wait_for_complete_reply(comm.log_reader, state, timeout, quiet)
-            if reply is None:
-                if not quiet:
-                    print(f"[TIMEOUT] Timeout after {int(timeout)}s", file=sys.stderr)
-                return exit_code
+        _, state = comm._send_message(_with_completion_marker_request(message, start_marker, end_marker))
+        reply, exit_code = _wait_for_complete_reply(comm.log_reader, state, timeout, quiet, start_marker, end_marker)
+        if reply is None:
+            if not quiet:
+                print(f"[TIMEOUT] Timeout after {int(timeout)}s", file=sys.stderr)
+            return exit_code
 
-            if output_path:
-                pending_path = Path(str(output_path) + ".pending")
-                atomic_write_text(pending_path, reply + "\n")
-                pending_path.replace(output_path)
-                return exit_code
-        finally:
-            lock.release()
+        if output_path:
+            pending_path = Path(str(output_path) + ".pending")
+            atomic_write_text(pending_path, reply + "\n")
+            pending_path.replace(output_path)
+            return exit_code
 
         sys.stdout.write(reply)
         if not reply.endswith("\n"):

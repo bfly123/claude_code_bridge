@@ -28,6 +28,7 @@ from terminal import TmuxBackend, WeztermBackend, Iterm2Backend, detect_terminal
 from compat import setup_windows_encoding
 from ccb_config import get_backend_env
 from session_utils import safe_write_session, check_session_writable
+from pane_registry import upsert_registry
 from i18n import t
 
 setup_windows_encoding()
@@ -353,6 +354,7 @@ class AILauncher:
             output_fifo = runtime / "output.fifo"
             # WezTerm mode injects text via pane, no strong FIFO dependency; Windows/WSL may not support mkfifo
             self._write_codex_session(runtime, None, input_fifo, output_fifo, pane_id=pane_id, pane_title_marker=pane_title_marker)
+            self._write_cend_registry(os.environ.get("WEZTERM_PANE", ""), pane_id)
         elif provider == "gemini":
             self._write_gemini_session(runtime, None, pane_id=pane_id, pane_title_marker=pane_title_marker)
         else:
@@ -450,6 +452,21 @@ class AILauncher:
             path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:
             pass
+
+    def _clear_codex_log_binding(self, data: dict) -> dict:
+        try:
+            if not isinstance(data, dict):
+                return {}
+            cleared = dict(data)
+            for key in ("codex_session_path", "codex_session_id", "codex_start_cmd"):
+                if key in cleared:
+                    cleared.pop(key, None)
+            if cleared.get("active") is False:
+                cleared["active"] = True
+            return cleared
+        except Exception as exc:
+            print(f"⚠️ codex_session_clear_failed: {exc}", file=sys.stderr)
+            return data if isinstance(data, dict) else {}
 
     def _claude_session_file(self) -> Path:
         return Path.cwd() / ".claude-session"
@@ -875,6 +892,9 @@ exec tmux attach -t "$TMUX_SESSION"
         if session_file.exists():
             data = self._read_json_file(session_file)
 
+        if not self.resume:
+            data = self._clear_codex_log_binding(data)
+
         work_dir = Path.cwd()
         data.update({
             "session_id": self.session_id,
@@ -897,6 +917,20 @@ exec tmux attach -t "$TMUX_SESSION"
             print(err, file=sys.stderr)
             return False
         return True
+
+    def _write_cend_registry(self, claude_pane_id: str, codex_pane_id: str | None) -> bool:
+        if not claude_pane_id:
+            return False
+        record = {
+            "ccb_session_id": self.session_id,
+            "claude_pane_id": claude_pane_id,
+            "codex_pane_id": codex_pane_id,
+            "work_dir": str(Path.cwd()),
+        }
+        ok = upsert_registry(record)
+        if not ok:
+            print("⚠️ Failed to update cpend registry", file=sys.stderr)
+        return ok
 
     def _write_gemini_session(self, runtime, tmux_session, pane_id=None, pane_title_marker=None):
         session_file = Path.cwd() / ".gemini-session"

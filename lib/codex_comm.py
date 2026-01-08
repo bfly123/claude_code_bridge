@@ -19,6 +19,7 @@ from typing import Optional, Tuple, Dict, Any, List
 from terminal import get_backend_for_session, get_pane_id_from_session
 from ccb_config import apply_backend_env
 from i18n import t
+from pane_registry import upsert_registry, registry_path_for_session, load_registry_by_session_id
 
 apply_backend_env()
 
@@ -571,6 +572,14 @@ class CodexCommunicator:
                         result["_session_file"] = str(session_file)
                 except Exception:
                     pass
+            registry = load_registry_by_session_id(os.environ["CODEX_SESSION_ID"])
+            if isinstance(registry, dict):
+                reg_log = registry.get("codex_session_path")
+                reg_id = registry.get("codex_session_id")
+                if reg_log:
+                    result["codex_session_path"] = reg_log
+                if reg_id:
+                    result["codex_session_id"] = reg_id
             return result
 
         project_session = self._find_session_file()
@@ -833,6 +842,25 @@ class CodexCommunicator:
         resume_cmd = f"codex resume {session_id}" if session_id else None
         updated = False
 
+        started_at = data.get("started_at")
+        if started_at and not data.get("codex_session_path") and not data.get("codex_session_id"):
+            try:
+                started_ts = time.mktime(time.strptime(started_at, "%Y-%m-%d %H:%M:%S"))
+            except Exception:
+                started_ts = None
+            if started_ts:
+                try:
+                    log_mtime = log_path_obj.stat().st_mtime
+                except OSError:
+                    log_mtime = None
+                if log_mtime is not None and log_mtime < started_ts:
+                    if os.environ.get("CCB_DEBUG") in ("1", "true", "yes"):
+                        print(
+                            f"[DEBUG] Skip binding log older than session start: {log_path_obj}",
+                            file=sys.stderr,
+                        )
+                    return
+
         if data.get("codex_session_path") != path_str:
             data["codex_session_path"] = path_str
             updated = True
@@ -865,6 +893,18 @@ class CodexCommunicator:
                 print(f"⚠️  Failed to update {project_file.name}: {e}", file=sys.stderr)
                 if tmp_file.exists():
                     tmp_file.unlink(missing_ok=True)
+
+        registry_path = registry_path_for_session(self.session_id)
+        if registry_path.exists():
+            ok = upsert_registry({
+                "ccb_session_id": self.session_id,
+                "codex_pane_id": self.pane_id or None,
+                "codex_session_id": session_id,
+                "codex_session_path": path_str,
+                "work_dir": self.session_info.get("work_dir"),
+            })
+            if not ok:
+                print("⚠️  Failed to update cpend registry", file=sys.stderr)
 
         self.session_info["codex_session_path"] = path_str
         if session_id:
