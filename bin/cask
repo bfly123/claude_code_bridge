@@ -8,11 +8,11 @@ If --output is provided, the reply is written atomically to that file and stdout
 from __future__ import annotations
 import json
 import os
-import re
+import socket
+import shutil
 import subprocess
 import sys
 import time
-import uuid
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -21,8 +21,12 @@ lib_dir = script_dir.parent / "lib"
 sys.path.insert(0, str(lib_dir))
 from compat import setup_windows_encoding
 setup_windows_encoding()
+from process_lock import ProviderLock
 
-COMPLETION_MARKER_BASE = (os.environ.get("CCB_EXECUTION_COMPLETE_MARKER") or "EXECUTION_COMPLETE").strip() or "EXECUTION_COMPLETE"
+COMPLETION_MARKER = (os.environ.get("CCB_EXECUTION_COMPLETE_MARKER") or "EXECUTION_COMPLETE").strip() or "EXECUTION_COMPLETE"
+
+from caskd_protocol import REQ_ID_PREFIX, make_req_id, strip_done_text, wrap_codex_prompt
+from caskd_daemon import read_state
 
 SUPERVISOR_PROMPT = """## Executor Mode: codex+opencode
 You are the SUPERVISOR, NOT the executor.
@@ -53,64 +57,40 @@ def _get_executor_from_roles() -> Optional[str]:
     return None
 
 
-def _build_markers(request_id: str) -> tuple[str, str]:
-    start_marker = f"{COMPLETION_MARKER_BASE}:BEGIN:{request_id}"
-    end_marker = f"{COMPLETION_MARKER_BASE}:END:{request_id}"
-    return start_marker, end_marker
+def _has_completion_marker(text: str) -> bool:
+    """Check if last line contains COMPLETION_MARKER (flexible match)."""
+    lines = text.rstrip().splitlines()
+    return bool(lines) and COMPLETION_MARKER in lines[-1]
 
 
-def _marker_regex(marker: str) -> re.Pattern:
-    escaped = [re.escape(ch) for ch in marker]
-    pattern = r"\s*".join(escaped)
-    return re.compile(pattern, re.DOTALL)
+def _strip_completion_marker(text: str) -> str:
+    """Remove the trailing marker line if it contains COMPLETION_MARKER."""
+    lines = text.rstrip().splitlines()
+    if lines and COMPLETION_MARKER in lines[-1]:
+        lines[-1] = lines[-1].replace(COMPLETION_MARKER, "").rstrip()
+        if not lines[-1]:
+            lines = lines[:-1]
+        return "\n".join(lines).rstrip()
+    return text.rstrip()
 
 
-def _marker_in_text(text: str, marker: str) -> bool:
-    return bool(_marker_regex(marker).search(text))
-
-
-def _strip_markers(text: str, start_marker: str, end_marker: str) -> str:
-    """Remove marker lines (start/end) from the reply."""
-    for marker in (start_marker, end_marker):
-        text = _marker_regex(marker).sub("", text)
-    return text.strip()
-
-
-def _wait_for_complete_reply(log_reader, state: dict, timeout: float, quiet: bool,
-                             start_marker: str, end_marker: str):
-    """Wait until reply ends with end_marker or timeout."""
+def _wait_for_complete_reply(log_reader, state: dict, timeout: float, quiet: bool):
+    """Wait until reply ends with COMPLETION_MARKER or timeout."""
     from cli_output import EXIT_NO_REPLY, EXIT_OK
+
+    # Pre-check: try to read existing messages (may have arrived before we started)
+    existing_reply = None
+    try:
+        existing_reply, state = log_reader.wait_for_message(state, timeout=0.1)
+        if existing_reply and _has_completion_marker(existing_reply):
+            return _strip_completion_marker(existing_reply), EXIT_OK
+    except Exception:
+        pass
 
     deadline = time.time() + timeout
     chunks = []
-    collecting = False
-
-    def _handle_reply(reply: str) -> Optional[str]:
-        nonlocal collecting, chunks
-        has_start = _marker_in_text(reply, start_marker)
-        has_end = _marker_in_text(reply, end_marker)
-        if not collecting:
-            if has_start or has_end:
-                collecting = True
-                chunks.append(reply)
-            else:
-                return None
-        else:
-            chunks.append(reply)
-        if has_end:
-            combined = "\n".join(chunks)
-            return _strip_markers(combined, start_marker, end_marker)
-        return None
-
-    # Pre-check: try to read existing messages (may have arrived before we started)
-    try:
-        existing_reply, state = log_reader.wait_for_message(state, timeout=0.1)
-        if existing_reply:
-            result = _handle_reply(existing_reply)
-            if result is not None:
-                return result, EXIT_OK
-    except Exception:
-        pass
+    if existing_reply:
+        chunks.append(existing_reply)
 
     while True:
         remaining = deadline - time.time()
@@ -119,31 +99,207 @@ def _wait_for_complete_reply(log_reader, state: dict, timeout: float, quiet: boo
         reply, state = log_reader.wait_for_message(state, remaining)
         if reply is None:
             continue
-        result = _handle_reply(reply)
-        if result is not None:
-            return result, EXIT_OK
+        chunks.append(reply)
+        if _has_completion_marker(reply):
+            combined = "\n".join(chunks)
+            return _strip_completion_marker(combined), EXIT_OK
 
-    if chunks and collecting:
+    if chunks:
         if not quiet:
-            print("[WARN] cask_marker_missing: marker not detected for this request, returning partial reply", file=sys.stderr)
+            print("[WARN] Marker not detected, returning partial reply", file=sys.stderr)
         combined = "\n".join(chunks)
-        return _strip_markers(combined, start_marker, end_marker), EXIT_NO_REPLY
+        return _strip_completion_marker(combined), EXIT_NO_REPLY
     return None, EXIT_NO_REPLY
 
 
-def _with_completion_marker_request(message: str, start_marker: str, end_marker: str) -> str:
+def _wait_for_done_reply(log_reader, state: dict, timeout: float, req_id: str, quiet: bool):
+    from cli_output import EXIT_NO_REPLY, EXIT_OK
+    deadline = time.time() + timeout
+    chunks: list[str] = []
+    anchor_seen = False
+    anchor_collect_grace = min(deadline, time.time() + 2.0)
+
+    while True:
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            break
+        event, state = log_reader.wait_for_event(state, min(remaining, 0.5))
+        if event is None:
+            continue
+        role, text = event
+        if role == "user":
+            if f"{REQ_ID_PREFIX} {req_id}" in text:
+                anchor_seen = True
+            continue
+        if role != "assistant":
+            continue
+        if (not anchor_seen) and time.time() < anchor_collect_grace:
+            continue
+        chunks.append(text)
+        combined = "\n".join(chunks)
+        from caskd_protocol import is_done_text
+        if is_done_text(combined, req_id):
+            return strip_done_text(combined, req_id), EXIT_OK
+
+    combined = "\n".join(chunks)
+    if combined and not quiet:
+        print("[WARN] Done marker not detected, returning partial reply", file=sys.stderr)
+    return strip_done_text(combined, req_id), EXIT_NO_REPLY
+
+
+def _with_completion_marker_request(message: str) -> str:
     if not message:
         return message
-    if start_marker in message or end_marker in message:
+    if COMPLETION_MARKER in message:
         return message
     return (
         f"{message}\n\n"
         "IMPORTANT:\n"
         "- You MUST reply with a final response (do not stay silent).\n"
-        f"- Begin your reply with this exact line (verbatim):\n{start_marker}\n"
-        f"- End your reply with this exact line (verbatim):\n{end_marker}\n"
-        "- Reply in a single message if possible.\n"
+        f"- End your reply with this exact line (verbatim):\n{COMPLETION_MARKER}\n"
     )
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    v = raw.strip().lower()
+    if v in ("0", "false", "no", "off"):
+        return False
+    if v in ("1", "true", "yes", "on"):
+        return True
+    return default
+
+
+def _caskd_autostart_enabled(default: bool = True) -> bool:
+    # Prefer the new name; keep CCB_AUTO_CASKD for backwards compatibility.
+    if "CCB_CASKD_AUTOSTART" in os.environ:
+        return _env_bool("CCB_CASKD_AUTOSTART", default)
+    if "CCB_AUTO_CASKD" in os.environ:
+        return _env_bool("CCB_AUTO_CASKD", default)
+    return default
+
+
+def _state_file_from_env() -> Optional[Path]:
+    raw = (os.environ.get("CCB_CASKD_STATE_FILE") or "").strip()
+    if not raw:
+        return None
+    try:
+        return Path(raw).expanduser()
+    except Exception:
+        return None
+
+
+def _find_project_session_file(work_dir: Path) -> Optional[Path]:
+    current = Path(work_dir).resolve()
+    while True:
+        candidate = current / ".codex-session"
+        if candidate.exists():
+            return candidate
+        if current == current.parent:
+            return None
+        current = current.parent
+
+
+def _read_project_terminal(work_dir: Path) -> Optional[str]:
+    session_file = _find_project_session_file(work_dir)
+    if not session_file:
+        return None
+    try:
+        data = json.loads(session_file.read_text(encoding="utf-8-sig"))
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    terminal = str(data.get("terminal") or "").strip().lower()
+    if terminal:
+        return terminal
+    return None
+
+
+def _try_daemon_request(work_dir: Path, message: str, timeout: float, quiet: bool) -> Optional[tuple[str, int]]:
+    if not _env_bool("CCB_CASKD", True):
+        return None
+    terminal = _read_project_terminal(work_dir)
+    if terminal not in ("wezterm", "iterm2"):
+        return None
+    st = read_state(state_file=_state_file_from_env())
+    if not st:
+        return None
+    try:
+        host = st.get("connect_host") or st.get("host")
+        port = int(st["port"])
+        token = st["token"]
+    except Exception:
+        return None
+    try:
+        payload = {
+            "type": "cask.request",
+            "v": 1,
+            "id": f"cask-{os.getpid()}-{int(time.time() * 1000)}",
+            "token": token,
+            "work_dir": str(work_dir),
+            "timeout_s": float(timeout),
+            "quiet": bool(quiet),
+            "message": message,
+        }
+        connect_timeout = min(1.0, max(0.1, float(timeout)))
+        with socket.create_connection((host, port), timeout=connect_timeout) as sock:
+            sock.settimeout(0.5)
+            sock.sendall((json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))
+            buf = b""
+            deadline = time.time() + float(timeout) + 5.0
+            while b"\n" not in buf and time.time() < deadline:
+                try:
+                    chunk = sock.recv(65536)
+                except socket.timeout:
+                    continue
+                if not chunk:
+                    break
+                buf += chunk
+            if b"\n" not in buf:
+                return None
+            line = buf.split(b"\n", 1)[0].decode("utf-8", errors="replace")
+            resp = json.loads(line)
+            if resp.get("type") != "cask.response":
+                return None
+            reply = str(resp.get("reply") or "")
+            exit_code = int(resp.get("exit_code", 1))
+            return reply, exit_code
+    except Exception:
+        return None
+
+
+def _maybe_start_caskd() -> bool:
+    if not _env_bool("CCB_CASKD", True):
+        return False
+    if not _caskd_autostart_enabled(True):
+        return False
+    terminal = _read_project_terminal(Path.cwd())
+    if terminal not in ("wezterm", "iterm2"):
+        return False
+    # Prefer repo-local caskd when running from source; fallback to PATH.
+    candidates: list[str] = []
+    local = (Path(__file__).resolve().parent / "caskd")
+    if local.exists():
+        candidates.append(str(local))
+    found = shutil.which("caskd")
+    if found:
+        candidates.append(found)
+    if not candidates:
+        return False
+    argv = [sys.executable, candidates[0]] if candidates[0].endswith(".py") else [candidates[0]]
+    try:
+        kwargs = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "close_fds": True}
+        if os.name == "nt":
+            kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        else:
+            kwargs["start_new_session"] = True
+        subprocess.Popen(argv, **kwargs)
+        return True
+    except Exception:
+        return False
 
 def _usage() -> None:
     print("Usage: cask [--timeout SECONDS] [--output FILE] <message>", file=sys.stderr)
@@ -235,35 +391,63 @@ def main(argv: list[str]) -> int:
             print("Correct usage: Bash(cask \"...\", run_in_background=true)", file=sys.stderr)
             return EXIT_ERROR
 
+        # Check if supervisor mode is enabled via roles config
+        executor = _get_executor_from_roles()
+        if executor == "codex+opencode":
+            message = SUPERVISOR_PROMPT + message
+
+        # Prefer daemon if available (scheme-2). Do NOT take the client-side lock for daemon mode:
+        # daemon performs per-session serialization and should accept concurrent client submissions.
+        daemon_result = _try_daemon_request(Path.cwd(), message, timeout, quiet)
+        if daemon_result is None and _maybe_start_caskd():
+            # Give daemon a moment to write state file and start listening, then retry once.
+            time.sleep(0.2)
+            daemon_result = _try_daemon_request(Path.cwd(), message, timeout, quiet)
+        if daemon_result is not None:
+            reply, exit_code = daemon_result
+            if output_path:
+                pending_path = Path(str(output_path) + ".pending")
+                atomic_write_text(pending_path, reply + "\n")
+                pending_path.replace(output_path)
+                return exit_code
+            sys.stdout.write(reply)
+            if not reply.endswith("\n"):
+                sys.stdout.write("\n")
+            return exit_code
+
         comm = CodexCommunicator(lazy_init=True)
 
         healthy, status = comm._check_session_health_impl(probe_terminal=False)
         if not healthy:
             raise RuntimeError(f"[ERROR] Session error: {status}")
 
-        # Reset log state to ignore any messages before request dispatch
-        comm.log_reader.capture_state()
+        # Direct mode: keep client-side lock to avoid log mis-association and interleaved injection.
+        lock_key = (comm.session_info.get("pane_title_marker") or comm.pane_id or comm.session_info.get("codex_session_id") or os.getcwd())
+        lock = ProviderLock("codex", cwd=f"session:{lock_key}", timeout=min(300.0, max(1.0, float(timeout))))
+        if not lock.acquire():
+            print("[ERROR] Another cask request is in progress (lock timeout).", file=sys.stderr)
+            return EXIT_ERROR
 
-        # Check if supervisor mode is enabled via roles config
-        executor = _get_executor_from_roles()
-        if executor == "codex+opencode":
-            message = SUPERVISOR_PROMPT + message
+        try:
+            # Reset log state to ignore any messages before lock acquisition
+            comm.log_reader.capture_state()
 
-        request_id = uuid.uuid4().hex
-        start_marker, end_marker = _build_markers(request_id)
+            # Direct mode: scheme-2 req_id protocol (strict).
+            req_id = make_req_id()
+            _, state = comm._send_message(wrap_codex_prompt(message, req_id))
+            reply, exit_code = _wait_for_done_reply(comm.log_reader, state, timeout, req_id, quiet)
+            if reply is None:
+                if not quiet:
+                    print(f"[TIMEOUT] Timeout after {int(timeout)}s", file=sys.stderr)
+                return exit_code
 
-        _, state = comm._send_message(_with_completion_marker_request(message, start_marker, end_marker))
-        reply, exit_code = _wait_for_complete_reply(comm.log_reader, state, timeout, quiet, start_marker, end_marker)
-        if reply is None:
-            if not quiet:
-                print(f"[TIMEOUT] Timeout after {int(timeout)}s", file=sys.stderr)
-            return exit_code
-
-        if output_path:
-            pending_path = Path(str(output_path) + ".pending")
-            atomic_write_text(pending_path, reply + "\n")
-            pending_path.replace(output_path)
-            return exit_code
+            if output_path:
+                pending_path = Path(str(output_path) + ".pending")
+                atomic_write_text(pending_path, reply + "\n")
+                pending_path.replace(output_path)
+                return exit_code
+        finally:
+            lock.release()
 
         sys.stdout.write(reply)
         if not reply.endswith("\n"):

@@ -432,6 +432,40 @@ class WeztermBackend(TerminalBackend):
             return True
         return self._pane_id_by_title_marker(panes, pane_id) is not None
 
+    def get_text(self, pane_id: str, lines: int = 20) -> Optional[str]:
+        """Get text content from pane (last N lines)."""
+        try:
+            result = subprocess.run(
+                [*self._cli_base_args(), "get-text", "--pane-id", pane_id],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=2.0,
+            )
+            if result.returncode != 0:
+                return None
+            text = result.stdout
+            if lines and text:
+                text_lines = text.splitlines()
+                return "\n".join(text_lines[-lines:])
+            return text
+        except Exception:
+            return None
+
+    def send_key(self, pane_id: str, key: str) -> bool:
+        """Send a special key (e.g., 'Escape', 'Enter') to pane."""
+        try:
+            result = subprocess.run(
+                [*self._cli_base_args(), "send-text", "--pane-id", pane_id, "--no-paste"],
+                input=key.encode("utf-8"),
+                capture_output=True,
+                timeout=2.0,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
     def kill_pane(self, pane_id: str) -> None:
         subprocess.run([*self._cli_base_args(), "kill-pane", "--pane-id", pane_id], stderr=subprocess.DEVNULL)
 

@@ -241,6 +241,19 @@ class CodexLogReader:
         """Non-blocking read for reply"""
         return self._read_since(state, timeout=0.0, block=False)
 
+    def wait_for_event(self, state: Dict[str, Any], timeout: float) -> Tuple[Optional[Tuple[str, str]], Dict[str, Any]]:
+        """
+        Block and wait for a new event.
+
+        Returns:
+            ((role, text), new_state) or (None, state) on timeout.
+        """
+        return self._read_event_since(state, timeout, block=True)
+
+    def try_get_event(self, state: Dict[str, Any]) -> Tuple[Optional[Tuple[str, str]], Dict[str, Any]]:
+        """Non-blocking read for an event."""
+        return self._read_event_since(state, timeout=0.0, block=False)
+
     def latest_message(self) -> Optional[str]:
         """Get the latest reply directly"""
         # Always use _latest_log() to detect newer sessions
@@ -366,6 +379,106 @@ class CodexLogReader:
             if time.time() >= deadline:
                 return None, {"log_path": log_path, "offset": offset}
 
+    def _read_event_since(self, state: Dict[str, Any], timeout: float, block: bool) -> Tuple[Optional[Tuple[str, str]], Dict[str, Any]]:
+        """
+        Like _read_since(), but returns structured (role, text) events.
+
+        Role is one of: "user", "assistant".
+        """
+        deadline = time.time() + timeout
+        current_path = self._normalize_path(state.get("log_path"))
+        offset = state.get("offset", -1)
+        if not isinstance(offset, int):
+            offset = -1
+        rescan_interval = min(2.0, max(0.2, timeout / 2.0))
+        last_rescan = time.time()
+
+        def ensure_log() -> Path:
+            candidates = [
+                self._preferred_log if self._preferred_log and self._preferred_log.exists() else None,
+                current_path if current_path and current_path.exists() else None,
+            ]
+            for candidate in candidates:
+                if candidate:
+                    return candidate
+            latest = self._scan_latest()
+            if latest:
+                self._preferred_log = latest
+                return latest
+            raise FileNotFoundError("Codex session log not found")
+
+        while True:
+            try:
+                log_path = ensure_log()
+            except FileNotFoundError:
+                if not block:
+                    return None, {"log_path": None, "offset": 0}
+                time.sleep(self._poll_interval)
+                if time.time() >= deadline:
+                    return None, {"log_path": None, "offset": 0}
+                continue
+
+            try:
+                size = log_path.stat().st_size
+            except OSError:
+                size = None
+
+            if offset < 0:
+                offset = size if isinstance(size, int) else 0
+
+            with log_path.open("rb") as fh:
+                try:
+                    if isinstance(size, int) and offset > size:
+                        offset = size
+                    fh.seek(offset, os.SEEK_SET)
+                except OSError:
+                    offset = size if isinstance(size, int) else 0
+                    if not block:
+                        return None, {"log_path": log_path, "offset": offset}
+                    time.sleep(self._poll_interval)
+                    continue
+                while True:
+                    if block and time.time() >= deadline:
+                        return None, {"log_path": log_path, "offset": offset}
+                    pos_before = fh.tell()
+                    raw_line = fh.readline()
+                    if not raw_line:
+                        break
+                    if not raw_line.endswith(b"\n"):
+                        fh.seek(pos_before)
+                        break
+                    offset = fh.tell()
+                    line = raw_line.decode("utf-8", errors="ignore").strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    event = self._extract_event(entry)
+                    if event is not None:
+                        return event, {"log_path": log_path, "offset": offset}
+
+            if time.time() - last_rescan >= rescan_interval:
+                latest = self._scan_latest()
+                if latest and latest != log_path:
+                    current_path = latest
+                    self._preferred_log = latest
+                    offset = 0
+                    if not block:
+                        return None, {"log_path": current_path, "offset": offset}
+                    time.sleep(self._poll_interval)
+                    last_rescan = time.time()
+                    continue
+                last_rescan = time.time()
+
+            if not block:
+                return None, {"log_path": log_path, "offset": offset}
+
+            time.sleep(self._poll_interval)
+            if time.time() >= deadline:
+                return None, {"log_path": log_path, "offset": offset}
+
     @staticmethod
     def _extract_message(entry: dict) -> Optional[str]:
         entry_type = entry.get("type")
@@ -431,6 +544,20 @@ class CodexLogReader:
                 texts = [item.get("text", "") for item in content if item.get("type") == "input_text"]
                 if texts:
                     return "\n".join(filter(None, texts)).strip()
+        return None
+
+    @classmethod
+    def _extract_event(cls, entry: dict) -> Optional[Tuple[str, str]]:
+        """
+        Extract a (role, text) event from a JSONL entry.
+        Role is "user" or "assistant".
+        """
+        user_msg = cls._extract_user_message(entry)
+        if isinstance(user_msg, str) and user_msg.strip():
+            return "user", user_msg.strip()
+        ai_msg = cls._extract_message(entry)
+        if isinstance(ai_msg, str) and ai_msg.strip():
+            return "assistant", ai_msg.strip()
         return None
 
     def latest_conversations(self, n: int = 1) -> List[Tuple[str, str]]:

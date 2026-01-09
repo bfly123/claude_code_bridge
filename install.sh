@@ -90,6 +90,7 @@ fi
 SCRIPTS_TO_LINK=(
   bin/cask
   bin/cask-w
+  bin/caskd
   bin/cpend
   bin/cping
   bin/gask

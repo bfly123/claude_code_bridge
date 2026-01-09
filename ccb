@@ -203,7 +203,13 @@ def _build_pane_title_cmd(marker: str) -> str:
 
 
 class AILauncher:
-    def __init__(self, providers: list, resume: bool = False, auto: bool = False, no_claude: bool = False):
+    def __init__(
+        self,
+        providers: list,
+        resume: bool = False,
+        auto: bool = False,
+        no_claude: bool = False,
+    ):
         self.providers = providers or ["codex"]
         self.resume = resume
         self.auto = auto
@@ -219,6 +225,90 @@ class AILauncher:
         self.wezterm_panes = {}
         self.iterm2_panes = {}
         self.processes = {}
+
+    def _maybe_start_caskd(self) -> None:
+        def _bool_from_env(name: str):
+            raw = os.environ.get(name)
+            if raw is None or raw == "":
+                return None
+            v = raw.strip().lower()
+            if v in {"0", "false", "no", "off"}:
+                return False
+            if v in {"1", "true", "yes", "on"}:
+                return True
+            return None
+
+        # Prefer the new name; keep CCB_AUTO_CASKD for backwards compatibility.
+        autostart = _bool_from_env("CCB_CASKD_AUTOSTART")
+        if autostart is None:
+            autostart = _bool_from_env("CCB_AUTO_CASKD")
+        if autostart is False:
+            return
+        if _bool_from_env("CCB_CASKD") is False:
+            return
+        if "codex" not in self.providers:
+            return
+        if self.terminal_type not in ("wezterm", "iterm2"):
+            return
+        try:
+            from caskd_daemon import ping_daemon, read_state
+        except Exception as exc:
+            print(f"⚠️ Failed to import caskd modules: {exc}")
+            return
+
+        state_file = None
+        raw_state_file = (os.environ.get("CCB_CASKD_STATE_FILE") or "").strip()
+        if raw_state_file:
+            try:
+                state_file = Path(raw_state_file).expanduser()
+            except Exception:
+                state_file = None
+
+        if ping_daemon(state_file=state_file):
+            st = read_state(state_file=state_file) or {}
+            host = st.get("host")
+            port = st.get("port")
+            if host and port:
+                print(f"✅ caskd already running at {host}:{port}")
+            else:
+                print("✅ caskd already running")
+            return
+
+        caskd_script = self.script_dir / "bin" / "caskd"
+        if not caskd_script.exists():
+            print("⚠️ caskd not found (bin/caskd). Reinstall or update your checkout.")
+            return
+
+        kwargs = {
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "close_fds": True,
+        }
+        if os.name == "nt":
+            kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        else:
+            kwargs["start_new_session"] = True
+
+        try:
+            subprocess.Popen([sys.executable, str(caskd_script)], **kwargs)
+        except Exception as exc:
+            print(f"⚠️ Failed to start caskd: {exc}")
+            return
+
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            if ping_daemon(timeout_s=0.2, state_file=state_file):
+                st = read_state(state_file=state_file) or {}
+                host = st.get("host")
+                port = st.get("port")
+                if host and port:
+                    print(f"✅ caskd started at {host}:{port}")
+                else:
+                    print("✅ caskd started")
+                return
+            time.sleep(0.1)
+        print("⚠️ caskd start requested, but daemon not reachable yet")
 
     def _detect_terminal_type(self):
         # Forced by environment variable
@@ -1237,6 +1327,9 @@ exec tmux attach -t "$TMUX_SESSION"
             if not self._start_provider(provider):
                 return 1
             self._warmup_provider(provider)
+
+        # Optional: start caskd after Codex session file exists (first startup convenience).
+        self._maybe_start_caskd()
 
         if self.no_claude:
             print(f"✅ {t('backends_started_no_claude')}")

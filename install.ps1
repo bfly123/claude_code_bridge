@@ -27,7 +27,7 @@ $script:CCB_END_MARKER = "<!-- CCB_CONFIG_END -->"
 
 $script:SCRIPTS_TO_LINK = @(
   "ccb",
-  "cask", "cask-w", "cpend", "cping",
+  "cask", "cask-w", "caskd", "cpend", "cping",
   "gask", "gask-w", "gpend", "gping",
   "oask", "oask-w", "opend", "oping",
   "ccb-layout"
