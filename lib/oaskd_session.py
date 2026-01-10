@@ -7,20 +7,14 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from ccb_config import apply_backend_env
-from session_utils import safe_write_session
+from session_utils import find_project_session_file as _find_project_session_file, safe_write_session
 from terminal import get_backend_for_session
 
 apply_backend_env()
 
 
 def find_project_session_file(work_dir: Path) -> Optional[Path]:
-    current = Path(work_dir)
-    while current != current.parent:
-        candidate = current / ".opencode-session"
-        if candidate.exists():
-            return candidate
-        current = current.parent
-    return None
+    return _find_project_session_file(work_dir, ".opencode-session")
 
 
 def _read_json(path: Path) -> dict:

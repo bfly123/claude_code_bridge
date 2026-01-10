@@ -112,3 +112,14 @@ def print_session_error(msg: str, to_stderr: bool = True) -> None:
     import sys
     output = sys.stderr if to_stderr else sys.stdout
     print(msg, file=output)
+
+
+def find_project_session_file(work_dir: Path, session_filename: str) -> Optional[Path]:
+    current = Path(work_dir).resolve()
+    while True:
+        candidate = current / session_filename
+        if candidate.exists():
+            return candidate
+        if current == current.parent:
+            return None
+        current = current.parent

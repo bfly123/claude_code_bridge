@@ -12,6 +12,7 @@ from typing import Optional, Tuple
 
 from env_utils import env_bool
 from providers import ProviderClientSpec
+from session_utils import find_project_session_file
 
 
 def autostart_enabled(primary_env: str, legacy_env: str, default: bool = True) -> bool:
@@ -30,17 +31,6 @@ def state_file_from_env(env_name: str) -> Optional[Path]:
         return Path(raw).expanduser()
     except Exception:
         return None
-
-
-def find_project_session_file(work_dir: Path, session_filename: str) -> Optional[Path]:
-    current = Path(work_dir).resolve()
-    while True:
-        candidate = current / session_filename
-        if candidate.exists():
-            return candidate
-        if current == current.parent:
-            return None
-        current = current.parent
 
 
 def try_daemon_request(spec: ProviderClientSpec, work_dir: Path, message: str, timeout: float, quiet: bool, state_file: Optional[Path] = None) -> Optional[Tuple[str, int]]:

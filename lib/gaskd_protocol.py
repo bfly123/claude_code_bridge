@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from caskd_protocol import (
+from ccb_protocol import (
     DONE_PREFIX,
     REQ_ID_PREFIX,
     is_done_text,

@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import json
 import os
-import queue
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
-from caskd_protocol import (
+from worker_pool import BaseSessionWorker, PerSessionWorkerPool
+
+from ccb_protocol import (
     CaskdRequest,
     CaskdResult,
     REQ_ID_PREFIX,
@@ -59,41 +60,19 @@ class _QueuedTask:
     result: Optional[CaskdResult] = None
 
 
-class _SessionWorker(threading.Thread):
-    def __init__(self, session_key: str):
-        super().__init__(daemon=True)
-        self.session_key = session_key
-        self._q: "queue.Queue[_QueuedTask]" = queue.Queue()
-        self._stop = threading.Event()
-
-    def enqueue(self, task: _QueuedTask) -> None:
-        self._q.put(task)
-
-    def stop(self) -> None:
-        self._stop.set()
-
-    def run(self) -> None:
-        while not self._stop.is_set():
-            try:
-                task = self._q.get(timeout=0.2)
-            except queue.Empty:
-                continue
-            try:
-                task.result = self._handle_task(task)
-            except Exception as exc:
-                write_log(log_path(CASKD_SPEC.log_file_name), f"[ERROR] session={self.session_key} req_id={task.req_id} {exc}")
-                task.result = CaskdResult(
-                    exit_code=1,
-                    reply=str(exc),
-                    req_id=task.req_id,
-                    session_key=self.session_key,
-                    log_path=None,
-                    anchor_seen=False,
-                    done_seen=False,
-                    fallback_scan=False,
-                )
-            finally:
-                task.done_event.set()
+class _SessionWorker(BaseSessionWorker[_QueuedTask, CaskdResult]):
+    def _handle_exception(self, exc: Exception, task: _QueuedTask) -> CaskdResult:
+        write_log(log_path(CASKD_SPEC.log_file_name), f"[ERROR] session={self.session_key} req_id={task.req_id} {exc}")
+        return CaskdResult(
+            exit_code=1,
+            reply=str(exc),
+            req_id=task.req_id,
+            session_key=self.session_key,
+            log_path=None,
+            anchor_seen=False,
+            done_seen=False,
+            fallback_scan=False,
+        )
 
     def _handle_task(self, task: _QueuedTask) -> CaskdResult:
         started_ms = _now_ms()
@@ -470,8 +449,7 @@ def get_session_registry() -> SessionRegistry:
 
 class _WorkerPool:
     def __init__(self):
-        self._lock = threading.Lock()
-        self._workers: dict[str, _SessionWorker] = {}
+        self._pool = PerSessionWorkerPool[_SessionWorker]()
 
     def submit(self, request: CaskdRequest) -> _QueuedTask:
         req_id = make_req_id()
@@ -480,13 +458,7 @@ class _WorkerPool:
         session = load_project_session(Path(request.work_dir))
         session_key = compute_session_key(session) if session else "codex:unknown"
 
-        with self._lock:
-            worker = self._workers.get(session_key)
-            if worker is None:
-                worker = _SessionWorker(session_key)
-                self._workers[session_key] = worker
-                worker.start()
-
+        worker = self._pool.get_or_create(session_key, _SessionWorker)
         worker.enqueue(task)
         return task
 

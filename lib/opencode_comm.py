@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from caskd_protocol import REQ_ID_PREFIX
+from ccb_protocol import REQ_ID_PREFIX
 from ccb_config import apply_backend_env
 from i18n import t
 from terminal import get_backend_for_session, get_pane_id_from_session
