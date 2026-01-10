@@ -3,9 +3,6 @@ from __future__ import annotations
 import json
 import os
 import queue
-import socket
-import socketserver
-import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -16,7 +13,7 @@ from caskd_protocol import (
     CaskdRequest,
     CaskdResult,
     REQ_ID_PREFIX,
-    DONE_PREFIX,
+
     make_req_id,
     is_done_text,
     strip_done_text,
@@ -24,47 +21,15 @@ from caskd_protocol import (
 )
 from caskd_session import CodexProjectSession, compute_session_key, find_project_session_file, load_project_session
 from codex_comm import CodexLogReader, CodexCommunicator
-from process_lock import ProviderLock
-from session_utils import safe_write_session
 from terminal import get_backend_for_session
+from askd_runtime import state_file_path, log_path, write_log, random_token
+import askd_rpc
+from askd_server import AskDaemonServer
+from providers import CASKD_SPEC
 
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
-
-
-def _run_dir() -> Path:
-    return Path.home() / ".ccb" / "run"
-
-
-def _state_file_path() -> Path:
-    return _run_dir() / "caskd.json"
-
-
-def _log_path() -> Path:
-    return _run_dir() / "caskd.log"
-
-
-def _write_log(line: str) -> None:
-    try:
-        _run_dir().mkdir(parents=True, exist_ok=True)
-        with _log_path().open("a", encoding="utf-8") as handle:
-            handle.write(line.rstrip() + "\n")
-    except Exception:
-        pass
-
-
-def _random_token() -> str:
-    return os.urandom(16).hex()
-
-
-def _normalize_connect_host(host: str) -> str:
-    host = (host or "").strip()
-    if not host or host in ("0.0.0.0",):
-        return "127.0.0.1"
-    if host in ("::", "[::]"):
-        return "::1"
-    return host
 
 
 def _extract_codex_session_id_from_log(log_path: Path) -> Optional[str]:
@@ -116,7 +81,7 @@ class _SessionWorker(threading.Thread):
             try:
                 task.result = self._handle_task(task)
             except Exception as exc:
-                _write_log(f"[ERROR] session={self.session_key} req_id={task.req_id} {exc}")
+                write_log(log_path(CASKD_SPEC.log_file_name), f"[ERROR] session={self.session_key} req_id={task.req_id} {exc}")
                 task.result = CaskdResult(
                     exit_code=1,
                     reply=str(exc),
@@ -134,7 +99,7 @@ class _SessionWorker(threading.Thread):
         started_ms = _now_ms()
         req = task.request
         work_dir = Path(req.work_dir)
-        _write_log(f"[INFO] start session={self.session_key} req_id={task.req_id} work_dir={req.work_dir}")
+        write_log(log_path(CASKD_SPEC.log_file_name), f"[INFO] start session={self.session_key} req_id={task.req_id} work_dir={req.work_dir}")
         session = load_project_session(work_dir)
         if not session:
             return CaskdResult(
@@ -229,20 +194,20 @@ class _SessionWorker(threading.Thread):
                 except Exception:
                     alive = False
                 if not alive:
-                    _write_log(f"[ERROR] Pane {pane_id} died during request session={self.session_key} req_id={task.req_id}")
-                    log_path = None
+                    write_log(log_path(CASKD_SPEC.log_file_name), f"[ERROR] Pane {pane_id} died during request session={self.session_key} req_id={task.req_id}")
+                    codex_log_path = None
                     try:
                         lp = reader.current_log_path()
                         if lp:
-                            log_path = str(lp)
+                            codex_log_path = str(lp)
                     except Exception:
-                        log_path = None
+                        codex_log_path = None
                     return CaskdResult(
                         exit_code=1,
                         reply="❌ Codex pane died during request",
                         req_id=task.req_id,
                         session_key=self.session_key,
-                        log_path=log_path,
+                        log_path=codex_log_path,
                         anchor_seen=anchor_seen,
                         done_seen=False,
                         fallback_scan=fallback_scan,
@@ -264,20 +229,20 @@ class _SessionWorker(threading.Thread):
                         else:
                             is_current_interrupt = False
                         if is_current_interrupt:
-                            _write_log(f"[WARN] Codex interrupted - skipping task session={self.session_key} req_id={task.req_id}")
-                            log_path = None
+                            write_log(log_path(CASKD_SPEC.log_file_name), f"[WARN] Codex interrupted - skipping task session={self.session_key} req_id={task.req_id}")
+                            codex_log_path = None
                             try:
                                 lp = reader.current_log_path()
                                 if lp:
-                                    log_path = str(lp)
+                                    codex_log_path = str(lp)
                             except Exception:
-                                log_path = None
+                                codex_log_path = None
                             return CaskdResult(
                                 exit_code=1,
                                 reply="❌ Codex interrupted. Please recover Codex manually, then retry. Skipping to next task.",
                                 req_id=task.req_id,
                                 session_key=self.session_key,
-                                log_path=log_path,
+                                log_path=codex_log_path,
                                 anchor_seen=anchor_seen,
                                 done_seen=False,
                                 fallback_scan=fallback_scan,
@@ -326,17 +291,17 @@ class _SessionWorker(threading.Thread):
 
         combined = "\n".join(chunks)
         reply = strip_done_text(combined, task.req_id)
-        log_path = None
+        codex_log_path = None
         try:
             lp = state.get("log_path")
             if lp:
-                log_path = str(lp)
+                codex_log_path = str(lp)
         except Exception:
-            log_path = None
+            codex_log_path = None
 
-        if done_seen and log_path:
-            sid = _extract_codex_session_id_from_log(Path(log_path))
-            session.update_codex_log_binding(log_path=log_path, session_id=sid)
+        if done_seen and codex_log_path:
+            sid = _extract_codex_session_id_from_log(Path(codex_log_path))
+            session.update_codex_log_binding(log_path=codex_log_path, session_id=sid)
 
         exit_code = 0 if done_seen else 2
         result = CaskdResult(
@@ -344,14 +309,14 @@ class _SessionWorker(threading.Thread):
             reply=reply,
             req_id=task.req_id,
             session_key=self.session_key,
-            log_path=log_path,
+            log_path=codex_log_path,
             anchor_seen=anchor_seen,
             done_seen=done_seen,
             fallback_scan=fallback_scan,
             anchor_ms=anchor_ms,
             done_ms=done_ms,
         )
-        _write_log(
+        write_log(log_path(CASKD_SPEC.log_file_name), 
             f"[INFO] done session={self.session_key} req_id={task.req_id} exit={result.exit_code} "
             f"anchor={result.anchor_seen} done={result.done_seen} fallback={result.fallback_scan} "
             f"log={result.log_path or ''} anchor_ms={result.anchor_ms or ''} done_ms={result.done_ms or ''}"
@@ -400,7 +365,7 @@ class SessionRegistry:
                     try:
                         current_mtime = session_file.stat().st_mtime
                         if (not entry.session_file) or (session_file != entry.session_file) or (current_mtime != entry.file_mtime):
-                            _write_log(f"[INFO] Session file changed, reloading: {work_dir}")
+                            write_log(log_path(CASKD_SPEC.log_file_name), f"[INFO] Session file changed, reloading: {work_dir}")
                             entry = self._load_and_cache(work_dir)
                     except Exception:
                         pass
@@ -448,14 +413,14 @@ class SessionRegistry:
         with self._lock:
             if key in self._sessions:
                 self._sessions[key].valid = False
-                _write_log(f"[INFO] Session invalidated: {work_dir}")
+                write_log(log_path(CASKD_SPEC.log_file_name), f"[INFO] Session invalidated: {work_dir}")
 
     def remove(self, work_dir: Path) -> None:
         key = str(work_dir)
         with self._lock:
             if key in self._sessions:
                 del self._sessions[key]
-                _write_log(f"[INFO] Session removed: {work_dir}")
+                write_log(log_path(CASKD_SPEC.log_file_name), f"[INFO] Session removed: {work_dir}")
 
     def _monitor_loop(self) -> None:
         while not self._stop.wait(self.CHECK_INTERVAL):
@@ -468,13 +433,13 @@ class SessionRegistry:
                 if not entry.valid:
                     continue
                 if entry.session_file and not entry.session_file.exists():
-                    _write_log(f"[WARN] Session file deleted: {entry.work_dir}")
+                    write_log(log_path(CASKD_SPEC.log_file_name), f"[WARN] Session file deleted: {entry.work_dir}")
                     entry.valid = False
                     continue
                 if entry.session:
                     ok, _ = entry.session.ensure_pane()
                     if not ok:
-                        _write_log(f"[WARN] Session pane invalid: {entry.work_dir}")
+                        write_log(log_path(CASKD_SPEC.log_file_name), f"[WARN] Session pane invalid: {entry.work_dir}")
                         entry.valid = False
                 entry.last_check = time.time()
             for key, entry in list(self._sessions.items()):
@@ -530,232 +495,69 @@ class CaskdServer:
     def __init__(self, host: str = "127.0.0.1", port: int = 0, *, state_file: Optional[Path] = None):
         self.host = host
         self.port = port
-        self.state_file = state_file or _state_file_path()
-        self.token = _random_token()
+        self.state_file = state_file or state_file_path(CASKD_SPEC.state_file_name)
+        self.token = random_token()
         self.pool = _WorkerPool()
 
     def serve_forever(self) -> int:
-        _run_dir().mkdir(parents=True, exist_ok=True)
-
-        # Single-instance lock (global, not per-cwd)
-        lock = ProviderLock("caskd", cwd="global", timeout=0.1)
-        if not lock.try_acquire():
-            return 2
-
-        class Handler(socketserver.StreamRequestHandler):
-            def handle(self) -> None:
-                with self.server.activity_lock:
-                    self.server.active_requests += 1
-                    self.server.last_activity = time.time()
-
-                try:
-                    line = self.rfile.readline()
-                    if not line:
-                        return
-                    msg = json.loads(line.decode("utf-8", errors="replace"))
-                except Exception:
-                    return
-
-                if msg.get("token") != self.server.token:
-                    self._write({"type": "cask.response", "v": 1, "id": msg.get("id"), "exit_code": 1, "reply": "Unauthorized"})
-                    return
-
-                if msg.get("type") == "cask.ping":
-                    self._write({"type": "cask.pong", "v": 1, "id": msg.get("id"), "exit_code": 0, "reply": "OK"})
-                    return
-
-                if msg.get("type") == "cask.shutdown":
-                    self._write({"type": "cask.response", "v": 1, "id": msg.get("id"), "exit_code": 0, "reply": "OK"})
-                    threading.Thread(target=self.server.shutdown, daemon=True).start()
-                    return
-
-                if msg.get("type") != "cask.request":
-                    self._write({"type": "cask.response", "v": 1, "id": msg.get("id"), "exit_code": 1, "reply": "Invalid request"})
-                    return
-
-                try:
-                    req = CaskdRequest(
-                        client_id=str(msg.get("id") or ""),
-                        work_dir=str(msg.get("work_dir") or ""),
-                        timeout_s=float(msg.get("timeout_s") or 300.0),
-                        quiet=bool(msg.get("quiet") or False),
-                        message=str(msg.get("message") or ""),
-                        output_path=str(msg.get("output_path")) if msg.get("output_path") else None,
-                    )
-                except Exception as exc:
-                    self._write({"type": "cask.response", "v": 1, "id": msg.get("id"), "exit_code": 1, "reply": f"Bad request: {exc}"})
-                    return
-
-                task = self.server.pool.submit(req)
-                task.done_event.wait(timeout=req.timeout_s + 5.0)
-                result = task.result
-                if not result:
-                    self._write({"type": "cask.response", "v": 1, "id": req.client_id, "exit_code": 2, "reply": ""})
-                    return
-
-                self._write(
-                    {
-                        "type": "cask.response",
-                        "v": 1,
-                        "id": req.client_id,
-                        "req_id": result.req_id,
-                        "exit_code": result.exit_code,
-                        "reply": result.reply,
-                        "meta": {
-                            "session_key": result.session_key,
-                            "log_path": result.log_path,
-                            "anchor_seen": result.anchor_seen,
-                            "done_seen": result.done_seen,
-                            "fallback_scan": result.fallback_scan,
-                            "anchor_ms": result.anchor_ms,
-                            "done_ms": result.done_ms,
-                        },
-                    }
+        def _handle_request(msg: dict) -> dict:
+            try:
+                req = CaskdRequest(
+                    client_id=str(msg.get("id") or ""),
+                    work_dir=str(msg.get("work_dir") or ""),
+                    timeout_s=float(msg.get("timeout_s") or 300.0),
+                    quiet=bool(msg.get("quiet") or False),
+                    message=str(msg.get("message") or ""),
+                    output_path=str(msg.get("output_path")) if msg.get("output_path") else None,
                 )
+            except Exception as exc:
+                return {"type": "cask.response", "v": 1, "id": msg.get("id"), "exit_code": 1, "reply": f"Bad request: {exc}"}
 
-            def _write(self, obj: dict) -> None:
-                try:
-                    data = (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
-                    self.wfile.write(data)
-                    self.wfile.flush()
-                    try:
-                        with self.server.activity_lock:
-                            self.server.last_activity = time.time()
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
+            task = self.pool.submit(req)
+            task.done_event.wait(timeout=req.timeout_s + 5.0)
+            result = task.result
+            if not result:
+                return {"type": "cask.response", "v": 1, "id": req.client_id, "exit_code": 2, "reply": ""}
 
-            def finish(self) -> None:
-                try:
-                    super().finish()
-                finally:
-                    try:
-                        with self.server.activity_lock:
-                            if self.server.active_requests > 0:
-                                self.server.active_requests -= 1
-                            self.server.last_activity = time.time()
-                    except Exception:
-                        pass
+            return {
+                "type": "cask.response",
+                "v": 1,
+                "id": req.client_id,
+                "req_id": result.req_id,
+                "exit_code": result.exit_code,
+                "reply": result.reply,
+                "meta": {
+                    "session_key": result.session_key,
+                    "log_path": result.log_path,
+                    "anchor_seen": result.anchor_seen,
+                    "done_seen": result.done_seen,
+                    "fallback_scan": result.fallback_scan,
+                    "anchor_ms": result.anchor_ms,
+                    "done_ms": result.done_ms,
+                },
+            }
 
-        class Server(socketserver.ThreadingTCPServer):
-            allow_reuse_address = True
-
-        with Server((self.host, self.port), Handler) as httpd:
-            httpd.token = self.token
-            httpd.pool = self.pool
-            httpd.active_requests = 0
-            httpd.last_activity = time.time()
-            httpd.activity_lock = threading.Lock()
-            try:
-                httpd.idle_timeout_s = float(os.environ.get("CCB_CASKD_IDLE_TIMEOUT_S", "60") or "60")
-            except Exception:
-                httpd.idle_timeout_s = 60.0
-
-            def _idle_monitor() -> None:
-                timeout_s = float(getattr(httpd, "idle_timeout_s", 60.0) or 0.0)
-                if timeout_s <= 0:
-                    return
-                while True:
-                    time.sleep(0.5)
-                    try:
-                        with httpd.activity_lock:
-                            active = int(httpd.active_requests or 0)
-                            last = float(httpd.last_activity or time.time())
-                    except Exception:
-                        active = 0
-                        last = time.time()
-                    if active == 0 and (time.time() - last) >= timeout_s:
-                        _write_log(f"[INFO] caskd idle timeout ({int(timeout_s)}s) reached; shutting down")
-                        threading.Thread(target=httpd.shutdown, daemon=True).start()
-                        return
-
-            threading.Thread(target=_idle_monitor, daemon=True).start()
-
-            actual_host, actual_port = httpd.server_address
-            self._write_state(actual_host, int(actual_port))
-            _write_log(f"[INFO] caskd started pid={os.getpid()} addr={actual_host}:{actual_port}")
-            try:
-                httpd.serve_forever(poll_interval=0.2)
-            finally:
-                _write_log("[INFO] caskd stopped")
-        return 0
-
-    def _write_state(self, host: str, port: int) -> None:
-        payload = {
-            "pid": os.getpid(),
-            "host": host,
-            "connect_host": _normalize_connect_host(host),
-            "port": port,
-            "token": self.token,
-            "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "python": sys.executable,
-        }
-        self.state_file.parent.mkdir(parents=True, exist_ok=True)
-        ok, _err = safe_write_session(self.state_file, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
-        if ok:
-            try:
-                os.chmod(self.state_file, 0o600)
-            except Exception:
-                pass
+        server = AskDaemonServer(
+            spec=CASKD_SPEC,
+            host=self.host,
+            port=self.port,
+            token=self.token,
+            state_file=self.state_file,
+            request_handler=_handle_request,
+        )
+        return server.serve_forever()
 
 
 def read_state(state_file: Optional[Path] = None) -> Optional[dict]:
-    state_file = state_file or _state_file_path()
-    try:
-        raw = state_file.read_text(encoding="utf-8")
-        obj = json.loads(raw)
-        return obj if isinstance(obj, dict) else None
-    except Exception:
-        return None
+    state_file = state_file or state_file_path(CASKD_SPEC.state_file_name)
+    return askd_rpc.read_state(state_file)
 
 
 def ping_daemon(timeout_s: float = 0.5, state_file: Optional[Path] = None) -> bool:
-    st = read_state(state_file)
-    if not st:
-        return False
-    try:
-        host = st.get("connect_host") or st["host"]
-        port = int(st["port"])
-        token = st["token"]
-    except Exception:
-        return False
-    try:
-        with socket.create_connection((host, port), timeout=timeout_s) as sock:
-            req = {"type": "cask.ping", "v": 1, "id": "ping", "token": token}
-            sock.sendall((json.dumps(req) + "\n").encode("utf-8"))
-            buf = b""
-            deadline = time.time() + timeout_s
-            while b"\n" not in buf and time.time() < deadline:
-                chunk = sock.recv(1024)
-                if not chunk:
-                    break
-                buf += chunk
-            if b"\n" not in buf:
-                return False
-            line = buf.split(b"\n", 1)[0].decode("utf-8", errors="replace")
-            resp = json.loads(line)
-            return resp.get("type") in ("cask.pong", "cask.response") and int(resp.get("exit_code") or 0) == 0
-        return True
-    except Exception:
-        return False
+    state_file = state_file or state_file_path(CASKD_SPEC.state_file_name)
+    return askd_rpc.ping_daemon("cask", timeout_s, state_file)
 
 
 def shutdown_daemon(timeout_s: float = 1.0, state_file: Optional[Path] = None) -> bool:
-    st = read_state(state_file)
-    if not st:
-        return False
-    try:
-        host = st.get("connect_host") or st["host"]
-        port = int(st["port"])
-        token = st["token"]
-    except Exception:
-        return False
-    try:
-        with socket.create_connection((host, port), timeout=timeout_s) as sock:
-            req = {"type": "cask.shutdown", "v": 1, "id": "shutdown", "token": token}
-            sock.sendall((json.dumps(req) + "\n").encode("utf-8"))
-            _ = sock.recv(1024)
-        return True
-    except Exception:
-        return False
+    state_file = state_file or state_file_path(CASKD_SPEC.state_file_name)
+    return askd_rpc.shutdown_daemon("cask", timeout_s, state_file)

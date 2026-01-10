@@ -3,9 +3,6 @@ from __future__ import annotations
 import json
 import os
 import queue
-import socket
-import socketserver
-import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -16,63 +13,22 @@ from oaskd_protocol import OaskdRequest, OaskdResult, is_done_text, make_req_id,
 from oaskd_session import compute_session_key, load_project_session
 from opencode_comm import OpenCodeLogReader
 from process_lock import ProviderLock
-from session_utils import safe_write_session
 from terminal import get_backend_for_session
+from askd_runtime import state_file_path, log_path, write_log, random_token
+from env_utils import env_bool
+import askd_rpc
+from askd_server import AskDaemonServer
+from providers import OASKD_SPEC
 
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
-def _run_dir() -> Path:
-    return Path.home() / ".ccb" / "run"
-
-
-def _state_file_path() -> Path:
-    return _run_dir() / "oaskd.json"
-
-
-def _log_path() -> Path:
-    return _run_dir() / "oaskd.log"
-
-
-def _write_log(line: str) -> None:
-    try:
-        _run_dir().mkdir(parents=True, exist_ok=True)
-        with _log_path().open("a", encoding="utf-8") as handle:
-            handle.write(line.rstrip() + "\n")
-    except Exception:
-        pass
-
-
-def _random_token() -> str:
-    return os.urandom(16).hex()
-
-def _env_bool(name: str, default: bool) -> bool:
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        return default
-    v = raw.strip().lower()
-    if v in ("0", "false", "no", "off"):
-        return False
-    if v in ("1", "true", "yes", "on"):
-        return True
-    return default
-
-
 def _cancel_detection_enabled(default: bool = False) -> bool:
     # Disabled by default for stability: OpenCode cancellation is session-scoped and hard to
     # attribute to a specific queued task without false positives.
-    return _env_bool("CCB_OASKD_CANCEL_DETECT", default)
-
-
-def _normalize_connect_host(host: str) -> str:
-    host = (host or "").strip()
-    if not host or host in ("0.0.0.0",):
-        return "127.0.0.1"
-    if host in ("::", "[::]"):
-        return "::1"
-    return host
+    return env_bool("CCB_OASKD_CANCEL_DETECT", default)
 
 
 def _tail_state_for_session(log_reader: OpenCodeLogReader) -> dict:
@@ -111,7 +67,7 @@ class _SessionWorker(threading.Thread):
             try:
                 task.result = self._handle_task(task)
             except Exception as exc:
-                _write_log(f"[ERROR] session={self.session_key} req_id={task.req_id} {exc}")
+                write_log(log_path(OASKD_SPEC.log_file_name), f"[ERROR] session={self.session_key} req_id={task.req_id} {exc}")
                 task.result = OaskdResult(
                     exit_code=1,
                     reply=str(exc),
@@ -127,7 +83,7 @@ class _SessionWorker(threading.Thread):
         started_ms = _now_ms()
         req = task.request
         work_dir = Path(req.work_dir)
-        _write_log(f"[INFO] start session={self.session_key} req_id={task.req_id} work_dir={req.work_dir}")
+        write_log(log_path(OASKD_SPEC.log_file_name), f"[INFO] start session={self.session_key} req_id={task.req_id} work_dir={req.work_dir}")
 
         # Cross-process serialization: if another client falls back to direct mode, it uses the same
         # per-session ProviderLock ("opencode", cwd=f"session:{session_key}"). Without this, daemon and
@@ -208,7 +164,7 @@ class _SessionWorker(threading.Thread):
                     except Exception:
                         alive = False
                     if not alive:
-                        _write_log(f"[ERROR] Pane {pane_id} died during request session={self.session_key} req_id={task.req_id}")
+                        write_log(log_path(OASKD_SPEC.log_file_name), f"[ERROR] Pane {pane_id} died during request session={self.session_key} req_id={task.req_id}")
                         return OaskdResult(
                             exit_code=1,
                             reply="❌ OpenCode pane died during request",
@@ -228,7 +184,7 @@ class _SessionWorker(threading.Thread):
                             cancel_cursor, session_id=session_id, since_epoch_s=cancel_since_s
                         )
                         if cancelled_log:
-                            _write_log(
+                            write_log(log_path(OASKD_SPEC.log_file_name), 
                                 f"[WARN] OpenCode request cancelled (log) - skipping task session={self.session_key} req_id={task.req_id}"
                             )
                             return OaskdResult(
@@ -251,7 +207,7 @@ class _SessionWorker(threading.Thread):
                     try:
                         cancelled, _new_state = log_reader.detect_cancelled_since(state, req_id=task.req_id)
                         if cancelled:
-                            _write_log(
+                            write_log(log_path(OASKD_SPEC.log_file_name), 
                                 f"[WARN] OpenCode request cancelled - skipping task session={self.session_key} req_id={task.req_id}"
                             )
                             return OaskdResult(
@@ -313,7 +269,7 @@ class _WorkerPool:
             qsize = int(worker._q.qsize())
         except Exception:
             qsize = -1
-        _write_log(f"[INFO] enqueued session={session_key} req_id={req_id} qsize={qsize} client_id={request.client_id}")
+        write_log(log_path(OASKD_SPEC.log_file_name), f"[INFO] enqueued session={session_key} req_id={req_id} qsize={qsize} client_id={request.client_id}")
         return task
 
 
@@ -321,161 +277,59 @@ class OaskdServer:
     def __init__(self, host: str = "127.0.0.1", port: int = 0, *, state_file: Optional[Path] = None):
         self.host = host
         self.port = port
-        self.state_file = state_file or _state_file_path()
-        self.token = _random_token()
+        self.state_file = state_file or state_file_path(OASKD_SPEC.state_file_name)
+        self.token = random_token()
         self.pool = _WorkerPool()
 
     def serve_forever(self) -> int:
-        _run_dir().mkdir(parents=True, exist_ok=True)
-
-        # Single-instance lock (global, not per-cwd)
-        lock = ProviderLock("oaskd", cwd="global", timeout=0.1)
-        if not lock.try_acquire():
-            return 2
-
-        class Handler(socketserver.StreamRequestHandler):
-            def handle(self) -> None:
-                with self.server.activity_lock:
-                    self.server.active_requests += 1
-                    self.server.last_activity = time.time()
-
-                try:
-                    line = self.rfile.readline()
-                    if not line:
-                        return
-                    msg = json.loads(line.decode("utf-8", errors="replace"))
-                except Exception:
-                    return
-
-                if msg.get("token") != self.server.token:
-                    self._write({"type": "oask.response", "v": 1, "id": msg.get("id"), "exit_code": 1, "reply": "Unauthorized"})
-                    return
-
-                if msg.get("type") == "oask.ping":
-                    self._write({"type": "oask.pong", "v": 1, "id": msg.get("id"), "exit_code": 0, "reply": "OK"})
-                    return
-
-                if msg.get("type") == "oask.shutdown":
-                    self._write({"type": "oask.response", "v": 1, "id": msg.get("id"), "exit_code": 0, "reply": "OK"})
-                    threading.Thread(target=self.server.shutdown, daemon=True).start()
-                    return
-
-                if msg.get("type") != "oask.request":
-                    self._write({"type": "oask.response", "v": 1, "id": msg.get("id"), "exit_code": 1, "reply": "Invalid request"})
-                    return
-
-                try:
-                    req = OaskdRequest(
-                        client_id=str(msg.get("id") or ""),
-                        work_dir=str(msg.get("work_dir") or ""),
-                        timeout_s=float(msg.get("timeout_s") or 300.0),
-                        quiet=bool(msg.get("quiet") or False),
-                        message=str(msg.get("message") or ""),
-                        output_path=str(msg.get("output_path")) if msg.get("output_path") else None,
-                    )
-                except Exception as exc:
-                    self._write({"type": "oask.response", "v": 1, "id": msg.get("id"), "exit_code": 1, "reply": f"Bad request: {exc}"})
-                    return
-
-                _write_log(
-                    f"[INFO] recv client_id={req.client_id} work_dir={req.work_dir} timeout_s={int(req.timeout_s)} msg_len={len(req.message)}"
-                )
-                task = self.server.pool.submit(req)
-                task.done_event.wait(timeout=req.timeout_s + 5.0)
-                result = task.result
-                if not result:
-                    self._write({"type": "oask.response", "v": 1, "id": req.client_id, "exit_code": 2, "reply": ""})
-                    return
-
-                self._write(
-                    {
-                        "type": "oask.response",
-                        "v": 1,
-                        "id": req.client_id,
-                        "req_id": result.req_id,
-                        "exit_code": result.exit_code,
-                        "reply": result.reply,
-                        "meta": {
-                            "session_key": result.session_key,
-                            "done_seen": result.done_seen,
-                            "done_ms": result.done_ms,
-                        },
-                    }
-                )
-
-            def _write(self, obj: dict) -> None:
-                try:
-                    data = (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
-                    self.wfile.write(data)
-                    self.wfile.flush()
-                    try:
-                        with self.server.activity_lock:
-                            self.server.last_activity = time.time()
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
-
-            def finish(self) -> None:
-                try:
-                    super().finish()
-                finally:
-                    try:
-                        with self.server.activity_lock:
-                            if self.server.active_requests > 0:
-                                self.server.active_requests -= 1
-                            self.server.last_activity = time.time()
-                    except Exception:
-                        pass
-
-        class Server(socketserver.ThreadingTCPServer):
-            allow_reuse_address = True
-            request_queue_size = 128
-
-        with Server((self.host, self.port), Handler) as httpd:
-            httpd.token = self.token
-            httpd.pool = self.pool
-            httpd.active_requests = 0
-            httpd.last_activity = time.time()
-            httpd.activity_lock = threading.Lock()
+        def _handle_request(msg: dict) -> dict:
             try:
-                httpd.idle_timeout_s = float(os.environ.get("CCB_OASKD_IDLE_TIMEOUT_S", "60") or "60")
-            except Exception:
-                httpd.idle_timeout_s = 60.0
+                req = OaskdRequest(
+                    client_id=str(msg.get("id") or ""),
+                    work_dir=str(msg.get("work_dir") or ""),
+                    timeout_s=float(msg.get("timeout_s") or 300.0),
+                    quiet=bool(msg.get("quiet") or False),
+                    message=str(msg.get("message") or ""),
+                    output_path=str(msg.get("output_path")) if msg.get("output_path") else None,
+                )
+            except Exception as exc:
+                return {"type": "oask.response", "v": 1, "id": msg.get("id"), "exit_code": 1, "reply": f"Bad request: {exc}"}
 
-            def _idle_monitor() -> None:
-                timeout_s = float(getattr(httpd, "idle_timeout_s", 60.0) or 0.0)
-                if timeout_s <= 0:
-                    return
-                while True:
-                    time.sleep(0.5)
-                    try:
-                        with httpd.activity_lock:
-                            active = int(httpd.active_requests or 0)
-                            last = float(httpd.last_activity or time.time())
-                    except Exception:
-                        active = 0
-                        last = time.time()
-                    if active == 0 and (time.time() - last) >= timeout_s:
-                        _write_log(f"[INFO] oaskd idle timeout ({int(timeout_s)}s) reached; shutting down")
-                        threading.Thread(target=httpd.shutdown, daemon=True).start()
-                        return
+            write_log(
+                log_path(OASKD_SPEC.log_file_name),
+                f"[INFO] recv client_id={req.client_id} work_dir={req.work_dir} timeout_s={int(req.timeout_s)} msg_len={len(req.message)}",
+            )
+            task = self.pool.submit(req)
+            task.done_event.wait(timeout=req.timeout_s + 5.0)
+            result = task.result
+            if not result:
+                return {"type": "oask.response", "v": 1, "id": req.client_id, "exit_code": 2, "reply": ""}
 
-            threading.Thread(target=_idle_monitor, daemon=True).start()
+            return {
+                "type": "oask.response",
+                "v": 1,
+                "id": req.client_id,
+                "req_id": result.req_id,
+                "exit_code": result.exit_code,
+                "reply": result.reply,
+                "meta": {
+                    "session_key": result.session_key,
+                    "done_seen": result.done_seen,
+                    "done_ms": result.done_ms,
+                },
+            }
 
-            actual_host, actual_port = httpd.server_address
-            self._write_state(actual_host, int(actual_port))
-            _write_log(f"[INFO] oaskd started pid={os.getpid()} addr={actual_host}:{actual_port}")
-            try:
-                httpd.serve_forever(poll_interval=0.2)
-            finally:
-                _write_log("[INFO] oaskd stopped")
-                self._cleanup_state_file()
-                try:
-                    lock.release()
-                except Exception:
-                    pass
-        return 0
+        server = AskDaemonServer(
+            spec=OASKD_SPEC,
+            host=self.host,
+            port=self.port,
+            token=self.token,
+            state_file=self.state_file,
+            request_handler=_handle_request,
+            request_queue_size=128,
+            on_stop=self._cleanup_state_file,
+        )
+        return server.serve_forever()
 
     def _cleanup_state_file(self) -> None:
         try:
@@ -494,80 +348,16 @@ class OaskdServer:
         except Exception:
             pass
 
-    def _write_state(self, host: str, port: int) -> None:
-        payload = {
-            "pid": os.getpid(),
-            "host": host,
-            "connect_host": _normalize_connect_host(host),
-            "port": port,
-            "token": self.token,
-            "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "python": sys.executable,
-        }
-        self.state_file.parent.mkdir(parents=True, exist_ok=True)
-        ok, _err = safe_write_session(self.state_file, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
-        if ok:
-            try:
-                os.chmod(self.state_file, 0o600)
-            except Exception:
-                pass
-
-
 def read_state(state_file: Optional[Path] = None) -> Optional[dict]:
-    state_file = state_file or _state_file_path()
-    try:
-        raw = state_file.read_text(encoding="utf-8")
-        obj = json.loads(raw)
-        return obj if isinstance(obj, dict) else None
-    except Exception:
-        return None
+    state_file = state_file or state_file_path(OASKD_SPEC.state_file_name)
+    return askd_rpc.read_state(state_file)
 
 
 def ping_daemon(timeout_s: float = 0.5, state_file: Optional[Path] = None) -> bool:
-    st = read_state(state_file)
-    if not st:
-        return False
-    try:
-        host = st.get("connect_host") or st["host"]
-        port = int(st["port"])
-        token = st["token"]
-    except Exception:
-        return False
-    try:
-        with socket.create_connection((host, port), timeout=timeout_s) as sock:
-            req = {"type": "oask.ping", "v": 1, "id": "ping", "token": token}
-            sock.sendall((json.dumps(req) + "\n").encode("utf-8"))
-            buf = b""
-            deadline = time.time() + timeout_s
-            while b"\n" not in buf and time.time() < deadline:
-                chunk = sock.recv(1024)
-                if not chunk:
-                    break
-                buf += chunk
-            if b"\n" not in buf:
-                return False
-            line = buf.split(b"\n", 1)[0].decode("utf-8", errors="replace")
-            resp = json.loads(line)
-            return resp.get("type") in ("oask.pong", "oask.response") and int(resp.get("exit_code") or 0) == 0
-    except Exception:
-        return False
+    state_file = state_file or state_file_path(OASKD_SPEC.state_file_name)
+    return askd_rpc.ping_daemon("oask", timeout_s, state_file)
 
 
 def shutdown_daemon(timeout_s: float = 1.0, state_file: Optional[Path] = None) -> bool:
-    st = read_state(state_file)
-    if not st:
-        return False
-    try:
-        host = st.get("connect_host") or st["host"]
-        port = int(st["port"])
-        token = st["token"]
-    except Exception:
-        return False
-    try:
-        with socket.create_connection((host, port), timeout=timeout_s) as sock:
-            req = {"type": "oask.shutdown", "v": 1, "id": "shutdown", "token": token}
-            sock.sendall((json.dumps(req) + "\n").encode("utf-8"))
-            _ = sock.recv(1024)
-        return True
-    except Exception:
-        return False
+    state_file = state_file or state_file_path(OASKD_SPEC.state_file_name)
+    return askd_rpc.shutdown_daemon("oask", timeout_s, state_file)

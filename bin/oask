@@ -24,25 +24,15 @@ from compat import setup_windows_encoding
 
 setup_windows_encoding()
 from process_lock import ProviderLock
-
-def _env_bool(name: str, default: bool) -> bool:
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        return default
-    v = raw.strip().lower()
-    if v in ("0", "false", "no", "off"):
-        return False
-    if v in ("1", "true", "yes", "on"):
-        return True
-    return default
+from env_utils import env_bool
 
 
 def _oaskd_autostart_enabled(default: bool = True) -> bool:
     # Prefer the new name; keep CCB_AUTO_OASKD for backwards compatibility.
     if "CCB_OASKD_AUTOSTART" in os.environ:
-        return _env_bool("CCB_OASKD_AUTOSTART", default)
+        return env_bool("CCB_OASKD_AUTOSTART", default)
     if "CCB_AUTO_OASKD" in os.environ:
-        return _env_bool("CCB_AUTO_OASKD", default)
+        return env_bool("CCB_AUTO_OASKD", default)
     return default
 
 
@@ -68,7 +58,7 @@ def _find_project_session_file(work_dir: Path) -> Optional[Path]:
 
 
 def _try_daemon_request(work_dir: Path, message: str, timeout: float, quiet: bool) -> Optional[tuple[str, int]]:
-    if not _env_bool("CCB_OASKD", True):
+    if not env_bool("CCB_OASKD", True):
         return None
 
     if not _find_project_session_file(work_dir):
@@ -137,7 +127,7 @@ def _daemon_request_with_retries(work_dir: Path, message: str, timeout: float, q
         return result
 
     # If daemon mode is disabled or no session, don't spin.
-    if not _env_bool("CCB_OASKD", True):
+    if not env_bool("CCB_OASKD", True):
         return None
     if not _find_project_session_file(work_dir):
         return None
@@ -173,7 +163,7 @@ def _daemon_request_with_retries(work_dir: Path, message: str, timeout: float, q
 
 
 def _maybe_start_oaskd() -> bool:
-    if not _env_bool("CCB_OASKD", True):
+    if not env_bool("CCB_OASKD", True):
         return False
     if not _oaskd_autostart_enabled(True):
         return False
@@ -256,7 +246,7 @@ def _wait_for_done_reply(log_reader, state: dict, timeout: float, req_id: str, q
 
     deadline = time.time() + timeout
     chunks: list[str] = []
-    cancel_enabled = _env_bool("CCB_OASKD_CANCEL_DETECT", False)
+    cancel_enabled = env_bool("CCB_OASKD_CANCEL_DETECT", False)
     session_id = state.get("session_id") if cancel_enabled and isinstance(state.get("session_id"), str) else None
     cancel_cursor = log_reader.open_cancel_log_cursor() if cancel_enabled and session_id else None
     cancel_since_s = time.time() if cancel_enabled else 0.0

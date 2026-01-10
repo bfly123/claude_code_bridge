@@ -27,25 +27,15 @@ from cli_output import EXIT_ERROR, EXIT_NO_REPLY, EXIT_OK, atomic_write_text
 
 import time
 
-
-def _env_bool(name: str, default: bool) -> bool:
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        return default
-    v = raw.strip().lower()
-    if v in ("0", "false", "no", "off"):
-        return False
-    if v in ("1", "true", "yes", "on"):
-        return True
-    return default
+from env_utils import env_bool
 
 
 def _gaskd_autostart_enabled(default: bool = True) -> bool:
     # Prefer the new name; keep CCB_AUTO_GASKD for backwards compatibility.
     if "CCB_GASKD_AUTOSTART" in os.environ:
-        return _env_bool("CCB_GASKD_AUTOSTART", default)
+        return env_bool("CCB_GASKD_AUTOSTART", default)
     if "CCB_AUTO_GASKD" in os.environ:
-        return _env_bool("CCB_AUTO_GASKD", default)
+        return env_bool("CCB_AUTO_GASKD", default)
     return default
 
 
@@ -71,7 +61,7 @@ def _find_project_session_file(work_dir: Path) -> Path | None:
 
 
 def _try_daemon_request(work_dir: Path, message: str, timeout: float, quiet: bool) -> tuple[str, int] | None:
-    if not _env_bool("CCB_GASKD", True):
+    if not env_bool("CCB_GASKD", True):
         return None
 
     if not _find_project_session_file(work_dir):
@@ -128,7 +118,7 @@ def _try_daemon_request(work_dir: Path, message: str, timeout: float, quiet: boo
 
 
 def _maybe_start_gaskd() -> bool:
-    if not _env_bool("CCB_GASKD", True):
+    if not env_bool("CCB_GASKD", True):
         return False
     if not _gaskd_autostart_enabled(True):
         return False

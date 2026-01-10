@@ -25,6 +25,7 @@ from process_lock import ProviderLock
 
 COMPLETION_MARKER = (os.environ.get("CCB_EXECUTION_COMPLETE_MARKER") or "EXECUTION_COMPLETE").strip() or "EXECUTION_COMPLETE"
 
+from env_utils import env_bool
 from caskd_protocol import REQ_ID_PREFIX, make_req_id, strip_done_text, wrap_codex_prompt
 from caskd_daemon import read_state
 
@@ -160,24 +161,12 @@ def _with_completion_marker_request(message: str) -> str:
     )
 
 
-def _env_bool(name: str, default: bool) -> bool:
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        return default
-    v = raw.strip().lower()
-    if v in ("0", "false", "no", "off"):
-        return False
-    if v in ("1", "true", "yes", "on"):
-        return True
-    return default
-
-
 def _caskd_autostart_enabled(default: bool = True) -> bool:
     # Prefer the new name; keep CCB_AUTO_CASKD for backwards compatibility.
     if "CCB_CASKD_AUTOSTART" in os.environ:
-        return _env_bool("CCB_CASKD_AUTOSTART", default)
+        return env_bool("CCB_CASKD_AUTOSTART", default)
     if "CCB_AUTO_CASKD" in os.environ:
-        return _env_bool("CCB_AUTO_CASKD", default)
+        return env_bool("CCB_AUTO_CASKD", default)
     return default
 
 
@@ -219,7 +208,7 @@ def _read_project_terminal(work_dir: Path) -> Optional[str]:
 
 
 def _try_daemon_request(work_dir: Path, message: str, timeout: float, quiet: bool) -> Optional[tuple[str, int]]:
-    if not _env_bool("CCB_CASKD", True):
+    if not env_bool("CCB_CASKD", True):
         return None
     terminal = _read_project_terminal(work_dir)
     if terminal not in ("wezterm", "iterm2"):
@@ -272,7 +261,7 @@ def _try_daemon_request(work_dir: Path, message: str, timeout: float, quiet: boo
 
 
 def _maybe_start_caskd() -> bool:
-    if not _env_bool("CCB_CASKD", True):
+    if not env_bool("CCB_CASKD", True):
         return False
     if not _caskd_autostart_enabled(True):
         return False

@@ -3,9 +3,6 @@ from __future__ import annotations
 import json
 import os
 import queue
-import socket
-import socketserver
-import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -22,47 +19,19 @@ from gaskd_protocol import (
 )
 from gaskd_session import compute_session_key, load_project_session
 from gemini_comm import GeminiLogReader
-from process_lock import ProviderLock
-from session_utils import safe_write_session
 from terminal import get_backend_for_session
+from askd_runtime import state_file_path, log_path, write_log, random_token
+import askd_rpc
+from askd_server import AskDaemonServer
+from providers import GASKD_SPEC
 
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
-def _run_dir() -> Path:
-    return Path.home() / ".ccb" / "run"
-
-
-def _state_file_path() -> Path:
-    return _run_dir() / "gaskd.json"
-
-
-def _log_path() -> Path:
-    return _run_dir() / "gaskd.log"
-
-
 def _write_log(line: str) -> None:
-    try:
-        _run_dir().mkdir(parents=True, exist_ok=True)
-        with _log_path().open("a", encoding="utf-8") as handle:
-            handle.write(line.rstrip() + "\n")
-    except Exception:
-        pass
-
-
-def _random_token() -> str:
-    return os.urandom(16).hex()
-
-
-def _normalize_connect_host(host: str) -> str:
-    host = (host or "").strip()
-    if not host or host in ("0.0.0.0",):
-        return "127.0.0.1"
-    if host in ("::", "[::]"):
-        return "::1"
-    return host
+    write_log(log_path(GASKD_SPEC.log_file_name), line)
 
 
 def _is_cancel_text(text: str) -> bool:
@@ -331,227 +300,65 @@ class GaskdServer:
     def __init__(self, host: str = "127.0.0.1", port: int = 0, *, state_file: Optional[Path] = None):
         self.host = host
         self.port = port
-        self.state_file = state_file or _state_file_path()
-        self.token = _random_token()
+        self.state_file = state_file or state_file_path(GASKD_SPEC.state_file_name)
+        self.token = random_token()
         self.pool = _WorkerPool()
 
     def serve_forever(self) -> int:
-        _run_dir().mkdir(parents=True, exist_ok=True)
-
-        lock = ProviderLock("gaskd", cwd="global", timeout=0.1)
-        if not lock.try_acquire():
-            return 2
-
-        class Handler(socketserver.StreamRequestHandler):
-            def handle(self) -> None:
-                with self.server.activity_lock:
-                    self.server.active_requests += 1
-                    self.server.last_activity = time.time()
-                try:
-                    line = self.rfile.readline()
-                    if not line:
-                        return
-                    msg = json.loads(line.decode("utf-8", errors="replace"))
-                except Exception:
-                    return
-
-                if msg.get("token") != self.server.token:
-                    self._write({"type": "gask.response", "v": 1, "id": msg.get("id"), "exit_code": 1, "reply": "Unauthorized"})
-                    return
-
-                if msg.get("type") == "gask.ping":
-                    self._write({"type": "gask.pong", "v": 1, "id": msg.get("id"), "exit_code": 0, "reply": "OK"})
-                    return
-
-                if msg.get("type") == "gask.shutdown":
-                    self._write({"type": "gask.response", "v": 1, "id": msg.get("id"), "exit_code": 0, "reply": "OK"})
-                    threading.Thread(target=self.server.shutdown, daemon=True).start()
-                    return
-
-                if msg.get("type") != "gask.request":
-                    self._write({"type": "gask.response", "v": 1, "id": msg.get("id"), "exit_code": 1, "reply": "Invalid request"})
-                    return
-
-                try:
-                    req = GaskdRequest(
-                        client_id=str(msg.get("id") or ""),
-                        work_dir=str(msg.get("work_dir") or ""),
-                        timeout_s=float(msg.get("timeout_s") or 300.0),
-                        quiet=bool(msg.get("quiet") or False),
-                        message=str(msg.get("message") or ""),
-                        output_path=str(msg.get("output_path")) if msg.get("output_path") else None,
-                    )
-                except Exception as exc:
-                    self._write({"type": "gask.response", "v": 1, "id": msg.get("id"), "exit_code": 1, "reply": f"Bad request: {exc}"})
-                    return
-
-                task = self.server.pool.submit(req)
-                task.done_event.wait(timeout=req.timeout_s + 5.0)
-                result = task.result
-                if not result:
-                    self._write({"type": "gask.response", "v": 1, "id": req.client_id, "exit_code": 2, "reply": ""})
-                    return
-
-                self._write(
-                    {
-                        "type": "gask.response",
-                        "v": 1,
-                        "id": req.client_id,
-                        "req_id": result.req_id,
-                        "exit_code": result.exit_code,
-                        "reply": result.reply,
-                        "meta": {
-                            "session_key": result.session_key,
-                            "done_seen": result.done_seen,
-                            "done_ms": result.done_ms,
-                        },
-                    }
+        def _handle_request(msg: dict) -> dict:
+            try:
+                req = GaskdRequest(
+                    client_id=str(msg.get("id") or ""),
+                    work_dir=str(msg.get("work_dir") or ""),
+                    timeout_s=float(msg.get("timeout_s") or 300.0),
+                    quiet=bool(msg.get("quiet") or False),
+                    message=str(msg.get("message") or ""),
+                    output_path=str(msg.get("output_path")) if msg.get("output_path") else None,
                 )
+            except Exception as exc:
+                return {"type": "gask.response", "v": 1, "id": msg.get("id"), "exit_code": 1, "reply": f"Bad request: {exc}"}
 
-            def _write(self, obj: dict) -> None:
-                try:
-                    data = (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
-                    self.wfile.write(data)
-                    self.wfile.flush()
-                    try:
-                        with self.server.activity_lock:
-                            self.server.last_activity = time.time()
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
+            task = self.pool.submit(req)
+            task.done_event.wait(timeout=req.timeout_s + 5.0)
+            result = task.result
+            if not result:
+                return {"type": "gask.response", "v": 1, "id": req.client_id, "exit_code": 2, "reply": ""}
 
-            def finish(self) -> None:
-                try:
-                    super().finish()
-                finally:
-                    try:
-                        with self.server.activity_lock:
-                            if self.server.active_requests > 0:
-                                self.server.active_requests -= 1
-                            self.server.last_activity = time.time()
-                    except Exception:
-                        pass
+            return {
+                "type": "gask.response",
+                "v": 1,
+                "id": req.client_id,
+                "req_id": result.req_id,
+                "exit_code": result.exit_code,
+                "reply": result.reply,
+                "meta": {
+                    "session_key": result.session_key,
+                    "done_seen": result.done_seen,
+                    "done_ms": result.done_ms,
+                },
+            }
 
-        class Server(socketserver.ThreadingTCPServer):
-            allow_reuse_address = True
-
-        with Server((self.host, self.port), Handler) as httpd:
-            httpd.token = self.token
-            httpd.pool = self.pool
-            httpd.active_requests = 0
-            httpd.last_activity = time.time()
-            httpd.activity_lock = threading.Lock()
-            try:
-                httpd.idle_timeout_s = float(os.environ.get("CCB_GASKD_IDLE_TIMEOUT_S", "60") or "60")
-            except Exception:
-                httpd.idle_timeout_s = 60.0
-
-            def _idle_monitor() -> None:
-                # Shutdown once idle for idle_timeout_s with no active client connections.
-                # Disable by setting CCB_GASKD_IDLE_TIMEOUT_S=0.
-                timeout_s = float(getattr(httpd, "idle_timeout_s", 60.0) or 0.0)
-                if timeout_s <= 0:
-                    return
-                while True:
-                    time.sleep(0.5)
-                    try:
-                        with httpd.activity_lock:
-                            active = int(httpd.active_requests or 0)
-                            last = float(httpd.last_activity or time.time())
-                    except Exception:
-                        active = 0
-                        last = time.time()
-                    if active == 0 and (time.time() - last) >= timeout_s:
-                        _write_log(f"[INFO] gaskd idle timeout ({int(timeout_s)}s) reached; shutting down")
-                        threading.Thread(target=httpd.shutdown, daemon=True).start()
-                        return
-
-            threading.Thread(target=_idle_monitor, daemon=True).start()
-
-            actual_host, actual_port = httpd.server_address
-            self._write_state(actual_host, int(actual_port))
-            _write_log(f"[INFO] gaskd started pid={os.getpid()} addr={actual_host}:{actual_port}")
-            try:
-                httpd.serve_forever(poll_interval=0.2)
-            finally:
-                _write_log("[INFO] gaskd stopped")
-        return 0
-
-    def _write_state(self, host: str, port: int) -> None:
-        payload = {
-            "pid": os.getpid(),
-            "host": host,
-            "connect_host": _normalize_connect_host(host),
-            "port": port,
-            "token": self.token,
-            "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "python": sys.executable,
-        }
-        self.state_file.parent.mkdir(parents=True, exist_ok=True)
-        ok, _err = safe_write_session(self.state_file, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
-        if ok:
-            try:
-                os.chmod(self.state_file, 0o600)
-            except Exception:
-                pass
+        server = AskDaemonServer(
+            spec=GASKD_SPEC,
+            host=self.host,
+            port=self.port,
+            token=self.token,
+            state_file=self.state_file,
+            request_handler=_handle_request,
+        )
+        return server.serve_forever()
 
 
 def read_state(state_file: Optional[Path] = None) -> Optional[dict]:
-    state_file = state_file or _state_file_path()
-    try:
-        raw = state_file.read_text(encoding="utf-8")
-        obj = json.loads(raw)
-        return obj if isinstance(obj, dict) else None
-    except Exception:
-        return None
+    state_file = state_file or state_file_path(GASKD_SPEC.state_file_name)
+    return askd_rpc.read_state(state_file)
 
 
 def ping_daemon(timeout_s: float = 0.5, state_file: Optional[Path] = None) -> bool:
-    st = read_state(state_file)
-    if not st:
-        return False
-    try:
-        host = st.get("connect_host") or st["host"]
-        port = int(st["port"])
-        token = st["token"]
-    except Exception:
-        return False
-    try:
-        with socket.create_connection((host, port), timeout=timeout_s) as sock:
-            req = {"type": "gask.ping", "v": 1, "id": "ping", "token": token}
-            sock.sendall((json.dumps(req) + "\n").encode("utf-8"))
-            buf = b""
-            deadline = time.time() + timeout_s
-            while b"\n" not in buf and time.time() < deadline:
-                chunk = sock.recv(1024)
-                if not chunk:
-                    break
-                buf += chunk
-            if b"\n" not in buf:
-                return False
-            line = buf.split(b"\n", 1)[0].decode("utf-8", errors="replace")
-            resp = json.loads(line)
-            return resp.get("type") in ("gask.pong", "gask.response") and int(resp.get("exit_code") or 0) == 0
-    except Exception:
-        return False
+    state_file = state_file or state_file_path(GASKD_SPEC.state_file_name)
+    return askd_rpc.ping_daemon("gask", timeout_s, state_file)
 
 
 def shutdown_daemon(timeout_s: float = 1.0, state_file: Optional[Path] = None) -> bool:
-    st = read_state(state_file)
-    if not st:
-        return False
-    try:
-        host = st.get("connect_host") or st["host"]
-        port = int(st["port"])
-        token = st["token"]
-    except Exception:
-        return False
-    try:
-        with socket.create_connection((host, port), timeout=timeout_s) as sock:
-            req = {"type": "gask.shutdown", "v": 1, "id": "shutdown", "token": token}
-            sock.sendall((json.dumps(req) + "\n").encode("utf-8"))
-            _ = sock.recv(1024)
-        return True
-    except Exception:
-        return False
+    state_file = state_file or state_file_path(GASKD_SPEC.state_file_name)
+    return askd_rpc.shutdown_daemon("gask", timeout_s, state_file)
