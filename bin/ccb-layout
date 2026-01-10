@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """
 ccb-layout - Start a 2x2 four-AI layout (Claude + Codex + Gemini + OpenCode).
 
@@ -43,4 +43,3 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv))
-

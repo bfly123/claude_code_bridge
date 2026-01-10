@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Codex dual-window bridge
 Sends commands to Codex, supports tmux and WezTerm.

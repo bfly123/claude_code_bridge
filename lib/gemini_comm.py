@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Gemini communication module
 Supports tmux and WezTerm terminals, reads replies from ~/.gemini/tmp/<hash>/chats/session-*.json

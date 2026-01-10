@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """
 cask - Send message to Codex and wait for reply (sync).
 
@@ -53,6 +53,16 @@ def _get_executor_from_roles() -> Optional[str]:
         Path(".autoflow/roles.json"),
         Path.home() / ".config" / "cca" / "roles.json",
     ]
+    xdg_config = (os.environ.get("XDG_CONFIG_HOME") or "").strip()
+    if xdg_config:
+        candidates.append(Path(xdg_config) / "cca" / "roles.json")
+    if os.name == "nt":
+        appdata = (os.environ.get("APPDATA") or "").strip()
+        if appdata:
+            candidates.append(Path(appdata) / "cca" / "roles.json")
+        localappdata = (os.environ.get("LOCALAPPDATA") or "").strip()
+        if localappdata:
+            candidates.append(Path(localappdata) / "cca" / "roles.json")
     for cfg_path in candidates:
         if cfg_path.exists():
             try:

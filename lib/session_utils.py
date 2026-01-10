@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 session_utils.py - Session file permission check utility
 """
@@ -45,23 +44,28 @@ def check_session_writable(session_file: Path) -> Tuple[bool, Optional[str], Opt
     if not session_file.is_file():
         return False, "Not a regular file", f"rm -f {session_file}"
 
-    # 5. Check file ownership
-    try:
-        file_stat = session_file.stat()
-        file_uid = file_stat.st_uid
-        current_uid = os.getuid()
+    # 5. Check file ownership (POSIX only)
+    if os.name != "nt" and hasattr(os, "getuid"):
+        try:
+            file_stat = session_file.stat()
+            file_uid = getattr(file_stat, "st_uid", None)
+            current_uid = os.getuid()
 
-        if file_uid != current_uid:
-            import pwd
-            try:
-                owner_name = pwd.getpwuid(file_uid).pw_name
-            except KeyError:
-                owner_name = str(file_uid)
-            current_name = pwd.getpwuid(current_uid).pw_name
-            return False, f"File owned by {owner_name} (current user: {current_name})", \
-                   f"sudo chown {current_name}:{current_name} {session_file}"
-    except Exception:
-        pass
+            if isinstance(file_uid, int) and file_uid != current_uid:
+                import pwd
+
+                try:
+                    owner_name = pwd.getpwuid(file_uid).pw_name
+                except KeyError:
+                    owner_name = str(file_uid)
+                current_name = pwd.getpwuid(current_uid).pw_name
+                return (
+                    False,
+                    f"File owned by {owner_name} (current user: {current_name})",
+                    f"sudo chown {current_name}:{current_name} {session_file}",
+                )
+        except Exception:
+            pass
 
     # 6. Check if file is writable
     if not os.access(session_file, os.W_OK):

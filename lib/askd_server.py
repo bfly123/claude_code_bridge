@@ -201,8 +201,8 @@ class AskDaemonServer:
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         ok, _err = safe_write_session(self.state_file, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
         if ok:
-            try:
-                os.chmod(self.state_file, 0o600)
-            except Exception:
-                pass
-
+            if os.name != "nt":
+                try:
+                    os.chmod(self.state_file, 0o600)
+                except Exception:
+                    pass

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Codex communication module (log-driven version)
 Sends requests via FIFO and parses replies from ~/.codex/sessions logs.

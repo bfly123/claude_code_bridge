@@ -178,16 +178,55 @@ require_command() {
   fi
 }
 
+PYTHON_BIN="${CCB_PYTHON_BIN:-}"
+
+_python_check_310() {
+  local cmd="$1"
+  command -v "$cmd" >/dev/null 2>&1 || return 1
+  "$cmd" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1
+}
+
+pick_python_bin() {
+  if [[ -n "${PYTHON_BIN}" ]] && _python_check_310 "${PYTHON_BIN}"; then
+    return 0
+  fi
+  for cmd in python3 python; do
+    if _python_check_310 "$cmd"; then
+      PYTHON_BIN="$cmd"
+      return 0
+    fi
+  done
+  return 1
+}
+
+pick_any_python_bin() {
+  if [[ -n "${PYTHON_BIN}" ]] && command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+    return 0
+  fi
+  for cmd in python3 python; do
+    if command -v "$cmd" >/dev/null 2>&1; then
+      PYTHON_BIN="$cmd"
+      return 0
+    fi
+  done
+  return 1
+}
+
 require_python_version() {
   # ccb requires Python 3.10+ (PEP 604 type unions: `str | None`, etc.)
+  if ! pick_python_bin; then
+    echo "ERROR: Missing dependency: python (3.10+ required)"
+    echo "   Please install Python 3.10+ and ensure it is on PATH, then re-run install.sh"
+    exit 1
+  fi
   local version
-  version="$(python3 -c 'import sys; print("{}.{}.{}".format(sys.version_info[0], sys.version_info[1], sys.version_info[2]))' 2>/dev/null || echo unknown)"
-  if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'; then
+  version="$("$PYTHON_BIN" -c 'import sys; print("{}.{}.{}".format(sys.version_info[0], sys.version_info[1], sys.version_info[2]))' 2>/dev/null || echo unknown)"
+  if ! _python_check_310 "$PYTHON_BIN"; then
     echo "ERROR: Python version too old: $version"
     echo "   Requires Python 3.10+, please upgrade and retry"
     exit 1
   fi
-  echo "OK: Python $version"
+  echo "OK: Python $version ($PYTHON_BIN)"
 }
 
 # Return linux / macos / unknown based on uname
@@ -311,21 +350,25 @@ install_it2() {
   echo
   echo "INFO: Installing it2 CLI..."
 
-  # Check if pip3 is available
-  if ! command -v pip3 >/dev/null 2>&1; then
-    echo "ERROR: pip3 not found, cannot auto-install it2"
-    echo "   Please run manually: python3 -m pip install it2"
+  if ! pick_python_bin; then
+    echo "ERROR: Python 3.10+ not found, cannot auto-install it2"
+    echo "   Please install Python 3.10+ and retry"
+    return 1
+  fi
+  if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
+    echo "ERROR: pip not found for ${PYTHON_BIN}, cannot auto-install it2"
+    echo "   Please run manually: ${PYTHON_BIN} -m pip install it2"
     return 1
   fi
 
   # Install it2
-  if pip3 install it2 --user 2>&1; then
+  if "$PYTHON_BIN" -m pip install it2 --user 2>&1; then
     echo "OK: it2 CLI installed successfully"
 
     # Check if in PATH
     if ! command -v it2 >/dev/null 2>&1; then
       local user_bin
-      user_bin="$(python3 -m site --user-base)/bin"
+      user_bin="$("$PYTHON_BIN" -m site --user-base)/bin"
       echo
       echo "WARN: it2 may not be in PATH, please add the following to your shell config:"
       echo "   export PATH=\"$user_bin:\$PATH\""
@@ -501,8 +544,9 @@ save_wezterm_config() {
   local wezterm_path
   wezterm_path="$(detect_wezterm_path)"
   if [[ -n "$wezterm_path" ]]; then
-    mkdir -p "$HOME/.config/ccb"
-    echo "CODEX_WEZTERM_BIN=${wezterm_path}" > "$HOME/.config/ccb/env"
+    local cfg_root="${XDG_CONFIG_HOME:-$HOME/.config}"
+    mkdir -p "$cfg_root/ccb"
+    echo "CODEX_WEZTERM_BIN=${wezterm_path}" > "$cfg_root/ccb/env"
     echo "OK: WezTerm path cached: $wezterm_path"
   fi
 }
@@ -696,16 +740,16 @@ remove_codex_mcp() {
     return
   fi
 
-  if ! command -v python3 >/dev/null 2>&1; then
-    echo "WARN: python3 required to detect MCP configuration"
+  if ! pick_python_bin; then
+    echo "WARN: python required to detect MCP configuration"
     return
   fi
 
   local has_codex_mcp
-  has_codex_mcp=$(python3 -c "
-import json
-try:
-    with open('$claude_config', 'r') as f:
+  has_codex_mcp=$("$PYTHON_BIN" -c "
+	import json
+	try:
+	    with open('$claude_config', 'r') as f:
         data = json.load(f)
     found = False
     for proj, cfg in data.get('projects', {}).items():
@@ -717,16 +761,16 @@ try:
         if found:
             break
     print('yes' if found else 'no')
-except:
-    print('no')
-" 2>/dev/null)
+	except:
+	    print('no')
+	" 2>/dev/null)
 
   if [[ "$has_codex_mcp" == "yes" ]]; then
     echo "WARN: Detected codex-related MCP configuration, removing to avoid conflicts..."
-    python3 -c "
-import json
-with open('$claude_config', 'r') as f:
-    data = json.load(f)
+    "$PYTHON_BIN" -c "
+	import json
+	with open('$claude_config', 'r') as f:
+	    data = json.load(f)
 removed = []
 for proj, cfg in data.get('projects', {}).items():
     servers = cfg.get('mcpServers', {})
@@ -738,9 +782,9 @@ with open('$claude_config', 'w') as f:
     json.dump(data, f, indent=2)
 if removed:
     print('Removed the following MCP configurations:')
-    for r in removed:
-        print(f'  - {r}')
-"
+	    for r in removed:
+	        print(f'  - {r}')
+	"
     echo "OK: Codex MCP configuration cleaned"
   fi
 }
@@ -748,6 +792,10 @@ if removed:
 install_claude_md_config() {
   local claude_md="$HOME/.claude/CLAUDE.md"
   mkdir -p "$HOME/.claude"
+  if ! pick_python_bin; then
+    echo "ERROR: python required to update CLAUDE.md"
+    return 1
+  fi
 
   # Use temp file to avoid Bash 3.2 heredoc parsing bug with single quotes
   local ccb_tmpfile=""
@@ -795,22 +843,22 @@ AI_RULES
   if [[ -f "$claude_md" ]]; then
     if grep -q "$CCB_START_MARKER" "$claude_md" 2>/dev/null; then
       echo "Updating existing CCB config block..."
-      python3 -c "
-import re
-with open('$claude_md', 'r', encoding='utf-8') as f:
-    content = f.read()
+      "$PYTHON_BIN" -c "
+	import re
+	with open('$claude_md', 'r', encoding='utf-8') as f:
+	    content = f.read()
 pattern = r'<!-- CCB_CONFIG_START -->.*?<!-- CCB_CONFIG_END -->'
 new_block = '''$ccb_content'''
 content = re.sub(pattern, new_block, content, flags=re.DOTALL)
-with open('$claude_md', 'w', encoding='utf-8') as f:
-    f.write(content)
-"
+	with open('$claude_md', 'w', encoding='utf-8') as f:
+	    f.write(content)
+	"
     elif grep -qE "$LEGACY_RULE_MARKER|## Codex Collaboration Rules|## Gemini|## OpenCode" "$claude_md" 2>/dev/null; then
       echo "Removing legacy rules and adding new CCB config block..."
-      python3 -c "
-import re
-with open('$claude_md', 'r', encoding='utf-8') as f:
-    content = f.read()
+      "$PYTHON_BIN" -c "
+	import re
+	with open('$claude_md', 'r', encoding='utf-8') as f:
+	    content = f.read()
 patterns = [
     r'## Codex Collaboration Rules.*?(?=\n## (?!Gemini)|\Z)',
     r'## Codex 协作规则.*?(?=\n## |\Z)',
@@ -822,9 +870,9 @@ patterns = [
 for p in patterns:
     content = re.sub(p, '', content, flags=re.DOTALL)
 content = content.rstrip() + '\n'
-with open('$claude_md', 'w', encoding='utf-8') as f:
-    f.write(content)
-"
+	with open('$claude_md', 'w', encoding='utf-8') as f:
+	    f.write(content)
+	"
       echo "$ccb_content" >> "$claude_md"
     else
       echo "$ccb_content" >> "$claude_md"
@@ -884,20 +932,20 @@ SETTINGS
   local added=0
   for perm in "${perms_to_add[@]}"; do
     if ! grep -q "$perm" "$settings_file" 2>/dev/null; then
-      if command -v python3 >/dev/null 2>&1; then
-        python3 -c "
-import json, sys
-with open('$settings_file', 'r') as f:
-    data = json.load(f)
-if 'permissions' not in data:
+      if pick_python_bin; then
+        "$PYTHON_BIN" -c "
+	import json, sys
+	with open('$settings_file', 'r') as f:
+	    data = json.load(f)
+	if 'permissions' not in data:
     data['permissions'] = {'allow': [], 'deny': []}
 if 'allow' not in data['permissions']:
     data['permissions']['allow'] = []
 if '$perm' not in data['permissions']['allow']:
     data['permissions']['allow'].append('$perm')
-with open('$settings_file', 'w') as f:
-    json.dump(data, f, indent=2)
-"
+	with open('$settings_file', 'w') as f:
+	    json.dump(data, f, indent=2)
+	"
         added=1
       fi
     fi
@@ -913,7 +961,6 @@ with open('$settings_file', 'w') as f:
 install_requirements() {
   check_wsl_compatibility
   confirm_backend_env_wsl
-  require_command python3 python3
   require_python_version
   require_terminal_backend
   if ! has_wezterm; then
@@ -956,28 +1003,28 @@ uninstall_claude_md_config() {
 
   if grep -q "$CCB_START_MARKER" "$claude_md" 2>/dev/null; then
     echo "Removing CCB config block from CLAUDE.md..."
-    if command -v python3 >/dev/null 2>&1; then
-      python3 -c "
-import re
-with open('$claude_md', 'r', encoding='utf-8') as f:
-    content = f.read()
+    if pick_any_python_bin; then
+      "$PYTHON_BIN" -c "
+	import re
+	with open('$claude_md', 'r', encoding='utf-8') as f:
+	    content = f.read()
 pattern = r'\n?<!-- CCB_CONFIG_START -->.*?<!-- CCB_CONFIG_END -->\n?'
 content = re.sub(pattern, '\n', content, flags=re.DOTALL)
 content = content.strip() + '\n'
-with open('$claude_md', 'w', encoding='utf-8') as f:
-    f.write(content)
-"
+	with open('$claude_md', 'w', encoding='utf-8') as f:
+	    f.write(content)
+	"
       echo "Removed CCB config from CLAUDE.md"
     else
-      echo "WARN: python3 required to clean CLAUDE.md, please manually remove CCB_CONFIG block"
+      echo "WARN: python required to clean CLAUDE.md, please manually remove CCB_CONFIG block"
     fi
   elif grep -qE "$LEGACY_RULE_MARKER|## Codex Collaboration Rules|## Gemini|## OpenCode" "$claude_md" 2>/dev/null; then
     echo "Removing legacy collaboration rules from CLAUDE.md..."
-    if command -v python3 >/dev/null 2>&1; then
-      python3 -c "
-import re
-with open('$claude_md', 'r', encoding='utf-8') as f:
-    content = f.read()
+    if pick_any_python_bin; then
+      "$PYTHON_BIN" -c "
+	import re
+	with open('$claude_md', 'r', encoding='utf-8') as f:
+	    content = f.read()
 patterns = [
     r'## Codex Collaboration Rules.*?(?=\n## (?!Gemini)|\Z)',
     r'## Codex 协作规则.*?(?=\n## |\Z)',
@@ -989,12 +1036,12 @@ patterns = [
 for p in patterns:
     content = re.sub(p, '', content, flags=re.DOTALL)
 content = content.rstrip() + '\n'
-with open('$claude_md', 'w', encoding='utf-8') as f:
-    f.write(content)
-"
+	with open('$claude_md', 'w', encoding='utf-8') as f:
+	    f.write(content)
+	"
       echo "Removed collaboration rules from CLAUDE.md"
     else
-      echo "WARN: python3 required to clean CLAUDE.md, please manually remove collaboration rules"
+      echo "WARN: python required to clean CLAUDE.md, please manually remove collaboration rules"
     fi
   fi
 }
@@ -1021,7 +1068,7 @@ uninstall_settings_permissions() {
     'Bash(oping)'
   )
 
-  if command -v python3 >/dev/null 2>&1; then
+  if pick_any_python_bin; then
     local has_perms=0
     for perm in "${perms_to_remove[@]}"; do
       if grep -q "$perm" "$settings_file" 2>/dev/null; then
@@ -1032,10 +1079,10 @@ uninstall_settings_permissions() {
 
     if [[ $has_perms -eq 1 ]]; then
       echo "Removing permission configuration from settings.json..."
-      python3 -c "
-import json
-perms_to_remove = [
-    'Bash(cask:*)',
+      "$PYTHON_BIN" -c "
+	import json
+	perms_to_remove = [
+	    'Bash(cask:*)',
     'Bash(cask-w:*)',
     'Bash(cpend)',
     'Bash(cping)',
@@ -1055,13 +1102,13 @@ if 'permissions' in data and 'allow' in data['permissions']:
         p for p in data['permissions']['allow']
         if p not in perms_to_remove
     ]
-with open('$settings_file', 'w') as f:
-    json.dump(data, f, indent=2)
-"
+	with open('$settings_file', 'w') as f:
+	    json.dump(data, f, indent=2)
+	"
       echo "Removed permission configuration from settings.json"
     fi
   else
-    echo "WARN: python3 required to clean settings.json, please manually remove related permissions"
+    echo "WARN: python required to clean settings.json, please manually remove related permissions"
   fi
 }
 
@@ -1109,7 +1156,7 @@ uninstall_all() {
   uninstall_settings_permissions
 
   echo "OK: Uninstall complete"
-  echo "   NOTE: Dependencies (python3, tmux, wezterm, it2) were not removed"
+  echo "   NOTE: Dependencies (python, tmux, wezterm, it2) were not removed"
 }
 
 main() {

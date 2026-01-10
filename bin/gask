@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """
 gask - Send message to Gemini and wait for reply (sync).
 

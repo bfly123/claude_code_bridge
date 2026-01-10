@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """
 oping - Test OpenCode connectivity
 """
@@ -32,4 +32,3 @@ try:
 except ImportError as exc:
     print(f"[ERROR] Module import failed: {exc}")
     sys.exit(1)
-

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 from __future__ import annotations
 import json
 import os
@@ -107,16 +106,30 @@ def _extract_wsl_path_from_unc_like_path(raw: str) -> str | None:
 
 def _load_cached_wezterm_bin() -> str | None:
     """Load cached WezTerm path from installation"""
-    config = Path.home() / ".config/ccb/env"
-    if config.exists():
+    candidates: list[Path] = []
+    xdg = (os.environ.get("XDG_CONFIG_HOME") or "").strip()
+    if xdg:
+        candidates.append(Path(xdg) / "ccb" / "env")
+    if os.name == "nt":
+        localappdata = (os.environ.get("LOCALAPPDATA") or "").strip()
+        if localappdata:
+            candidates.append(Path(localappdata) / "ccb" / "env")
+        appdata = (os.environ.get("APPDATA") or "").strip()
+        if appdata:
+            candidates.append(Path(appdata) / "ccb" / "env")
+    candidates.append(Path.home() / ".config" / "ccb" / "env")
+
+    for config in candidates:
         try:
-            for line in config.read_text().splitlines():
+            if not config.exists():
+                continue
+            for line in config.read_text(encoding="utf-8", errors="replace").splitlines():
                 if line.startswith("CODEX_WEZTERM_BIN="):
                     path = line.split("=", 1)[1].strip()
                     if path and Path(path).exists():
                         return path
         except Exception:
-            pass
+            continue
     return None
 
 
