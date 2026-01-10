@@ -3,15 +3,12 @@
 gask - Send message to Gemini and wait for reply (sync).
 
 Designed to be used with Claude Code's run_in_background=true.
-If --output is provided, the reply is written atomically to that file and stdout stays empty.
+If --output is provided,  reply is written atomically to that file and stdout stays empty.
 """
 
 from __future__ import annotations
 
-import json
 import os
-import socket
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -20,155 +17,24 @@ script_dir = Path(__file__).resolve().parent
 lib_dir = script_dir.parent / "lib"
 sys.path.insert(0, str(lib_dir))
 from compat import setup_windows_encoding
+
 setup_windows_encoding()
-from process_lock import ProviderLock
 
 from cli_output import EXIT_ERROR, EXIT_NO_REPLY, EXIT_OK, atomic_write_text
 
 import time
 
 from env_utils import env_bool
-
-
-def _gaskd_autostart_enabled(default: bool = True) -> bool:
-    # Prefer the new name; keep CCB_AUTO_GASKD for backwards compatibility.
-    if "CCB_GASKD_AUTOSTART" in os.environ:
-        return env_bool("CCB_GASKD_AUTOSTART", default)
-    if "CCB_AUTO_GASKD" in os.environ:
-        return env_bool("CCB_AUTO_GASKD", default)
-    return default
-
-
-def _state_file_from_env() -> Path | None:
-    raw = (os.environ.get("CCB_GASKD_STATE_FILE") or "").strip()
-    if not raw:
-        return None
-    try:
-        return Path(raw).expanduser()
-    except Exception:
-        return None
-
-
-def _find_project_session_file(work_dir: Path) -> Path | None:
-    current = Path(work_dir).resolve()
-    while True:
-        candidate = current / ".gemini-session"
-        if candidate.exists():
-            return candidate
-        if current == current.parent:
-            return None
-        current = current.parent
-
-
-def _try_daemon_request(work_dir: Path, message: str, timeout: float, quiet: bool) -> tuple[str, int] | None:
-    if not env_bool("CCB_GASKD", True):
-        return None
-
-    if not _find_project_session_file(work_dir):
-        return None
-
-    from gaskd_daemon import read_state
-
-    st = read_state(state_file=_state_file_from_env())
-    if not st:
-        return None
-    try:
-        host = st.get("connect_host") or st.get("host")
-        port = int(st["port"])
-        token = st["token"]
-    except Exception:
-        return None
-
-    try:
-        payload = {
-            "type": "gask.request",
-            "v": 1,
-            "id": f"gask-{os.getpid()}-{int(time.time() * 1000)}",
-            "token": token,
-            "work_dir": str(work_dir),
-            "timeout_s": float(timeout),
-            "quiet": bool(quiet),
-            "message": message,
-        }
-        connect_timeout = min(1.0, max(0.1, float(timeout)))
-        with socket.create_connection((host, port), timeout=connect_timeout) as sock:
-            sock.settimeout(0.5)
-            sock.sendall((json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))
-            buf = b""
-            deadline = time.time() + float(timeout) + 5.0
-            while b"\n" not in buf and time.time() < deadline:
-                try:
-                    chunk = sock.recv(65536)
-                except socket.timeout:
-                    continue
-                if not chunk:
-                    break
-                buf += chunk
-            if b"\n" not in buf:
-                return None
-            line = buf.split(b"\n", 1)[0].decode("utf-8", errors="replace")
-            resp = json.loads(line)
-            if resp.get("type") != "gask.response":
-                return None
-            reply = str(resp.get("reply") or "")
-            exit_code = int(resp.get("exit_code", 1))
-            return reply, exit_code
-    except Exception:
-        return None
-
-
-def _maybe_start_gaskd() -> bool:
-    if not env_bool("CCB_GASKD", True):
-        return False
-    if not _gaskd_autostart_enabled(True):
-        return False
-    if not _find_project_session_file(Path.cwd()):
-        return False
-
-    candidates: list[str] = []
-    local = (Path(__file__).resolve().parent / "gaskd")
-    if local.exists():
-        candidates.append(str(local))
-    found = shutil.which("gaskd")
-    if found:
-        candidates.append(found)
-    if not candidates:
-        return False
-
-    entry = candidates[0]
-    lower = entry.lower()
-    if lower.endswith((".cmd", ".bat", ".exe")):
-        argv = [entry]
-    else:
-        argv = [sys.executable, entry]
-    try:
-        kwargs = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "close_fds": True}
-        if os.name == "nt":
-            kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        else:
-            kwargs["start_new_session"] = True
-        subprocess.Popen(argv, **kwargs)
-        return True
-    except Exception:
-        return False
-
-
-def _wait_for_gaskd_ready(timeout_s: float = 2.0) -> bool:
-    try:
-        from gaskd_daemon import ping_daemon
-    except Exception:
-        return False
-    deadline = time.time() + max(0.1, float(timeout_s))
-    state_file = _state_file_from_env()
-    while time.time() < deadline:
-        try:
-            if ping_daemon(timeout_s=0.2, state_file=state_file):
-                return True
-        except Exception:
-            pass
-        time.sleep(0.1)
-    return False
-
+from askd_client import (
+    autostart_enabled,
+    state_file_from_env,
+    find_project_session_file,
+    try_daemon_request,
+    maybe_start_daemon,
+    wait_for_daemon_ready,
+    check_background_mode,
+)
+from providers import GASK_CLIENT_SPEC
 
 def _wait_for_done_reply(log_reader, state: dict, timeout: float, req_id: str, quiet: bool):
     deadline = time.time() + timeout
@@ -192,19 +58,9 @@ def _wait_for_done_reply(log_reader, state: dict, timeout: float, req_id: str, q
     return extract_reply_for_req(latest, req_id), EXIT_NO_REPLY
 
 
-def _check_background_mode() -> bool:
-    """Return True when stdout looks like Claude Code run_in_background output capture."""
-    if os.environ.get("CLAUDECODE") != "1":
-        return True
-    if os.environ.get("CCB_ALLOW_FOREGROUND") in ("1", "true", "yes"):
-        return True
-    # Claude Code's run_in_background captures stdout via file, socket, or FIFO/pipe.
-    try:
-        import stat
-        mode = os.fstat(sys.stdout.fileno()).st_mode
-        return stat.S_ISREG(mode) or stat.S_ISSOCK(mode) or stat.S_ISFIFO(mode)
-    except Exception:
-        return False
+def _usage() -> None:
+    print("Usage: gask [--timeout SECONDS] [--output FILE] <message>", file=sys.stderr)
+
 
 def main(argv: list[str]) -> int:
     if len(argv) <= 1 and sys.stdin.isatty():
@@ -261,16 +117,16 @@ def main(argv: list[str]) -> int:
         from gaskd_protocol import make_req_id, wrap_gemini_prompt
 
         # Strict mode: require run_in_background=true in Claude Code
-        if os.environ.get("CLAUDECODE") == "1" and not _check_background_mode():
+        if os.environ.get("CLAUDECODE") == "1" and not check_background_mode():
             print("[ERROR] gask MUST be called with run_in_background=true", file=sys.stderr)
             print("Correct usage: Bash(gask \"...\", run_in_background=true)", file=sys.stderr)
             return EXIT_ERROR
 
         # Prefer daemon mode: daemon performs per-session serialization and should accept concurrent submissions.
-        daemon_result = _try_daemon_request(Path.cwd(), message, timeout, quiet)
-        if daemon_result is None and _maybe_start_gaskd():
-            _wait_for_gaskd_ready(timeout_s=min(2.0, max(0.2, float(timeout))))
-            daemon_result = _try_daemon_request(Path.cwd(), message, timeout, quiet)
+        daemon_result = try_daemon_request(GASK_CLIENT_SPEC, Path.cwd(), message, timeout, quiet, state_file_from_env(GASK_CLIENT_SPEC.state_file_env))
+        if daemon_result is None and maybe_start_daemon(GASK_CLIENT_SPEC, Path.cwd()):
+            wait_for_daemon_ready(GASK_CLIENT_SPEC, timeout_s=min(2.0, max(0.2, float(timeout))))
+            daemon_result = try_daemon_request(GASK_CLIENT_SPEC, Path.cwd(), message, timeout, quiet, state_file_from_env(GASK_CLIENT_SPEC.state_file_env))
         if daemon_result is not None:
             reply, exit_code = daemon_result
             if output_path:

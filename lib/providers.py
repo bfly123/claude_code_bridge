@@ -13,6 +13,18 @@ class ProviderDaemonSpec:
     lock_name: str
 
 
+@dataclass
+class ProviderClientSpec:
+    protocol_prefix: str
+    enabled_env: str
+    autostart_env_primary: str
+    autostart_env_legacy: str
+    state_file_env: str
+    session_filename: str
+    daemon_bin_name: str
+    daemon_module: str
+
+
 CASKD_SPEC = ProviderDaemonSpec(
     daemon_key="caskd",
     protocol_prefix="cask",
@@ -40,4 +52,40 @@ OASKD_SPEC = ProviderDaemonSpec(
     log_file_name="oaskd.log",
     idle_timeout_env="CCB_OASKD_IDLE_TIMEOUT_S",
     lock_name="oaskd",
+)
+
+
+CASK_CLIENT_SPEC = ProviderClientSpec(
+    protocol_prefix="cask",
+    enabled_env="CCB_CASKD",
+    autostart_env_primary="CCB_CASKD_AUTOSTART",
+    autostart_env_legacy="CCB_AUTO_CASKD",
+    state_file_env="CCB_CASKD_STATE_FILE",
+    session_filename=".codex-session",
+    daemon_bin_name="caskd",
+    daemon_module="caskd_daemon",
+)
+
+
+GASK_CLIENT_SPEC = ProviderClientSpec(
+    protocol_prefix="gask",
+    enabled_env="CCB_GASKD",
+    autostart_env_primary="CCB_GASKD_AUTOSTART",
+    autostart_env_legacy="CCB_AUTO_GASKD",
+    state_file_env="CCB_GASKD_STATE_FILE",
+    session_filename=".gemini-session",
+    daemon_bin_name="gaskd",
+    daemon_module="gaskd_daemon",
+)
+
+
+OASK_CLIENT_SPEC = ProviderClientSpec(
+    protocol_prefix="oask",
+    enabled_env="CCB_OASKD",
+    autostart_env_primary="CCB_OASKD_AUTOSTART",
+    autostart_env_legacy="CCB_AUTO_OASKD",
+    state_file_env="CCB_OASKD_STATE_FILE",
+    session_filename=".opencode-session",
+    daemon_bin_name="oaskd",
+    daemon_module="oaskd_daemon",
 )

@@ -9,8 +9,6 @@ from __future__ import annotations
 import json
 import os
 import socket
-import shutil
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -28,6 +26,15 @@ COMPLETION_MARKER = (os.environ.get("CCB_EXECUTION_COMPLETE_MARKER") or "EXECUTI
 from env_utils import env_bool
 from caskd_protocol import REQ_ID_PREFIX, make_req_id, strip_done_text, wrap_codex_prompt
 from caskd_daemon import read_state
+from askd_client import (
+    autostart_enabled,
+    state_file_from_env,
+    find_project_session_file,
+    maybe_start_daemon,
+    wait_for_daemon_ready,
+    check_background_mode,
+)
+from providers import CASK_CLIENT_SPEC
 
 SUPERVISOR_PROMPT = """## Executor Mode: codex+opencode
 You are the SUPERVISOR, NOT the executor.
@@ -161,38 +168,9 @@ def _with_completion_marker_request(message: str) -> str:
     )
 
 
-def _caskd_autostart_enabled(default: bool = True) -> bool:
-    # Prefer the new name; keep CCB_AUTO_CASKD for backwards compatibility.
-    if "CCB_CASKD_AUTOSTART" in os.environ:
-        return env_bool("CCB_CASKD_AUTOSTART", default)
-    if "CCB_AUTO_CASKD" in os.environ:
-        return env_bool("CCB_AUTO_CASKD", default)
-    return default
-
-
-def _state_file_from_env() -> Optional[Path]:
-    raw = (os.environ.get("CCB_CASKD_STATE_FILE") or "").strip()
-    if not raw:
-        return None
-    try:
-        return Path(raw).expanduser()
-    except Exception:
-        return None
-
-
-def _find_project_session_file(work_dir: Path) -> Optional[Path]:
-    current = Path(work_dir).resolve()
-    while True:
-        candidate = current / ".codex-session"
-        if candidate.exists():
-            return candidate
-        if current == current.parent:
-            return None
-        current = current.parent
-
 
 def _read_project_terminal(work_dir: Path) -> Optional[str]:
-    session_file = _find_project_session_file(work_dir)
+    session_file = find_project_session_file(work_dir, CASK_CLIENT_SPEC.session_filename)
     if not session_file:
         return None
     try:
@@ -213,7 +191,7 @@ def _try_daemon_request(work_dir: Path, message: str, timeout: float, quiet: boo
     terminal = _read_project_terminal(work_dir)
     if terminal not in ("wezterm", "iterm2"):
         return None
-    st = read_state(state_file=_state_file_from_env())
+    st = read_state(state_file=state_file_from_env(CASK_CLIENT_SPEC.state_file_env))
     if not st:
         return None
     try:
@@ -261,89 +239,22 @@ def _try_daemon_request(work_dir: Path, message: str, timeout: float, quiet: boo
 
 
 def _maybe_start_caskd() -> bool:
+    """Start caskd daemon if conditions are met (cask-specific: requires wezterm/iterm2)."""
     if not env_bool("CCB_CASKD", True):
         return False
-    if not _caskd_autostart_enabled(True):
+    if not autostart_enabled(CASK_CLIENT_SPEC.autostart_env_primary, CASK_CLIENT_SPEC.autostart_env_legacy, True):
         return False
     terminal = _read_project_terminal(Path.cwd())
     if terminal not in ("wezterm", "iterm2"):
         return False
-    # Prefer repo-local caskd when running from source; fallback to PATH.
-    candidates: list[str] = []
-    local = (Path(__file__).resolve().parent / "caskd")
-    if local.exists():
-        candidates.append(str(local))
-    found = shutil.which("caskd")
-    if found:
-        candidates.append(found)
-    if not candidates:
-        return False
-    entry = candidates[0]
-    lower = entry.lower()
-    # On Windows, prefer invoking via the running Python unless we found a real executable wrapper
-    # (e.g. caskd.cmd/caskd.bat) to avoid relying on shebang/extension handling.
-    if lower.endswith((".cmd", ".bat", ".exe")):
-        argv = [entry]
-    else:
-        argv = [sys.executable, entry]
-    try:
-        kwargs = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "close_fds": True}
-        if os.name == "nt":
-            kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        else:
-            kwargs["start_new_session"] = True
-        subprocess.Popen(argv, **kwargs)
-        return True
-    except Exception:
-        return False
+    return maybe_start_daemon(CASK_CLIENT_SPEC, Path.cwd())
+
 
 def _wait_for_caskd_ready(timeout_s: float = 2.0) -> bool:
-    try:
-        from caskd_daemon import ping_daemon
-    except Exception:
-        return False
-    deadline = time.time() + max(0.1, float(timeout_s))
-    state_file = _state_file_from_env()
-    while time.time() < deadline:
-        try:
-            if ping_daemon(timeout_s=0.2, state_file=state_file):
-                return True
-        except Exception:
-            pass
-        time.sleep(0.1)
-    return False
+    return wait_for_daemon_ready(CASK_CLIENT_SPEC, timeout_s, state_file_from_env(CASK_CLIENT_SPEC.state_file_env))
 
 def _usage() -> None:
     print("Usage: cask [--timeout SECONDS] [--output FILE] <message>", file=sys.stderr)
-
-
-def _check_background_mode() -> bool:
-    """Return True when stdout looks like Claude Code run_in_background output capture."""
-    if os.environ.get("CLAUDECODE") != "1":
-        return True
-    if os.environ.get("CCB_ALLOW_FOREGROUND") in ("1", "true", "yes"):
-        return True
-    # Claude Code's run_in_background captures stdout via file, socket, or FIFO/pipe.
-    try:
-        import stat
-        mode = os.fstat(sys.stdout.fileno()).st_mode
-        return stat.S_ISREG(mode) or stat.S_ISSOCK(mode) or stat.S_ISFIFO(mode)
-    except Exception:
-        return False
-
-
-def _popen_detached(argv: list[str]) -> None:
-    kwargs = {
-        "stdin": subprocess.DEVNULL,
-        "stdout": subprocess.DEVNULL,
-        "stderr": subprocess.DEVNULL,
-        "close_fds": True,
-    }
-    if os.name == "nt":
-        kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    else:
-        kwargs["start_new_session"] = True
-    subprocess.Popen(argv, **kwargs)
 
 
 def _parse_args(argv: list[str]) -> Tuple[Optional[Path], float, str, bool]:
@@ -398,7 +309,7 @@ def main(argv: list[str]) -> int:
             return EXIT_ERROR
 
         # Strict mode: require run_in_background=true in Claude Code
-        if os.environ.get("CLAUDECODE") == "1" and not _check_background_mode():
+        if os.environ.get("CLAUDECODE") == "1" and not check_background_mode():
             print("[ERROR] cask MUST be called with run_in_background=true", file=sys.stderr)
             print("Correct usage: Bash(cask \"...\", run_in_background=true)", file=sys.stderr)
             return EXIT_ERROR
