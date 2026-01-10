@@ -68,15 +68,31 @@ class ProviderLock:
         try:
             if os.name == "nt":
                 import msvcrt
+                # Ensure the file has at least 1 byte so region locking is reliable on Windows.
+                try:
+                    st = os.fstat(self._fd)
+                    if getattr(st, "st_size", 0) < 1:
+                        os.lseek(self._fd, 0, os.SEEK_SET)
+                        os.write(self._fd, b"\0")
+                except Exception:
+                    pass
                 msvcrt.locking(self._fd, msvcrt.LK_NBLCK, 1)
             else:
                 import fcntl
                 fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
             # Write PID for debugging and stale lock detection
-            os.ftruncate(self._fd, 0)
+            pid_bytes = f"{os.getpid()}\n".encode()
             os.lseek(self._fd, 0, os.SEEK_SET)
-            os.write(self._fd, f"{os.getpid()}\n".encode())
+            os.write(self._fd, pid_bytes)
+            # Keep file length >= 1 on Windows to avoid invalidating the locked region.
+            if os.name == "nt":
+                try:
+                    os.ftruncate(self._fd, max(1, len(pid_bytes)))
+                except Exception:
+                    pass
+            else:
+                os.ftruncate(self._fd, len(pid_bytes))
             self._acquired = True
             return True
         except (OSError, IOError):

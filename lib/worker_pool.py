@@ -22,16 +22,16 @@ class BaseSessionWorker(threading.Thread, Generic[TaskT, ResultT]):
         super().__init__(daemon=True)
         self.session_key = session_key
         self._q: "queue.Queue[TaskT]" = queue.Queue()
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()
 
     def enqueue(self, task: TaskT) -> None:
         self._q.put(task)
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stop_event.set()
 
     def run(self) -> None:
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             try:
                 task = self._q.get(timeout=0.2)
             except queue.Empty:
@@ -69,4 +69,3 @@ class PerSessionWorkerPool(Generic[WorkerT]):
         if created:
             worker.start()
         return worker
-
