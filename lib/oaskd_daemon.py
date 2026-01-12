@@ -114,8 +114,19 @@ class _SessionWorker(BaseSessionWorker[_QueuedTask, OaskdResult]):
                     done_ms=None,
                 )
 
-            log_reader = OpenCodeLogReader(work_dir=Path(session.work_dir), session_id_filter=(session.session_id or None))
+            log_reader = OpenCodeLogReader(
+                work_dir=Path(session.work_dir),
+                project_id=(session.opencode_project_id or "global"),
+                session_id_filter=session.opencode_session_id_filter,
+            )
             state = _tail_state_for_session(log_reader)
+            # Persist OpenCode storage bindings for future runs (best-effort).
+            try:
+                storage_sid = state.get("session_id")
+                if isinstance(storage_sid, str) and storage_sid:
+                    session.update_opencode_binding(session_id=storage_sid, project_id=log_reader.project_id)
+            except Exception:
+                pass
             cancel_enabled = _cancel_detection_enabled(False)
             session_id = state.get("session_id") if cancel_enabled and isinstance(state.get("session_id"), str) else None
             cancel_cursor = log_reader.open_cancel_log_cursor() if cancel_enabled and session_id else None

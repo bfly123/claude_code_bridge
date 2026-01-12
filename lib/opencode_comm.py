@@ -451,6 +451,10 @@ class OpenCodeLogReader:
         if not sessions_dir.exists():
             return None
 
+        # Look up the filtered session (if any) but don't return immediately;
+        # we need to check if there's a newer session for the same work_dir.
+        filtered_match: dict | None = None
+        filtered_updated: int = -1
         if self._session_id_filter:
             try:
                 for path in sessions_dir.glob("ses_*.json"):
@@ -459,7 +463,12 @@ class OpenCodeLogReader:
                     payload = self._load_json(path)
                     sid = payload.get("id")
                     if isinstance(sid, str) and sid == self._session_id_filter:
-                        return {"path": path, "payload": payload}
+                        filtered_match = {"path": path, "payload": payload}
+                        try:
+                            filtered_updated = int((payload.get("time") or {}).get("updated") or -1)
+                        except Exception:
+                            filtered_updated = -1
+                        break
             except Exception:
                 pass
 
@@ -514,6 +523,14 @@ class OpenCodeLogReader:
                 best_match = {"path": path, "payload": payload}
                 best_updated = updated
                 best_mtime = mtime
+
+        # If we have a filtered match, use it only if there's no newer work_dir match.
+        # This handles the case where OpenCode was restarted and created a new session.
+        if filtered_match:
+            if best_match and best_updated > filtered_updated:
+                # A newer session exists for the same work_dir; prefer it over stale binding.
+                return best_match
+            return filtered_match
 
         return best_match or best_any
 

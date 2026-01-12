@@ -273,7 +273,7 @@ class GeminiLogReader:
         prev_session = state.get("session_path")
         prev_last_gemini_id = state.get("last_gemini_id")
         prev_last_gemini_hash = state.get("last_gemini_hash")
-        # Allow short timeout to scan new session files (gask-w defaults 1s/poll)
+        # Allow short timeout to scan new session files (sync tools may use short poll windows)
         rescan_interval = min(2.0, max(0.2, timeout / 2.0))
         last_rescan = time.time()
         last_forced_read = time.time()

@@ -5,36 +5,35 @@ cask - Send message to Codex and wait for reply (sync).
 Designed to be used with Claude Code's run_in_background=true.
 If --output is provided, the reply is written atomically to that file and stdout stays empty.
 """
+
 from __future__ import annotations
+
 import json
 import os
-import socket
 import sys
-import time
 from pathlib import Path
 from typing import Optional, Tuple
 
 script_dir = Path(__file__).resolve().parent
 lib_dir = script_dir.parent / "lib"
 sys.path.insert(0, str(lib_dir))
+
 from compat import setup_windows_encoding
+
 setup_windows_encoding()
-from process_lock import ProviderLock
 
-COMPLETION_MARKER = (os.environ.get("CCB_EXECUTION_COMPLETE_MARKER") or "EXECUTION_COMPLETE").strip() or "EXECUTION_COMPLETE"
-
+from cli_output import EXIT_ERROR, EXIT_OK, atomic_write_text
 from env_utils import env_bool
-from ccb_protocol import REQ_ID_PREFIX, make_req_id, strip_done_text, wrap_codex_prompt
-from caskd_daemon import read_state
 from askd_client import (
-    autostart_enabled,
     state_file_from_env,
     find_project_session_file,
+    try_daemon_request,
     maybe_start_daemon,
     wait_for_daemon_ready,
     check_background_mode,
 )
 from providers import CASK_CLIENT_SPEC
+
 
 SUPERVISOR_PROMPT = """## Executor Mode: codex+opencode
 You are the SUPERVISOR, NOT the executor.
@@ -74,194 +73,6 @@ def _get_executor_from_roles() -> Optional[str]:
                 pass
     return None
 
-
-def _has_completion_marker(text: str) -> bool:
-    """Check if last line contains COMPLETION_MARKER (flexible match)."""
-    lines = text.rstrip().splitlines()
-    return bool(lines) and COMPLETION_MARKER in lines[-1]
-
-
-def _strip_completion_marker(text: str) -> str:
-    """Remove the trailing marker line if it contains COMPLETION_MARKER."""
-    lines = text.rstrip().splitlines()
-    if lines and COMPLETION_MARKER in lines[-1]:
-        lines[-1] = lines[-1].replace(COMPLETION_MARKER, "").rstrip()
-        if not lines[-1]:
-            lines = lines[:-1]
-        return "\n".join(lines).rstrip()
-    return text.rstrip()
-
-
-def _wait_for_complete_reply(log_reader, state: dict, timeout: float, quiet: bool):
-    """Wait until reply ends with COMPLETION_MARKER or timeout."""
-    from cli_output import EXIT_NO_REPLY, EXIT_OK
-
-    # Pre-check: try to read existing messages (may have arrived before we started)
-    existing_reply = None
-    try:
-        existing_reply, state = log_reader.wait_for_message(state, timeout=0.1)
-        if existing_reply and _has_completion_marker(existing_reply):
-            return _strip_completion_marker(existing_reply), EXIT_OK
-    except Exception:
-        pass
-
-    deadline = time.time() + timeout
-    chunks = []
-    if existing_reply:
-        chunks.append(existing_reply)
-
-    while True:
-        remaining = deadline - time.time()
-        if remaining <= 0:
-            break
-        reply, state = log_reader.wait_for_message(state, remaining)
-        if reply is None:
-            continue
-        chunks.append(reply)
-        if _has_completion_marker(reply):
-            combined = "\n".join(chunks)
-            return _strip_completion_marker(combined), EXIT_OK
-
-    if chunks:
-        if not quiet:
-            print("[WARN] Marker not detected, returning partial reply", file=sys.stderr)
-        combined = "\n".join(chunks)
-        return _strip_completion_marker(combined), EXIT_NO_REPLY
-    return None, EXIT_NO_REPLY
-
-
-def _wait_for_done_reply(log_reader, state: dict, timeout: float, req_id: str, quiet: bool):
-    from cli_output import EXIT_NO_REPLY, EXIT_OK
-    deadline = time.time() + timeout
-    chunks: list[str] = []
-    anchor_seen = False
-    anchor_collect_grace = min(deadline, time.time() + 2.0)
-
-    while True:
-        remaining = deadline - time.time()
-        if remaining <= 0:
-            break
-        event, state = log_reader.wait_for_event(state, min(remaining, 0.5))
-        if event is None:
-            continue
-        role, text = event
-        if role == "user":
-            if f"{REQ_ID_PREFIX} {req_id}" in text:
-                anchor_seen = True
-            continue
-        if role != "assistant":
-            continue
-        if (not anchor_seen) and time.time() < anchor_collect_grace:
-            continue
-        chunks.append(text)
-        combined = "\n".join(chunks)
-        from ccb_protocol import is_done_text
-        if is_done_text(combined, req_id):
-            return strip_done_text(combined, req_id), EXIT_OK
-
-    combined = "\n".join(chunks)
-    if combined and not quiet:
-        print("[WARN] Done marker not detected, returning partial reply", file=sys.stderr)
-    return strip_done_text(combined, req_id), EXIT_NO_REPLY
-
-
-def _with_completion_marker_request(message: str) -> str:
-    if not message:
-        return message
-    if COMPLETION_MARKER in message:
-        return message
-    return (
-        f"{message}\n\n"
-        "IMPORTANT:\n"
-        "- You MUST reply with a final response (do not stay silent).\n"
-        f"- End your reply with this exact line (verbatim):\n{COMPLETION_MARKER}\n"
-    )
-
-
-
-def _read_project_terminal(work_dir: Path) -> Optional[str]:
-    session_file = find_project_session_file(work_dir, CASK_CLIENT_SPEC.session_filename)
-    if not session_file:
-        return None
-    try:
-        data = json.loads(session_file.read_text(encoding="utf-8-sig"))
-    except Exception:
-        return None
-    if not isinstance(data, dict):
-        return None
-    terminal = str(data.get("terminal") or "").strip().lower()
-    if terminal:
-        return terminal
-    return None
-
-
-def _try_daemon_request(work_dir: Path, message: str, timeout: float, quiet: bool) -> Optional[tuple[str, int]]:
-    if not env_bool("CCB_CASKD", True):
-        return None
-    terminal = _read_project_terminal(work_dir)
-    if terminal not in ("wezterm", "iterm2"):
-        return None
-    st = read_state(state_file=state_file_from_env(CASK_CLIENT_SPEC.state_file_env))
-    if not st:
-        return None
-    try:
-        host = st.get("connect_host") or st.get("host")
-        port = int(st["port"])
-        token = st["token"]
-    except Exception:
-        return None
-    try:
-        payload = {
-            "type": "cask.request",
-            "v": 1,
-            "id": f"cask-{os.getpid()}-{int(time.time() * 1000)}",
-            "token": token,
-            "work_dir": str(work_dir),
-            "timeout_s": float(timeout),
-            "quiet": bool(quiet),
-            "message": message,
-        }
-        connect_timeout = min(1.0, max(0.1, float(timeout)))
-        with socket.create_connection((host, port), timeout=connect_timeout) as sock:
-            sock.settimeout(0.5)
-            sock.sendall((json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))
-            buf = b""
-            deadline = time.time() + float(timeout) + 5.0
-            while b"\n" not in buf and time.time() < deadline:
-                try:
-                    chunk = sock.recv(65536)
-                except socket.timeout:
-                    continue
-                if not chunk:
-                    break
-                buf += chunk
-            if b"\n" not in buf:
-                return None
-            line = buf.split(b"\n", 1)[0].decode("utf-8", errors="replace")
-            resp = json.loads(line)
-            if resp.get("type") != "cask.response":
-                return None
-            reply = str(resp.get("reply") or "")
-            exit_code = int(resp.get("exit_code", 1))
-            return reply, exit_code
-    except Exception:
-        return None
-
-
-def _maybe_start_caskd() -> bool:
-    """Start caskd daemon if conditions are met (cask-specific: requires wezterm/iterm2)."""
-    if not env_bool("CCB_CASKD", True):
-        return False
-    if not autostart_enabled(CASK_CLIENT_SPEC.autostart_env_primary, CASK_CLIENT_SPEC.autostart_env_legacy, True):
-        return False
-    terminal = _read_project_terminal(Path.cwd())
-    if terminal not in ("wezterm", "iterm2"):
-        return False
-    return maybe_start_daemon(CASK_CLIENT_SPEC, Path.cwd())
-
-
-def _wait_for_caskd_ready(timeout_s: float = 2.0) -> bool:
-    return wait_for_daemon_ready(CASK_CLIENT_SPEC, timeout_s, state_file_from_env(CASK_CLIENT_SPEC.state_file_env))
 
 def _usage() -> None:
     print("Usage: cask [--timeout SECONDS] [--output FILE] <message>", file=sys.stderr)
@@ -308,9 +119,6 @@ def _parse_args(argv: list[str]) -> Tuple[Optional[Path], float, str, bool]:
 
 def main(argv: list[str]) -> int:
     try:
-        from cli_output import EXIT_ERROR, EXIT_NO_REPLY, EXIT_OK, atomic_write_text
-        from codex_comm import CodexCommunicator
-
         output_path, timeout, message, quiet = _parse_args(argv)
         if not message and not sys.stdin.isatty():
             message = sys.stdin.read().strip()
@@ -329,69 +137,39 @@ def main(argv: list[str]) -> int:
         if executor == "codex+opencode":
             message = SUPERVISOR_PROMPT + message
 
-        # Prefer daemon if available (scheme-2). Do NOT take the client-side lock for daemon mode:
-        # daemon performs per-session serialization and should accept concurrent client submissions.
-        daemon_result = _try_daemon_request(Path.cwd(), message, timeout, quiet)
-        if daemon_result is None and _maybe_start_caskd():
-            # Give daemon a moment to write state file and start listening, then retry once.
-            _wait_for_caskd_ready(timeout_s=min(2.0, max(0.2, float(timeout))))
-            daemon_result = _try_daemon_request(Path.cwd(), message, timeout, quiet)
+        # Daemon-only: remove client-side serial lock mode.
+        state_file = state_file_from_env(CASK_CLIENT_SPEC.state_file_env)
+        daemon_result = try_daemon_request(CASK_CLIENT_SPEC, Path.cwd(), message, timeout, quiet, state_file)
+        if daemon_result is None and maybe_start_daemon(CASK_CLIENT_SPEC, Path.cwd()):
+            wait_for_daemon_ready(CASK_CLIENT_SPEC, timeout_s=min(2.0, max(0.2, float(timeout))), state_file=state_file)
+            daemon_result = try_daemon_request(CASK_CLIENT_SPEC, Path.cwd(), message, timeout, quiet, state_file)
         if daemon_result is not None:
             reply, exit_code = daemon_result
             if output_path:
-                pending_path = Path(str(output_path) + ".pending")
-                atomic_write_text(pending_path, reply + "\n")
-                pending_path.replace(output_path)
+                atomic_write_text(output_path, reply + "\n")
                 return exit_code
             sys.stdout.write(reply)
             if not reply.endswith("\n"):
                 sys.stdout.write("\n")
             return exit_code
 
-        comm = CodexCommunicator(lazy_init=True)
-
-        healthy, status = comm._check_session_health_impl(probe_terminal=False)
-        if not healthy:
-            raise RuntimeError(f"[ERROR] Session error: {status}")
-
-        # Direct mode: keep client-side lock to avoid log mis-association and interleaved injection.
-        lock_key = (comm.session_info.get("pane_title_marker") or comm.pane_id or comm.session_info.get("codex_session_id") or os.getcwd())
-        lock = ProviderLock("codex", cwd=f"session:{lock_key}", timeout=min(300.0, max(1.0, float(timeout))))
-        if not lock.acquire():
-            print("[ERROR] Another cask request is in progress (lock timeout).", file=sys.stderr)
+        if not env_bool(CASK_CLIENT_SPEC.enabled_env, True):
+            print(f"[ERROR] {CASK_CLIENT_SPEC.enabled_env}=0: cask daemon mode disabled.", file=sys.stderr)
             return EXIT_ERROR
-
-        try:
-            # Reset log state to ignore any messages before lock acquisition
-            comm.log_reader.capture_state()
-
-            # Direct mode: scheme-2 req_id protocol (strict).
-            req_id = make_req_id()
-            _, state = comm._send_message(wrap_codex_prompt(message, req_id))
-            reply, exit_code = _wait_for_done_reply(comm.log_reader, state, timeout, req_id, quiet)
-            if reply is None:
-                if not quiet:
-                    print(f"[TIMEOUT] Timeout after {int(timeout)}s", file=sys.stderr)
-                return exit_code
-
-            if output_path:
-                pending_path = Path(str(output_path) + ".pending")
-                atomic_write_text(pending_path, reply + "\n")
-                pending_path.replace(output_path)
-                return exit_code
-        finally:
-            lock.release()
-
-        sys.stdout.write(reply)
-        if not reply.endswith("\n"):
-            sys.stdout.write("\n")
-        return exit_code
+        if not find_project_session_file(Path.cwd(), CASK_CLIENT_SPEC.session_filename):
+            print("[ERROR] No active Codex session found for this directory.", file=sys.stderr)
+            print("Run `ccb up codex` in this project first.", file=sys.stderr)
+            return EXIT_ERROR
+        print("[ERROR] cask daemon required but not available.", file=sys.stderr)
+        print("Start it with `caskd` (or enable autostart via CCB_CASKD_AUTOSTART=1).", file=sys.stderr)
+        return EXIT_ERROR
     except KeyboardInterrupt:
         return 130
     except Exception as exc:
-        print(exc, file=sys.stderr)
-        return 1
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return EXIT_ERROR
 
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv))
+

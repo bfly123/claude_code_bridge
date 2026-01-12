@@ -1,6 +1,6 @@
 <div align="center">
 
-# Claude Code Bridge (ccb) v3.0.0
+# Claude Code Bridge (ccb) v4.0
 
 **基于终端分屏的 Claude & Codex & Gemini 丝滑协作工具**
 
@@ -15,7 +15,7 @@
   <img src="https://img.shields.io/badge/Every_Model_Controllable-CF1322?style=for-the-badge" alt="Every Model Controllable">
 </p>
 
-[![Version](https://img.shields.io/badge/version-3.0.0-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-4.0-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 [English](README.md) | **中文**
@@ -180,7 +180,10 @@ ccb up codex            # 启动 Codex
 ccb up gemini           # 启动 Gemini
 ccb up opencode         # 启动 OpenCode
 ccb up codex gemini     # 同时启动两个
-ccb up codex gemini opencode  # 同时启动三个
+ccb up codex gemini opencode  # 同时启动三个（空格分隔）
+ccb up codex,gemini,opencode  # 同时启动三个（逗号分隔）
+
+tmux 提示：CCB 的 tmux 状态栏/窗格标题主题只会在 CCB 运行期间启用。
 ccb-layout              # 启动 2x2 四 AI 布局（Codex+Gemini+OpenCode）
 ```
 
@@ -201,7 +204,7 @@ ccb update              # 更新 ccb 到最新版本
 
 ## 🪟 Windows 安装指南（WSL vs 原生）
 
-> 结论先说：`ccb/cask-w/cping` 必须和 `codex/gemini` 跑在**同一个环境**（WSL 就都在 WSL，原生 Windows 就都在原生 Windows）。最常见问题就是装错环境导致 `cping` 不通。
+> 结论先说：`ccb/cask/cping/cpend` 必须和 `codex/gemini` 跑在**同一个环境**（WSL 就都在 WSL，原生 Windows 就都在原生 Windows）。最常见问题就是装错环境导致 `cping` 不通。
 
 ### 1) 前置条件：安装原生版 WezTerm（不是 WSL 版）
 
@@ -247,7 +250,7 @@ cd claude_code_bridge
 ```
 
 提示：
-- 后续所有 `ccb/cask/cask-w/cping` 也都请在 **WSL** 里运行（和你的 `codex/gemini` 保持一致）。
+- 后续所有 `ccb/cask/cping/cpend` 也都请在 **WSL** 里运行（和你的 `codex/gemini` 保持一致）。
 
 #### 3.3 安装后如何测试（`cping`）
 
@@ -271,7 +274,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 install
 ```
 
 提示：
-- 安装脚本会明确提醒“`ccb/cask-w` 必须与 `codex/gemini` 在同一环境运行”，请确认你打算在原生 Windows 运行 `codex/gemini`。
+- 安装脚本会明确提醒“`ccb/cask/cping/cpend` 必须与 `codex/gemini` 在同一环境运行”，请确认你打算在原生 Windows 运行 `codex/gemini`。
 
 #### 4.2 安装后如何测试
 
@@ -368,7 +371,6 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile
 | 命令 | 说明 |
 | :--- | :--- |
 | `/cask <消息>` | 后台模式：提交任务给 Codex，前台释放可继续其他任务（推荐） |
-| `/cask-w <消息>` | 前台模式：提交任务并等待返回，响应更快但会阻塞 |
 | `cpend [N]` | 调取当前 Codex 会话的对话记录，N 控制轮数（默认 1） |
 | `cping` | 测试 Codex 连通性 |
 
@@ -377,7 +379,6 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile
 | 命令 | 说明 |
 | :--- | :--- |
 | `/gask <消息>` | 后台模式：提交任务给 Gemini |
-| `/gask-w <消息>` | 前台模式：提交任务并等待返回 |
 | `gpend [N]` | 调取当前 Gemini 会话的对话记录 |
 | `gping` | 测试 Gemini 连通性 |
 
@@ -408,6 +409,11 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile
 
 <details>
 <summary><b>更新历史</b></summary>
+
+### v4.0
+- **全部重构**：整体架构重写，更清晰、更稳定
+- **tmux 完美支持**：分屏/标题/边框/状态栏一体化体验
+- **支持任何终端**：除 Windows 原生环境外，强烈建议统一迁移到 tmux 下使用
 
 ### v3.0.0
 - **智能守护进程**: `caskd`/`gaskd`/`oaskd` 支持 60秒空闲超时和并行队列

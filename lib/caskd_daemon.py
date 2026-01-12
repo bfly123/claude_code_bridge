@@ -93,18 +93,6 @@ class _SessionWorker(BaseSessionWorker[_QueuedTask, CaskdResult]):
                 fallback_scan=False,
             )
 
-        if session.terminal not in ("wezterm", "iterm2"):
-            return CaskdResult(
-                exit_code=1,
-                reply=f"❌ caskd currently supports WezTerm/iTerm2 sessions only (got terminal={session.terminal}).",
-                req_id=task.req_id,
-                session_key=self.session_key,
-                log_path=None,
-                anchor_seen=False,
-                done_seen=False,
-                fallback_scan=False,
-            )
-
         ok, pane_or_err = session.ensure_pane()
         if not ok:
             return CaskdResult(

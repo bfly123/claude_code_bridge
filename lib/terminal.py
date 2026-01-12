@@ -225,6 +225,7 @@ class TmuxBackend(TerminalBackend):
       For backward compatibility, methods accept both:
         - If target starts with `%` or contains `:`/`.` it is treated as a tmux target (pane/window/session:win.pane).
         - Otherwise it is treated as a tmux session name (single-pane session legacy behavior).
+    - Uses tmux pane_id (`%xx`) + pane title marker for daemon rediscovery.
     """
 
     _ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -314,6 +315,21 @@ class TmuxBackend(TerminalBackend):
             return
         self._tmux_run(["select-pane", "-t", pane_id, "-T", title or ""], check=False)
 
+    def set_pane_user_option(self, pane_id: str, name: str, value: str) -> None:
+        """
+        Set a tmux user option (e.g. `@ccb_agent`) at pane scope.
+
+        This is used to keep UI labeling stable even if programs modify `pane_title`.
+        """
+        if not pane_id:
+            return
+        opt = (name or "").strip()
+        if not opt:
+            return
+        if not opt.startswith("@"):
+            opt = "@" + opt
+        self._tmux_run(["set-option", "-p", "-t", pane_id, opt, value or ""], check=False)
+
     def find_pane_by_title_marker(self, marker: str) -> Optional[str]:
         marker = (marker or "").strip()
         if not marker:
@@ -352,7 +368,7 @@ class TmuxBackend(TerminalBackend):
     def is_pane_alive(self, pane_id: str) -> bool:
         if not pane_id:
             return False
-        cp = self._tmux_run(["list-panes", "-t", pane_id, "-F", "#{pane_dead}"], capture=True)
+        cp = self._tmux_run(["display-message", "-p", "-t", pane_id, "#{pane_dead}"], capture=True)
         if cp.returncode != 0:
             return False
         return (cp.stdout or "").strip() == "0"
@@ -502,6 +518,20 @@ class TmuxBackend(TerminalBackend):
         if cmd:
             self.respawn_pane(pane_id, cmd=cmd, cwd=cwd)
         return pane_id
+
+
+class Iterm2Backend(TerminalBackend):
+    """Minimal placeholder for iTerm2 backend compatibility."""
+    def send_text(self, pane_id: str, text: str) -> None:
+        raise NotImplementedError("iTerm2 backend not implemented")
+    def is_alive(self, pane_id: str) -> bool:
+        return False
+    def kill_pane(self, pane_id: str) -> None:
+        pass
+    def activate(self, pane_id: str) -> None:
+        pass
+    def create_pane(self, cmd: str, cwd: str, direction: str = "right", percent: int = 50, parent_pane: Optional[str] = None) -> str:
+        raise NotImplementedError("iTerm2 backend not implemented")
 
 
 class WeztermBackend(TerminalBackend):
@@ -731,22 +761,21 @@ _backend_cache: Optional[TerminalBackend] = None
 
 
 def detect_terminal() -> Optional[str]:
-    # Priority: check current env vars (already running in a terminal)
+    # Priority 1: detect *current* terminal session from env vars.
     if os.environ.get("WEZTERM_PANE"):
         return "wezterm"
-    if os.environ.get("TMUX"):
+    if os.environ.get("TMUX") or os.environ.get("TMUX_PANE") or (os.environ.get("TERM") or "").startswith("tmux"):
         return "tmux"
-    # Check configured binary override or cached path
+
+    # Priority 2: detect available split-capable terminals.
+    # Note: "tmux is installed" != "we are in tmux", so don't auto-select tmux here.
     if _get_wezterm_bin():
         return "wezterm"
     override = os.environ.get("CODEX_IT2_BIN") or os.environ.get("IT2_BIN")
     if override and Path(override).expanduser().exists():
         return "iterm2"
-    # Check available terminal tools
     if shutil.which("it2"):
         return "iterm2"
-    if shutil.which("tmux") or shutil.which("tmux.exe"):
-        return "tmux"
     return None
 
 

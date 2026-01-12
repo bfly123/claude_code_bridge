@@ -1,6 +1,6 @@
 <div align="center">
 
-# Claude Code Bridge (ccb) v3.0.0
+# Claude Code Bridge (ccb) v4.0
 
 **Silky Smooth Claude & Codex & Gemini Collaboration via Split-Pane Terminal**
 
@@ -15,7 +15,7 @@
   <img src="https://img.shields.io/badge/Every_Model_Controllable-CF1322?style=for-the-badge" alt="Every Model Controllable">
 </p>
 
-[![Version](https://img.shields.io/badge/version-3.0.0-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-4.0-orange.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![CI](https://github.com/bfly123/claude_code_bridge/actions/workflows/test.yml/badge.svg)](https://github.com/bfly123/claude_code_bridge/actions/workflows/test.yml)
@@ -183,7 +183,10 @@ ccb up codex            # Start Codex
 ccb up gemini           # Start Gemini
 ccb up opencode         # Start OpenCode
 ccb up codex gemini     # Start both
-ccb up codex gemini opencode  # Start all three
+ccb up codex gemini opencode  # Start all three (spaces)
+ccb up codex,gemini,opencode  # Start all three (commas)
+
+tmux tip: CCB's tmux status/pane theming is enabled only while CCB is running.
 ccb-layout              # Start 2x2 layout (Codex+Gemini+OpenCode)
 ```
 
@@ -204,7 +207,7 @@ ccb update              # Update ccb to the latest version
 
 ## 🪟 Windows Installation Guide (WSL vs Native)
 
-> **Key Point:** `ccb/cask-w/cping` must run in the **same environment** as `codex/gemini`. The most common issue is environment mismatch causing `cping` to fail.
+> **Key Point:** `ccb/cask/cping/cpend` must run in the **same environment** as `codex/gemini`. The most common issue is environment mismatch causing `cping` to fail.
 
 ### 1) Prerequisites: Install Native WezTerm
 
@@ -317,7 +320,6 @@ Once started, collaborate naturally. Claude will detect when to delegate tasks.
 | Command | Description |
 | :--- | :--- |
 | `/cask <msg>` | Background mode: Submit task to Codex, free to continue other tasks (recommended) |
-| `/cask-w <msg>` | Foreground mode: Submit task and wait for response, faster but blocking |
 | `cpend [N]` | Fetch Codex conversation history, N controls rounds (default 1) |
 | `cping` | Test Codex connectivity |
 
@@ -326,7 +328,6 @@ Once started, collaborate naturally. Claude will detect when to delegate tasks.
 | Command | Description |
 | :--- | :--- |
 | `/gask <msg>` | Background mode: Submit task to Gemini |
-| `/gask-w <msg>` | Foreground mode: Submit task and wait for response |
 | `gpend [N]` | Fetch Gemini conversation history |
 | `gping` | Test Gemini connectivity |
 
@@ -374,6 +375,11 @@ Once started, collaborate naturally. Claude will detect when to delegate tasks.
 
 <details>
 <summary><b>Version History</b></summary>
+
+### v4.0
+- **Full Refactor**: Rebuilt from the ground up with a cleaner architecture
+- **Perfect tmux Support**: First-class splits, pane labels, borders and statusline
+- **Works in Any Terminal**: Recommended to run everything in tmux (except native Windows)
 
 ### v3.0.0
 - **Smart Daemons**: `caskd`/`gaskd`/`oaskd` with 60s idle timeout & parallel queue support

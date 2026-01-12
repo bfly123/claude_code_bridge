@@ -19,9 +19,12 @@ MESSAGES = {
         "solutions": "Solutions:",
         "install_wezterm": "Install WezTerm (recommended): https://wezfurlong.org/wezterm/",
         "or_install_tmux": "Or install tmux",
+        "tmux_installed_not_inside": "tmux is installed, but you're not inside a tmux session (run `tmux` first, then `ccb up`)",
         "or_set_ccb_terminal": "Or set CCB_TERMINAL=wezterm and configure CODEX_WEZTERM_BIN",
         "tmux_not_installed": "tmux not installed and WezTerm unavailable",
         "install_wezterm_or_tmux": "Solution: Install WezTerm (recommended) or tmux",
+        "creating_tmux_session": "Creating tmux session: {session}",
+        "attaching_to_tmux": "Attaching to tmux session: {session}",
 
         # Startup messages
         "starting_backend": "Starting {provider} backend ({terminal})...",
@@ -40,8 +43,8 @@ MESSAGES = {
         "runtime_dir": "Runtime dir: {runtime_dir}",
         "active_backends": "Active backends: {backends}",
         "available_commands": "Available commands:",
-        "codex_commands": "cask/cask-w/caskd/cping/cpend - Codex communication",
-        "gemini_commands": "gask/gask-w/gping/gpend - Gemini communication",
+        "codex_commands": "cask/caskd/cping/cpend - Codex communication",
+        "gemini_commands": "gask/gping/gpend - Gemini communication",
         "executing": "Executing: {cmd}",
         "user_interrupted": "User interrupted",
         "cleaning_up": "Cleaning up session resources...",
@@ -52,13 +55,7 @@ MESSAGES = {
         "banner_date": "{date}",
         "banner_backends": "Backends: {backends}",
 
-        # No-claude mode
-        "backends_started_no_claude": "Backends started (--no-claude mode)",
-        "switch_to_pane": "Switch to pane:",
-        "kill_hint": "Kill: ccb kill {providers}",
-
-        # Status
-        "backend_status": "AI backend status:",
+        # (removed) no-claude/status helper strings
 
         # Errors
         "cannot_write_session": "Cannot write {filename}: {reason}",
@@ -96,9 +93,12 @@ MESSAGES = {
         "solutions": "解决方案：",
         "install_wezterm": "安装 WezTerm (推荐): https://wezfurlong.org/wezterm/",
         "or_install_tmux": "或安装 tmux",
+        "tmux_installed_not_inside": "已安装 tmux，但当前不在 tmux 会话中（请先运行 `tmux`，再执行 `ccb up`）",
         "or_set_ccb_terminal": "或设置 CCB_TERMINAL=wezterm 并配置 CODEX_WEZTERM_BIN",
         "tmux_not_installed": "tmux 未安装且 WezTerm 不可用",
         "install_wezterm_or_tmux": "解决方案：安装 WezTerm (推荐) 或 tmux",
+        "creating_tmux_session": "正在创建 tmux 会话: {session}",
+        "attaching_to_tmux": "正在连接到 tmux 会话: {session}",
 
         # Startup messages
         "starting_backend": "正在启动 {provider} 后端 ({terminal})...",
@@ -117,8 +117,8 @@ MESSAGES = {
         "runtime_dir": "运行目录: {runtime_dir}",
         "active_backends": "活动后端: {backends}",
         "available_commands": "可用命令：",
-        "codex_commands": "cask/cask-w/caskd/cping/cpend - Codex 通信",
-        "gemini_commands": "gask/gask-w/gping/gpend - Gemini 通信",
+        "codex_commands": "cask/caskd/cping/cpend - Codex 通信",
+        "gemini_commands": "gask/gping/gpend - Gemini 通信",
         "executing": "执行: {cmd}",
         "user_interrupted": "用户中断",
         "cleaning_up": "正在清理会话资源...",
@@ -129,13 +129,7 @@ MESSAGES = {
         "banner_date": "{date}",
         "banner_backends": "后端: {backends}",
 
-        # No-claude mode
-        "backends_started_no_claude": "后端已启动 (--no-claude 模式)",
-        "switch_to_pane": "切换到面板:",
-        "kill_hint": "终止: ccb kill {providers}",
-
-        # Status
-        "backend_status": "AI 后端状态:",
+        # (removed) no-claude/status helper strings
 
         # Errors
         "cannot_write_session": "无法写入 {filename}: {reason}",

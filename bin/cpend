@@ -5,6 +5,7 @@ cpend - View latest Codex reply
 
 import json
 import os
+import argparse
 import sys
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from i18n import t
 try:
     from cli_output import EXIT_ERROR, EXIT_NO_REPLY, EXIT_OK
     from codex_comm import CodexLogReader, SESSION_ID_PATTERN
+    from ccb_protocol import strip_trailing_markers
     from pane_registry import load_registry_by_session_id, load_registry_by_claude_pane
 except ImportError as exc:
     print(f"Import failed: {exc}")
@@ -92,20 +94,21 @@ def _derive_session_filter(log_path: Path | None, registry_record: dict | None, 
 def _parse_n(argv: list[str]) -> int:
     if len(argv) <= 1:
         return 1
-    if argv[1] in ("-h", "--help"):
-        print("Usage: cpend [N]", file=sys.stderr)
-        raise SystemExit(EXIT_OK)
     try:
         n = int(argv[1])
     except ValueError:
-        print("Usage: cpend [N]", file=sys.stderr)
-        raise SystemExit(EXIT_ERROR)
+        return 1
     return max(1, n)
 
 
 def main(argv: list[str]) -> int:
     try:
-        n = _parse_n(argv)
+        parser = argparse.ArgumentParser(prog="cpend", add_help=True)
+        parser.add_argument("n", nargs="?", type=int, default=1, help="Show the latest N conversations")
+        parser.add_argument("--raw", action="store_true", help="Do not strip protocol/harness marker lines")
+        args = parser.parse_args(argv[1:])
+        n = max(1, int(args.n or 1))
+        raw = bool(args.raw)
 
         registry_log_path, registry_record = _load_registry_log_path()
         session_log_path, session_id = _load_session_log_path()
@@ -125,7 +128,8 @@ def main(argv: list[str]) -> int:
             for i, (question, reply) in enumerate(conversations):
                 if question:
                     print(f"Q: {question}")
-                print(f"A: {reply}")
+                cleaned = reply if raw else strip_trailing_markers(reply or "")
+                print(f"A: {cleaned}")
                 if i < len(conversations) - 1:
                     print("---")
             return EXIT_OK
@@ -134,7 +138,7 @@ def main(argv: list[str]) -> int:
         if not message:
             print(t("no_reply_available", provider="Codex"), file=sys.stderr)
             return EXIT_NO_REPLY
-        print(message)
+        print(message if raw else strip_trailing_markers(message))
         return EXIT_OK
     except Exception as exc:
         if _debug_enabled():

@@ -41,7 +41,9 @@ class GeminiProjectSession:
 
     @property
     def pane_id(self) -> str:
-        v = self.data.get("pane_id") if self.terminal in ("wezterm", "iterm2") else self.data.get("tmux_session")
+        v = self.data.get("pane_id")
+        if not v and self.terminal == "tmux":
+            v = self.data.get("tmux_session")
         return str(v or "").strip()
 
     @property
@@ -60,6 +62,14 @@ class GeminiProjectSession:
     def work_dir(self) -> str:
         return str(self.data.get("work_dir") or self.session_file.parent)
 
+    @property
+    def runtime_dir(self) -> Path:
+        return Path(self.data.get("runtime_dir") or self.session_file.parent)
+
+    @property
+    def start_cmd(self) -> str:
+        return str(self.data.get("start_cmd") or "").strip()
+
     def backend(self):
         return get_backend_for_session(self.data)
 
@@ -76,11 +86,45 @@ class GeminiProjectSession:
         resolver = getattr(backend, "find_pane_by_title_marker", None)
         if marker and callable(resolver):
             resolved = resolver(marker)
-            if resolved:
+            if resolved and backend.is_alive(str(resolved)):
                 self.data["pane_id"] = str(resolved)
                 self.data["updated_at"] = _now_str()
                 self._write_back()
                 return True, str(resolved)
+
+        if self.terminal == "tmux":
+            start_cmd = self.start_cmd
+            respawn = getattr(backend, "respawn_pane", None)
+            if start_cmd and callable(respawn):
+                last_err: str | None = None
+                target = pane_id
+                if marker and callable(resolver):
+                    try:
+                        target = resolver(marker) or target
+                    except Exception:
+                        pass
+                if target and str(target).startswith("%"):
+                    try:
+                        saver = getattr(backend, "save_crash_log", None)
+                        if callable(saver):
+                            try:
+                                runtime = self.runtime_dir
+                                runtime.mkdir(parents=True, exist_ok=True)
+                                crash_log = runtime / f"pane-crash-{int(time.time())}.log"
+                                saver(str(target), str(crash_log), lines=1000)
+                            except Exception:
+                                pass
+                        respawn(str(target), cmd=start_cmd, cwd=self.work_dir, remain_on_exit=True)
+                        if backend.is_alive(str(target)):
+                            self.data["pane_id"] = str(target)
+                            self.data["updated_at"] = _now_str()
+                            self._write_back()
+                            return True, str(target)
+                        last_err = "respawn did not revive pane"
+                    except Exception as exc:
+                        last_err = f"{exc}"
+                if last_err:
+                    return False, f"Pane not alive and respawn failed: {last_err}"
 
         return False, f"Pane not alive: {pane_id}"
 

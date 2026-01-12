@@ -27,16 +27,16 @@ $script:CCB_END_MARKER = "<!-- CCB_CONFIG_END -->"
 
 $script:SCRIPTS_TO_LINK = @(
   "ccb",
-  "cask", "cask-w", "caskd", "cpend", "cping",
-  "gask", "gask-w", "gaskd", "gpend", "gping",
-  "oask", "oask-w", "oaskd", "opend", "oping",
+  "cask", "caskd", "cpend", "cping",
+  "gask", "gaskd", "gpend", "gping",
+  "oask", "oaskd", "opend", "oping",
   "ccb-layout"
 )
 
 $script:CLAUDE_MARKDOWN = @(
-  "cask-w.md", "cpend.md", "cping.md",
-  "gask-w.md", "gpend.md", "gping.md",
-  "oask-w.md", "opend.md", "oping.md"
+  "cpend.md", "cping.md",
+  "gpend.md", "gping.md",
+  "opend.md", "oping.md"
 )
 
 $script:LEGACY_SCRIPTS = @(
@@ -69,7 +69,7 @@ function Get-Msg {
     "confirm_windows" = @{ en = "Continue installation in Windows? (y/N)"; zh = "确认继续在 Windows 中安装？(y/N)" }
     "cancelled" = @{ en = "Installation cancelled"; zh = "安装已取消" }
     "windows_warning" = @{ en = "You are installing ccb in native Windows environment"; zh = "你正在 Windows 原生环境安装 ccb" }
-    "same_env" = @{ en = "ccb/cask-w must run in the same environment as codex/gemini."; zh = "ccb/cask-w 必须与 codex/gemini 在同一环境运行。" }
+    "same_env" = @{ en = "ccb/cask/cping/cpend must run in the same environment as codex/gemini."; zh = "ccb/cask/cping/cpend 必须与 codex/gemini 在同一环境运行。" }
   }
   if ($msgs.ContainsKey($Key)) {
     return $msgs[$Key][$script:CCBLang]
@@ -167,7 +167,7 @@ function Confirm-BackendEnv {
   Write-Host "================================================================"
   Write-Host "[WARNING] You are installing ccb in native Windows environment"
   Write-Host "================================================================"
-  Write-Host "ccb/cask-w must run in the same environment as codex/gemini."
+  Write-Host "ccb/cask/cping/cpend must run in the same environment as codex/gemini."
   Write-Host ""
   Write-Host "Please confirm: You will install and run codex/gemini in native Windows (not WSL)."
   Write-Host "If you plan to run codex/gemini in WSL, exit and run in WSL:"
@@ -230,9 +230,9 @@ function Install-Native {
 
   $scripts = @(
     "ccb",
-    "cask", "cask-w", "caskd", "cping", "cpend",
-    "gask", "gask-w", "gaskd", "gping", "gpend",
-    "oask", "oask-w", "oaskd", "oping", "opend",
+    "cask", "caskd", "cping", "cpend",
+    "gask", "gaskd", "gping", "gpend",
+    "oask", "oaskd", "oping", "opend",
     "ccb-layout"
   )
 
@@ -398,9 +398,9 @@ Important restrictions:
 ### Command Map
 | Assistant | Prefixes | ASK_CMD (background) | PING_CMD | Explicit-request-only |
 |---|---|---|---|---|
-| Codex | ``@codex``, ``codex:``, ``ask codex``, ``let codex``, ``/cask`` | ``cask`` | ``cping`` | ``cask-w``, ``cpend`` |
-| Gemini | ``@gemini``, ``gemini:``, ``ask gemini``, ``let gemini``, ``/gask`` | ``gask`` | ``gping`` | ``gask-w``, ``gpend`` |
-| OpenCode | ``@opencode``, ``opencode:``, ``ask opencode``, ``let opencode``, ``/oask`` | ``oask`` | ``oping`` | ``oask-w``, ``opend`` |
+| Codex | ``@codex``, ``codex:``, ``ask codex``, ``let codex``, ``/cask`` | ``cask`` | ``cping`` | ``cpend`` |
+| Gemini | ``@gemini``, ``gemini:``, ``ask gemini``, ``let gemini``, ``/gask`` | ``gask`` | ``gping`` | ``gpend`` |
+| OpenCode | ``@opencode``, ``opencode:``, ``ask opencode``, ``let opencode``, ``/oask`` | ``oask`` | ``oping`` | ``opend`` |
 
 Examples:
 - ``codex: review this code`` -> ``Bash(cask "...", run_in_background=true)``, END turn
@@ -443,9 +443,9 @@ Examples:
   }
 
   $allowList = @(
-    "Bash(cask:*)", "Bash(cask-w:*)", "Bash(cpend)", "Bash(cping)",
-    "Bash(gask:*)", "Bash(gask-w:*)", "Bash(gpend)", "Bash(gping)",
-    "Bash(oask:*)", "Bash(oask-w:*)", "Bash(opend)", "Bash(oping)"
+    "Bash(cask:*)", "Bash(cpend)", "Bash(cping)",
+    "Bash(gask:*)", "Bash(gpend)", "Bash(gping)",
+    "Bash(oask:*)", "Bash(opend)", "Bash(oping)"
   )
 
   if (Test-Path $settingsJson) {

@@ -59,8 +59,8 @@ msg() {
       en_msg="Detected WSL environment"
       zh_msg="检测到 WSL 环境" ;;
     same_env_required)
-      en_msg="ccb/cask-w must run in the same environment as codex/gemini."
-      zh_msg="ccb/cask-w 必须与 codex/gemini 在同一环境运行。" ;;
+      en_msg="ccb/cask/cping/cpend must run in the same environment as codex/gemini."
+      zh_msg="ccb/cask/cping/cpend 必须与 codex/gemini 在同一环境运行。" ;;
     confirm_wsl_native)
       en_msg="Please confirm: you will install and run codex/gemini in WSL (not Windows native)."
       zh_msg="请确认：你将在 WSL 中安装并运行 codex/gemini（不是 Windows 原生）。" ;;
@@ -89,32 +89,27 @@ fi
 
 SCRIPTS_TO_LINK=(
   bin/cask
-  bin/cask-w
   bin/caskd
   bin/cpend
   bin/cping
   bin/gask
-  bin/gask-w
   bin/gaskd
   bin/gpend
   bin/gping
   bin/oask
-  bin/oask-w
   bin/oaskd
   bin/opend
   bin/oping
+  bin/lask
   bin/ccb-layout
   ccb
 )
 
 CLAUDE_MARKDOWN=(
-  cask-w.md
   cpend.md
   cping.md
-  gask-w.md
   gpend.md
   gping.md
-  oask-w.md
   opend.md
   oping.md
 )
@@ -280,7 +275,7 @@ confirm_backend_env_wsl() {
   echo "================================================================"
   echo "WARN: Detected WSL environment"
   echo "================================================================"
-  echo "ccb/cask-w must run in the same environment as codex/gemini."
+  echo "ccb/cask/cping/cpend must run in the same environment as codex/gemini."
   echo
   echo "Please confirm: you will install and run codex/gemini in WSL (not Windows native)."
   echo "If you plan to run codex/gemini in Windows native, exit and run on Windows side:"
@@ -842,14 +837,14 @@ Actions:
 
 Important restrictions:
 - After starting a background ask, do NOT poll for results; wait for `bash-notification`
-- Do NOT use `*-w` / `*pend` / `*end` unless the user explicitly requests
+  - Do NOT use `*pend` / `*end` unless the user explicitly requests
 
-### Command Map
-| Assistant | Prefixes | ASK_CMD (background) | PING_CMD | Explicit-request-only |
-|---|---|---|---|---|
-| Codex | `@codex`, `codex:`, `ask codex`, `let codex`, `/cask` | `cask` | `cping` | `cask-w`, `cpend` |
-| Gemini | `@gemini`, `gemini:`, `ask gemini`, `let gemini`, `/gask` | `gask` | `gping` | `gask-w`, `gpend` |
-| OpenCode | `@opencode`, `opencode:`, `ask opencode`, `let opencode`, `/oask` | `oask` | `oping` | `oask-w`, `opend` |
+  ### Command Map
+  | Assistant | Prefixes | ASK_CMD (background) | PING_CMD | Explicit-request-only |
+  |---|---|---|---|---|
+  | Codex | `@codex`, `codex:`, `ask codex`, `let codex`, `/cask` | `cask` | `cping` | `cpend` |
+  | Gemini | `@gemini`, `gemini:`, `ask gemini`, `let gemini`, `/gask` | `gask` | `gping` | `gpend` |
+  | OpenCode | `@opencode`, `opencode:`, `ask opencode`, `let opencode`, `/oask` | `oask` | `oping` | `opend` |
 
 Examples:
 - `codex: review this code` -> `Bash(cask "...", run_in_background=true)`, END turn
@@ -911,15 +906,12 @@ install_settings_permissions() {
 
   local perms_to_add=(
     'Bash(cask:*)'
-    'Bash(cask-w:*)'
     'Bash(cpend)'
     'Bash(cping)'
     'Bash(gask:*)'
-    'Bash(gask-w:*)'
     'Bash(gpend)'
     'Bash(gping)'
     'Bash(oask:*)'
-    'Bash(oask-w:*)'
     'Bash(opend)'
     'Bash(oping)'
   )
@@ -927,21 +919,18 @@ install_settings_permissions() {
   if [[ ! -f "$settings_file" ]]; then
     cat > "$settings_file" << 'SETTINGS'
 {
-  "permissions": {
-    "allow": [
-      "Bash(cask:*)",
-      "Bash(cask-w:*)",
-      "Bash(cpend)",
-      "Bash(cping)",
-      "Bash(gask:*)",
-      "Bash(gask-w:*)",
-      "Bash(gpend)",
-      "Bash(gping)",
-      "Bash(oask:*)",
-      "Bash(oask-w:*)",
-      "Bash(opend)",
-      "Bash(oping)"
-    ],
+	  "permissions": {
+	    "allow": [
+	      "Bash(cask:*)",
+	      "Bash(cpend)",
+	      "Bash(cping)",
+	      "Bash(gask:*)",
+	      "Bash(gpend)",
+	      "Bash(gping)",
+	      "Bash(oask:*)",
+	      "Bash(opend)",
+	      "Bash(oping)"
+	    ],
     "deny": []
   }
 }
@@ -993,6 +982,142 @@ except Exception as e:
   fi
 }
 
+CCB_TMUX_MARKER="# ============================================================================="
+CCB_TMUX_MARKER_LEGACY="# CCB tmux configuration"
+
+install_tmux_config() {
+  local tmux_conf="$HOME/.tmux.conf"
+  local ccb_tmux_conf="$REPO_ROOT/config/tmux-ccb.conf"
+  local ccb_status_script="$REPO_ROOT/config/ccb-status.sh"
+  local status_install_path="$HOME/.local/bin/ccb-status.sh"
+
+  if [[ ! -f "$ccb_tmux_conf" ]]; then
+    return
+  fi
+
+  # Install ccb-status.sh script
+  if [[ -f "$ccb_status_script" ]]; then
+    mkdir -p "$HOME/.local/bin"
+    cp "$ccb_status_script" "$status_install_path"
+    chmod +x "$status_install_path"
+    echo "Installed: $status_install_path"
+  fi
+
+  # Install ccb-border.sh script (dynamic pane border colors)
+  local ccb_border_script="$REPO_ROOT/config/ccb-border.sh"
+  local border_install_path="$HOME/.local/bin/ccb-border.sh"
+  if [[ -f "$ccb_border_script" ]]; then
+    cp "$ccb_border_script" "$border_install_path"
+    chmod +x "$border_install_path"
+    echo "Installed: $border_install_path"
+  fi
+
+  # Install tmux UI toggle scripts (enable/disable CCB theming per-session)
+  local ccb_tmux_on_script="$REPO_ROOT/config/ccb-tmux-on.sh"
+  local ccb_tmux_off_script="$REPO_ROOT/config/ccb-tmux-off.sh"
+  if [[ -f "$ccb_tmux_on_script" ]]; then
+    cp "$ccb_tmux_on_script" "$HOME/.local/bin/ccb-tmux-on.sh"
+    chmod +x "$HOME/.local/bin/ccb-tmux-on.sh"
+    echo "Installed: $HOME/.local/bin/ccb-tmux-on.sh"
+  fi
+  if [[ -f "$ccb_tmux_off_script" ]]; then
+    cp "$ccb_tmux_off_script" "$HOME/.local/bin/ccb-tmux-off.sh"
+    chmod +x "$HOME/.local/bin/ccb-tmux-off.sh"
+    echo "Installed: $HOME/.local/bin/ccb-tmux-off.sh"
+  fi
+
+  # Check if already configured (new or legacy marker)
+  local already_configured=false
+  if [[ -f "$tmux_conf" ]]; then
+    if grep -q "$CCB_TMUX_MARKER" "$tmux_conf" 2>/dev/null || \
+       grep -q "$CCB_TMUX_MARKER_LEGACY" "$tmux_conf" 2>/dev/null; then
+      already_configured=true
+    fi
+  fi
+
+  if $already_configured; then
+    # Update existing config: remove old CCB block and re-add
+    echo "Updating CCB tmux configuration..."
+    if pick_any_python_bin; then
+      "$PYTHON_BIN" -c "
+import re
+with open('$tmux_conf', 'r', encoding='utf-8') as f:
+    content = f.read()
+# Remove old CCB tmux config block (both new and legacy markers)
+pattern = r'\n*# =+\n# CCB \(Claude Code Bridge\) tmux configuration.*?# =+\n# End of CCB tmux configuration\n# =+'
+content = re.sub(pattern, '', content, flags=re.DOTALL)
+pattern = r'\n*# CCB tmux configuration.*'
+content = re.sub(pattern, '', content, flags=re.DOTALL)
+with open('$tmux_conf', 'w', encoding='utf-8') as f:
+    f.write(content.strip() + '\n' if content.strip() else '')
+"
+    fi
+  else
+    # Backup existing config if present
+    if [[ -f "$tmux_conf" ]]; then
+      cp "$tmux_conf" "$tmux_conf.bak.$(date +%Y%m%d%H%M%S)"
+    fi
+  fi
+
+  # Append CCB tmux config
+  {
+    echo ""
+    cat "$ccb_tmux_conf"
+  } >> "$tmux_conf"
+
+  echo "Updated tmux configuration: $tmux_conf"
+  echo "   - CCB status bar integration (shows AI daemon status)"
+  echo "   - Quick navigation: prefix + c/x/g/o to jump to AI panes"
+  echo "   - Vi-style pane management with h/j/k/l"
+  echo "   - Mouse support and better copy mode"
+  echo "   - Run 'tmux source ~/.tmux.conf' to apply (or restart tmux)"
+}
+
+uninstall_tmux_config() {
+  local tmux_conf="$HOME/.tmux.conf"
+  local status_script="$HOME/.local/bin/ccb-status.sh"
+  local border_script="$HOME/.local/bin/ccb-border.sh"
+
+  # Remove ccb-status.sh script
+  if [[ -f "$status_script" ]]; then
+    rm -f "$status_script"
+    echo "Removed: $status_script"
+  fi
+
+  # Remove ccb-border.sh script
+  if [[ -f "$border_script" ]]; then
+    rm -f "$border_script"
+    echo "Removed: $border_script"
+  fi
+
+  if [[ ! -f "$tmux_conf" ]]; then
+    return
+  fi
+
+  # Check for both new and legacy markers
+  if ! grep -q "$CCB_TMUX_MARKER" "$tmux_conf" 2>/dev/null && \
+     ! grep -q "$CCB_TMUX_MARKER_LEGACY" "$tmux_conf" 2>/dev/null; then
+    return
+  fi
+
+  echo "Removing CCB tmux configuration..."
+  if pick_any_python_bin; then
+    "$PYTHON_BIN" -c "
+import re
+with open('$tmux_conf', 'r', encoding='utf-8') as f:
+    content = f.read()
+# Remove CCB tmux config block (both new and legacy markers)
+pattern = r'\n*# =+\n# CCB \(Claude Code Bridge\) tmux configuration.*?# =+\n# End of CCB tmux configuration\n# =+'
+content = re.sub(pattern, '', content, flags=re.DOTALL)
+pattern = r'\n*# CCB tmux configuration.*'
+content = re.sub(pattern, '', content, flags=re.DOTALL)
+with open('$tmux_conf', 'w', encoding='utf-8') as f:
+    f.write(content.strip() + '\n' if content.strip() else '')
+"
+    echo "Removed CCB tmux configuration from $tmux_conf"
+  fi
+}
+
 install_requirements() {
   check_wsl_compatibility
   confirm_backend_env_wsl
@@ -1021,6 +1146,7 @@ install_all() {
   install_codex_skills
   install_claude_md_config
   install_settings_permissions
+  install_tmux_config
   echo "OK: Installation complete"
   echo "   Project dir    : $INSTALL_PREFIX"
   echo "   Executable dir : $BIN_DIR"
@@ -1092,15 +1218,12 @@ uninstall_settings_permissions() {
 
   local perms_to_remove=(
     'Bash(cask:*)'
-    'Bash(cask-w:*)'
     'Bash(cpend)'
     'Bash(cping)'
     'Bash(gask:*)'
-    'Bash(gask-w:*)'
     'Bash(gpend)'
     'Bash(gping)'
     'Bash(oask:*)'
-    'Bash(oask-w:*)'
     'Bash(opend)'
     'Bash(oping)'
   )
@@ -1123,15 +1246,12 @@ import sys
 path = '$settings_file'
 perms_to_remove = [
     'Bash(cask:*)',
-    'Bash(cask-w:*)',
     'Bash(cpend)',
     'Bash(cping)',
     'Bash(gask:*)',
-    'Bash(gask-w:*)',
     'Bash(gpend)',
     'Bash(gping)',
     'Bash(oask:*)',
-    'Bash(oask-w:*)',
     'Bash(opend)',
     'Bash(oping)',
 ]
@@ -1201,6 +1321,9 @@ uninstall_all() {
 
   # 5. Remove permission configuration from settings.json
   uninstall_settings_permissions
+
+  # 6. Remove tmux configuration
+  uninstall_tmux_config
 
   echo "OK: Uninstall complete"
   echo "   NOTE: Dependencies (python, tmux, wezterm, it2) were not removed"
