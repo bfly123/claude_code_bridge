@@ -32,5 +32,14 @@ jobs:
         run: python -m compileall -q lib bin ccb
 
       - name: Run tests
-        run: pytest test/ -v
+        run: pytest test/ -v --tb=short
+
+      - name: Debug on failure (Windows)
+        if: failure() && runner.os == 'Windows'
+        run: |
+          python --version
+          python -c "import sys; print('Platform:', sys.platform); print('Executable:', sys.executable)"
+          dir lib
+          type lib\terminal.py | findstr /N "import"
+        shell: cmd
 
