@@ -66,9 +66,9 @@ jobs:
         shell: wsl-bash {0}
         run: |
           sudo apt-get update
-          sudo apt-get install -y python${{ matrix.python-version }} python${{ matrix.python-version }}-venv python3-pip tmux
-          python${{ matrix.python-version }} -m pip install --upgrade pip
-          python${{ matrix.python-version }} -m pip install pytest
+          sudo apt-get install -y python3 python3-venv python3-pip tmux
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pytest
 
       - name: Syntax check in WSL
         shell: wsl-bash {0}
