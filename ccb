@@ -1052,7 +1052,72 @@ class AILauncher:
                 return sid, True
         return None, False
 
+    def _ensure_codex_auto_approval(self) -> None:
+        """Auto-configure codex approval policy for current directory when -a flag is used."""
+        codex_config = Path.home() / ".codex" / "config.toml"
+        if not codex_config.exists():
+            return
+
+        cwd = str(Path.cwd())
+        section_header = f'[projects."{cwd}"]'
+
+        try:
+            content = codex_config.read_text(encoding="utf-8")
+
+            if section_header in content:
+                lines = content.split("\n")
+                new_lines = []
+                i = 0
+                while i < len(lines):
+                    line = lines[i]
+                    new_lines.append(line)
+
+                    if line.strip() == section_header:
+                        has_trust = False
+                        has_approval = False
+                        has_sandbox = False
+
+                        j = i + 1
+                        section_end = j
+                        while j < len(lines):
+                            next_line = lines[j].strip()
+                            if next_line.startswith("["):
+                                break
+                            if next_line.startswith("trust_level"):
+                                has_trust = True
+                            if next_line.startswith("approval_policy"):
+                                has_approval = True
+                            if next_line.startswith("sandbox_mode"):
+                                has_sandbox = True
+                            section_end = j + 1
+                            j += 1
+
+                        for k in range(i + 1, section_end):
+                            new_lines.append(lines[k])
+
+                        if not has_trust:
+                            new_lines.append('trust_level = "trusted"')
+                        if not has_approval:
+                            new_lines.append('approval_policy = "never"')
+                        if not has_sandbox:
+                            new_lines.append('sandbox_mode = "full-auto"')
+
+                        i = section_end - 1
+                    i += 1
+
+                content = "\n".join(new_lines)
+            else:
+                new_section = f'\n{section_header}\ntrust_level = "trusted"\napproval_policy = "never"\nsandbox_mode = "full-auto"\n'
+                content = content.rstrip() + new_section
+
+            codex_config.write_text(content, encoding="utf-8")
+            print(f"✅ Codex auto-approval configured for: {cwd}")
+        except Exception as e:
+            print(f"⚠️ Failed to configure codex auto-approval: {e}")
+
     def _build_codex_start_cmd(self) -> str:
+        if self.auto:
+            self._ensure_codex_auto_approval()
         cmd = "codex -c=disable_paste_burst=true --dangerously-bypass-approvals-and-sandbox" if self.auto else "codex -c=disable_paste_burst=true"
         codex_resumed = False
         if self.resume:
