@@ -322,11 +322,14 @@ class TmuxBackend(TerminalBackend):
         else:
             raise ValueError(f"unsupported direction: {direction!r} (use 'right' or 'bottom')")
 
-        pct = max(1, min(99, int(percent)))
+        # NOTE: Do not pass `-p <percent>` here.
+        #
+        # tmux 3.4 can error with `size missing` when splitting panes by percentage in detached
+        # sessions (e.g. auto-created sessions before any client is attached). Using tmux's default
+        # 50% split avoids that class of failures and is what CCB uses for its layouts anyway.
         try:
-            # Prefer `-pNN` to avoid tmux versions/environments that misparse `-p NN` as "size missing".
             cp = self._tmux_run(
-                ["split-window", flag, f"-p{pct}", "-t", parent_pane_id, "-P", "-F", "#{pane_id}"],
+                ["split-window", flag, "-t", parent_pane_id, "-P", "-F", "#{pane_id}"],
                 check=True,
                 capture=True,
             )
@@ -334,22 +337,6 @@ class TmuxBackend(TerminalBackend):
             out = (getattr(e, "stdout", "") or "").strip()
             err = (getattr(e, "stderr", "") or "").strip()
             msg = err or out
-
-            # Last-resort fallback: some tmux builds still choke on explicit sizing,
-            # but succeed with default 50% split.
-            if "size missing" in msg.lower():
-                try:
-                    cp = self._tmux_run(
-                        ["split-window", flag, "-t", parent_pane_id, "-P", "-F", "#{pane_id}"],
-                        check=True,
-                        capture=True,
-                    )
-                    pane_id = (cp.stdout or "").strip()
-                    if not self._looks_like_pane_id(pane_id):
-                        raise RuntimeError(f"tmux split-window did not return pane_id: {pane_id!r}")
-                    return pane_id
-                except Exception:
-                    pass
             raise RuntimeError(
                 f"tmux split-window failed (exit {e.returncode}): {msg or 'no stdout/stderr'}\n"
                 f"Pane: {parent_pane_id}, size: {pane_size}, direction: {direction_norm}\n"

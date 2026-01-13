@@ -37,7 +37,7 @@ def test_tmux_split_pane_builds_command_and_parses_pane_id(monkeypatch: pytest.M
     assert call["capture"] is True
     argv = call["args"]
     assert argv[:2] == ["split-window", "-h"]
-    assert any(a in argv for a in ("-p50", "-p",))
+    assert not any(a.startswith("-p") for a in argv)
     assert "-t" in argv and "%1" in argv
     assert "-P" in argv
     assert "-F" in argv and "#{pane_id}" in argv
