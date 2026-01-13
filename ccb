@@ -627,15 +627,14 @@ class AILauncher:
         if os.environ.get("ITERM_SESSION_ID"):
             return "iterm2"
 
-        # Not inside any terminal multiplexer - prefer tmux for auto-session creation
-        # This allows `ccb up` in a plain terminal to create and attach to a tmux session
-        if shutil.which("tmux"):
-            return "tmux"
-
-        # Fallback to WezTerm if available (will create split in new WezTerm window)
+        # Not inside any multiplexer:
+        # Prefer split-capable terminals (WezTerm/iTerm2) when available,
+        # otherwise fall back to tmux auto-session creation.
         detected = detect_terminal()
         if detected:
             return detected
+        if shutil.which("tmux"):
+            return "tmux"
 
         # Nothing found
         return None

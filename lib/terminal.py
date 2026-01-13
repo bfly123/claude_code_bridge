@@ -806,7 +806,7 @@ def detect_terminal() -> Optional[str]:
     # Priority 1: detect *current* terminal session from env vars.
     if os.environ.get("WEZTERM_PANE"):
         return "wezterm"
-    if os.environ.get("TMUX") or os.environ.get("TMUX_PANE") or (os.environ.get("TERM") or "").startswith("tmux"):
+    if os.environ.get("TMUX") or os.environ.get("TMUX_PANE"):
         return "tmux"
 
     # Priority 2: detect available split-capable terminals.
