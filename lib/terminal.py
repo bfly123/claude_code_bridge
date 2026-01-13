@@ -292,6 +292,19 @@ class TmuxBackend(TerminalBackend):
         if not parent_pane_id:
             raise ValueError("parent_pane_id is required")
 
+        # tmux cannot split a zoomed pane; unzoom automatically for a smoother UX.
+        try:
+            if self._looks_like_pane_id(parent_pane_id):
+                zoom_cp = self._tmux_run(
+                    ["display-message", "-p", "-t", parent_pane_id, "#{window_zoomed_flag}"],
+                    capture=True,
+                    timeout=0.5,
+                )
+                if zoom_cp.returncode == 0 and (zoom_cp.stdout or "").strip() in ("1", "on", "yes", "true"):
+                    self._tmux_run(["resize-pane", "-Z", "-t", parent_pane_id], check=False, timeout=0.5)
+        except Exception:
+            pass
+
         if self._looks_like_pane_id(parent_pane_id) and not self.is_pane_alive(parent_pane_id):
             raise RuntimeError(f"Cannot split: pane {parent_pane_id} does not exist or is dead")
 
@@ -322,7 +335,7 @@ class TmuxBackend(TerminalBackend):
                 f"tmux split-window failed (exit {e.returncode}): {stderr or 'no stderr'}\n"
                 f"Pane: {parent_pane_id}, size: {pane_size}, direction: {direction_norm}\n"
                 f"Command: {' '.join(e.cmd)}\n"
-                f"Hint: Enlarge terminal window (min ~10 cols/rows per pane) or reduce number of providers."
+                f"Hint: If the pane is zoomed, press Prefix+z to unzoom; also try enlarging terminal window."
             ) from e
         pane_id = (cp.stdout or "").strip()
         if not self._looks_like_pane_id(pane_id):
