@@ -692,10 +692,7 @@ class AILauncher:
         # `ai-<epoch>-<pid>` collides frequently (same day) and can incorrectly attach to an old session.
         session_name = f"ccb-{self.session_id}"
         providers_str = ",".join(self.providers)
-        ccb_cmd = (
-            f"cd {shlex.quote(str(Path.cwd()))} && "
-            f"{shlex.quote(str(self.script_dir / 'ccb'))} up {shlex.quote(providers_str)}"
-        )
+        ccb_cmd = f"{shlex.quote(str(self.script_dir / 'ccb'))} up {shlex.quote(providers_str)}"
 
         # Check if session already exists
         check = subprocess.run(
@@ -711,22 +708,65 @@ class AILauncher:
 
         print(f"📺 {t('creating_tmux_session', session=session_name)}")
 
-        # Create new tmux session with ccb command
+        # Create new tmux session and run ccb directly as the session command.
+        #
+        # Tmux 3.4 may run into pane sizing issues in detached sessions (no client attached yet).
+        # We avoid `split-window -p` elsewhere, but setting an initial session size still improves UX.
+        size_override = (os.environ.get("CCB_TMUX_START_SIZE") or "").strip().lower()
+        width = None
+        height = None
+        if size_override and "x" in size_override:
+            try:
+                w_s, h_s = size_override.split("x", 1)
+                width = int(w_s.strip())
+                height = int(h_s.strip())
+            except Exception:
+                width = None
+                height = None
+        if width is None or height is None:
+            try:
+                sz = shutil.get_terminal_size(fallback=(120, 30))
+                width = int(sz.columns)
+                height = int(sz.lines)
+            except Exception:
+                width = None
+                height = None
+
         try:
-            subprocess.run(
-                ["tmux", "new-session", "-d", "-s", session_name, "-c", str(Path.cwd())],
-                check=True,
-            )
-            # Send the ccb command to the new session
-            subprocess.run(
-                ["tmux", "send-keys", "-t", session_name, ccb_cmd, "Enter"],
-                check=True,
-            )
+            base_cmd = ["tmux", "new-session", "-d", "-s", session_name, "-c", str(Path.cwd())]
+            sized_cmd = list(base_cmd)
+            if width and height and width >= 40 and height >= 10:
+                sized_cmd.extend(["-x", str(width), "-y", str(height)])
+            sized_cmd.append(ccb_cmd)
+
+            try:
+                subprocess.run(
+                    sized_cmd,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+            except subprocess.CalledProcessError:
+                # Fallback for older tmux versions that may not support -x/-y.
+                subprocess.run(
+                    [*base_cmd, ccb_cmd],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+
             # Attach to the session (replaces current process)
             print(f"🔗 {t('attaching_to_tmux', session=session_name)}")
             os.execlp("tmux", "tmux", "attach-session", "-t", session_name)
         except subprocess.CalledProcessError as e:
-            print(f"❌ Failed to create tmux session: {e}", file=sys.stderr)
+            stderr = (getattr(e, "stderr", "") or "").strip()
+            stdout = (getattr(e, "stdout", "") or "").strip()
+            detail = stderr or stdout or str(e)
+            print(f"❌ Failed to create tmux session: {detail}", file=sys.stderr)
             return False
         except Exception as e:
             print(f"❌ Failed to attach to tmux session: {e}", file=sys.stderr)
