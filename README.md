@@ -263,6 +263,7 @@ Check distro name with `wsl -l -v` in PowerShell.
 - **Codex session not running:** Run `ccb up codex` first
 - **WezTerm CLI not found:** Ensure `wezterm` is in PATH
 - **Terminal not refreshed:** Restart WezTerm after installation
+- **Text sent but not submitted (no Enter) on Windows WezTerm:** Set `CCB_WEZTERM_ENTER_METHOD=key` and ensure your WezTerm supports `wezterm cli send-key`
 
 ---
 

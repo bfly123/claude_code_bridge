@@ -63,7 +63,7 @@
 - `bin/caskd`：守护进程；提供本地 RPC；管理 per-session worker、日志 tail、`.codex-session` 更新。
 
 ### 4.2 复用既有组件
-- `lib/terminal.py`：复用 `WeztermBackend.send_text()`（enter 重试、paste/no-paste 策略、WSL/Windows 兼容）。
+- `lib/terminal.py`：复用 `WeztermBackend.send_text()`（优先 `send-key` 发送回车、paste/no-paste 策略、WSL/Windows 兼容）。
 - `lib/codex_comm.py`：复用 JSONL tail 框架，但需要扩展成 **事件级**（同时识别 user+assistant）。
 - `lib/process_lock.py`：可用于 `caskd` 单实例锁（全局 lockfile），也可用于 client fallback 模式。
 

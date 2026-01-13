@@ -624,24 +624,83 @@ class WeztermBackend(TerminalBackend):
         cls._wezterm_bin = found or "wezterm"
         return cls._wezterm_bin
 
+    def _send_key_cli(self, pane_id: str, key: str) -> bool:
+        """
+        Send a key to the target pane using `wezterm cli send-key`.
+
+        WezTerm CLI syntax differs across versions; try a couple variants.
+        """
+        key = (key or "").strip()
+        if not key:
+            return False
+
+        variants = [key]
+        if key.lower() == "enter":
+            variants = ["Enter", "Return", key]
+        elif key.lower() in {"escape", "esc"}:
+            variants = ["Escape", "Esc", key]
+
+        for variant in variants:
+            # Variant A: `send-key --pane-id <id> --key <KeyName>`
+            result = _run(
+                [*self._cli_base_args(), "send-key", "--pane-id", pane_id, "--key", variant],
+                capture_output=True,
+                timeout=2.0,
+            )
+            if result.returncode == 0:
+                return True
+
+            # Variant B: `send-key --pane-id <id> <KeyName>`
+            result = _run(
+                [*self._cli_base_args(), "send-key", "--pane-id", pane_id, variant],
+                capture_output=True,
+                timeout=2.0,
+            )
+            if result.returncode == 0:
+                return True
+
+        return False
+
     def _send_enter(self, pane_id: str) -> None:
-        """Send Enter key reliably using stdin (cross-platform)"""
+        """
+        Send Enter to submit the current input in a TUI.
+
+        Some TUIs in raw mode may ignore a pasted newline byte and require a real key event;
+        prefer `wezterm cli send-key` when available.
+        """
         # Windows needs longer delay
         default_delay = 0.05 if os.name == "nt" else 0.01
         enter_delay = _env_float("CCB_WEZTERM_ENTER_DELAY", default_delay)
         if enter_delay:
             time.sleep(enter_delay)
 
+        env_method_raw = os.environ.get("CCB_WEZTERM_ENTER_METHOD")
+        # Default behavior is intentionally unchanged on non-Windows platforms:
+        # previously we used `send-text` with a CR byte; keep that unless the user overrides.
+        default_method = "auto" if os.name == "nt" else "text"
+        method = (env_method_raw or default_method).strip().lower()
+        if method not in {"auto", "key", "text"}:
+            method = default_method
+
         # Retry mechanism for reliability (Windows native occasionally drops Enter)
         max_retries = 3
         for attempt in range(max_retries):
-            result = _run(
-                [*self._cli_base_args(), "send-text", "--pane-id", pane_id, "--no-paste"],
-                input=b"\r",
-                capture_output=True,
-            )
-            if result.returncode == 0:
-                return
+            # Only enable "auto key" behavior by default on native Windows.
+            # Users can force key injection everywhere via CCB_WEZTERM_ENTER_METHOD=key.
+            if method == "key" or (method == "auto" and os.name == "nt"):
+                if self._send_key_cli(pane_id, "Enter"):
+                    return
+
+            # Fallback: send CR byte; works for shells/readline, but not for all raw-mode TUIs.
+            if method in {"auto", "text", "key"}:
+                result = _run(
+                    [*self._cli_base_args(), "send-text", "--pane-id", pane_id, "--no-paste"],
+                    input=b"\r",
+                    capture_output=True,
+                )
+                if result.returncode == 0:
+                    return
+
             if attempt < max_retries - 1:
                 time.sleep(0.05)
 
@@ -746,6 +805,8 @@ class WeztermBackend(TerminalBackend):
     def send_key(self, pane_id: str, key: str) -> bool:
         """Send a special key (e.g., 'Escape', 'Enter') to pane."""
         try:
+            if self._send_key_cli(pane_id, key):
+                return True
             result = _run(
                 [*self._cli_base_args(), "send-text", "--pane-id", pane_id, "--no-paste"],
                 input=key.encode("utf-8"),

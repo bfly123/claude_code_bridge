@@ -316,6 +316,8 @@ cping
   - `ccb` 在 WezTerm 模式下需要调用 `wezterm cli list` 等命令；如果 `wezterm` 不在 PATH，或 WSL 里找不到 `wezterm.exe`，会导致检测失败（可重开终端或按提示配置 `CODEX_WEZTERM_BIN`）。
 - **PATH/终端未刷新**
   - 安装后请重启终端（WezTerm），再运行 `ccb`/`cping`。
+- **原生 Windows 的 WezTerm：能把文字发到 Codex，但没有“回车提交”**
+  - 设置环境变量 `CCB_WEZTERM_ENTER_METHOD=key`（用 `wezterm cli send-key` 发送真实按键事件；如果你的 WezTerm 版本太旧请升级）。
 
 ---
 
