@@ -19,6 +19,7 @@ from terminal import get_backend_for_session, get_pane_id_from_session
 from ccb_config import apply_backend_env
 from i18n import t
 from pane_registry import upsert_registry, registry_path_for_session, load_registry_by_session_id
+from session_utils import find_project_session_file
 
 apply_backend_env()
 
@@ -672,16 +673,15 @@ class CodexCommunicator:
             self._log_reader_primed = True
 
     def _find_session_file(self) -> Optional[Path]:
-        current = Path.cwd()
-        while current != current.parent:
-            candidate = current / ".ccb_config" / ".codex-session"
-            if candidate.exists():
-                return candidate
-            legacy = current / ".codex-session"
-            if legacy.exists():
-                return legacy
-            current = current.parent
-        return None
+        env_session = (os.environ.get("CCB_SESSION_FILE") or "").strip()
+        if env_session:
+            try:
+                session_path = Path(os.path.expanduser(env_session))
+                if session_path.name == ".codex-session" and session_path.is_file():
+                    return session_path
+            except Exception:
+                pass
+        return find_project_session_file(Path.cwd(), ".codex-session")
 
     def _load_session_info(self):
         if "CODEX_SESSION_ID" in os.environ:

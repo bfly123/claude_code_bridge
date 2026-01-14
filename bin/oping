@@ -4,6 +4,8 @@ oping - Test OpenCode connectivity
 """
 
 import sys
+import os
+import argparse
 from pathlib import Path
 
 script_dir = Path(__file__).resolve().parent
@@ -18,6 +20,11 @@ try:
 
     def main() -> int:
         try:
+            parser = argparse.ArgumentParser(prog="oping", add_help=True)
+            parser.add_argument("--session-file", dest="session_file", default=None, help="Path to .opencode-session (or .ccb_config/.opencode-session)")
+            args = parser.parse_args()
+            if args.session_file:
+                os.environ["CCB_SESSION_FILE"] = str(args.session_file)
             comm = OpenCodeCommunicator()
             healthy, message = comm.ping(display=False)
             print(message)

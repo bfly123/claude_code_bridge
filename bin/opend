@@ -7,6 +7,7 @@ import json
 import os
 import sys
 from pathlib import Path
+import argparse
 
 script_dir = Path(__file__).resolve().parent
 lib_dir = script_dir.parent / "lib"
@@ -18,22 +19,21 @@ setup_windows_encoding()
 from i18n import t
 
 
-def _load_project_id() -> str:
-    """Load project_id from .opencode-session or compute from cwd"""
-    work_dir = Path.cwd()
-
-    try:
-        from session_utils import find_project_session_file
-    except Exception:
-        find_project_session_file = None
-
-    session_file = find_project_session_file(Path.cwd(), ".opencode-session") if find_project_session_file else (Path.cwd() / ".opencode-session")
+def _load_project_id(work_dir: Path, explicit_session_file: Path | None) -> str:
+    """Load project_id from .opencode-session or compute from work_dir"""
+    session_file = explicit_session_file
+    if session_file is None:
+        try:
+            from session_utils import find_project_session_file
+        except Exception:
+            find_project_session_file = None
+        session_file = find_project_session_file(work_dir, ".opencode-session") if find_project_session_file else (work_dir / ".opencode-session")
 
     if session_file and session_file.exists():
         try:
-            with session_file.open('r', encoding='utf-8-sig') as f:
+            with session_file.open("r", encoding="utf-8-sig") as f:
                 data = json.load(f)
-            wd = data.get('work_dir')
+            wd = data.get("work_dir")
             if wd:
                 work_dir = Path(wd)
         except Exception:
@@ -57,11 +57,20 @@ def _debug_enabled() -> bool:
 
 def main(argv: list[str]) -> int:
     try:
-        if len(argv) > 1 and argv[1] in ("-h", "--help"):
-            print("Usage: opend", file=sys.stderr)
-            return EXIT_OK
+        parser = argparse.ArgumentParser(prog="opend", add_help=True)
+        parser.add_argument("--session-file", dest="session_file", default=None, help="Path to .opencode-session (or .ccb_config/.opencode-session)")
+        args = parser.parse_args(argv[1:])
 
-        project_id = _load_project_id()
+        from askd_client import resolve_work_dir
+        from providers import OASK_CLIENT_SPEC
+
+        work_dir, explicit_session_file = resolve_work_dir(
+            OASK_CLIENT_SPEC,
+            cli_session_file=args.session_file,
+            env_session_file=os.environ.get("CCB_SESSION_FILE"),
+        )
+
+        project_id = _load_project_id(work_dir, explicit_session_file)
         reader = OpenCodeLogReader(project_id=project_id)
         message = reader.latest_message()
         if not message:

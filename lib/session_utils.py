@@ -126,16 +126,18 @@ def print_session_error(msg: str, to_stderr: bool = True) -> None:
 
 
 def find_project_session_file(work_dir: Path, session_filename: str) -> Optional[Path]:
+    """
+    Find a session file for the given work_dir.
+
+    Lookup is local-only (no upward traversal):
+      1) <work_dir>/.ccb_config/<session_filename>
+      2) <work_dir>/<session_filename>  (legacy)
+    """
     current = Path(work_dir).resolve()
-    while True:
-        # New location: keep project root clean by storing session files under `.ccb_config/`.
-        candidate = current / CCB_PROJECT_CONFIG_DIRNAME / session_filename
-        if candidate.exists():
-            return candidate
-        # Legacy location: `<work_dir>/.codex-session` etc.
-        legacy = current / session_filename
-        if legacy.exists():
-            return legacy
-        if current == current.parent:
-            return None
-        current = current.parent
+    candidate = current / CCB_PROJECT_CONFIG_DIRNAME / session_filename
+    if candidate.exists():
+        return candidate
+    legacy = current / session_filename
+    if legacy.exists():
+        return legacy
+    return None

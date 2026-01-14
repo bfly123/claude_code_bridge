@@ -28,7 +28,7 @@ sys.path.insert(0, str(script_dir / "lib"))
 from terminal import TmuxBackend, WeztermBackend, detect_terminal, is_wsl, get_shell_type
 from compat import setup_windows_encoding
 from ccb_config import get_backend_env
-from session_utils import safe_write_session, check_session_writable
+from session_utils import safe_write_session, check_session_writable, find_project_session_file
 from pane_registry import upsert_registry
 from i18n import t
 
@@ -38,7 +38,7 @@ backend_env = get_backend_env()
 if backend_env and not os.environ.get("CCB_BACKEND_ENV"):
     os.environ["CCB_BACKEND_ENV"] = backend_env
 
-VERSION = "4.0.5"
+VERSION = "4.0.6"
 GIT_COMMIT = ""
 GIT_DATE = ""
 
@@ -152,6 +152,20 @@ def _work_dir_match_keys(work_dir: Path) -> set[str]:
     return keys
 
 
+def _normpath_within(child_norm: str, parent_norm: str) -> bool:
+    """
+    Return True if normalized path `child_norm` is equal to or inside `parent_norm`.
+
+    Both args must be normalized via `_normalize_path_for_match` (or equivalent).
+    """
+    if not child_norm or not parent_norm:
+        return False
+    if child_norm == parent_norm:
+        return True
+    prefix = parent_norm if parent_norm.endswith("/") else (parent_norm + "/")
+    return child_norm.startswith(prefix)
+
+
 def _extract_session_work_dir_norm(session_data: dict) -> str:
     """Extract a normalized work dir marker from a session file payload."""
     if not isinstance(session_data, dict):
@@ -226,6 +240,13 @@ def _build_export_path_cmd(bin_dir: Path) -> str:
     if current:
         return f"export PATH={shlex.quote(bin_s)}{os.pathsep}{shlex.quote(current)}; "
     return f"export PATH={shlex.quote(bin_s)}{os.pathsep}$PATH; "
+
+
+def _build_cd_cmd(work_dir: Path) -> str:
+    if get_shell_type() == "powershell":
+        safe = str(work_dir).replace("'", "''")
+        return f"Set-Location -Path '{safe}'; "
+    return f"cd {shlex.quote(str(work_dir))}; "
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -512,6 +533,8 @@ class AILauncher:
         self.resume = resume
         self.auto = auto
         self.script_dir = Path(__file__).resolve().parent
+        self.invocation_dir = Path.cwd()
+        self.project_root = self._detect_project_root(self.invocation_dir)
         self.session_id = f"ai-{int(time.time())}-{os.getpid()}"
         self.temp_base = Path(tempfile.gettempdir())
         self.runtime_dir = self.temp_base / f"claude-ai-{getpass.getuser()}" / self.session_id
@@ -524,8 +547,62 @@ class AILauncher:
         self.processes = {}
         self._migrate_legacy_project_files()
 
+    def _detect_project_root(self, start_dir: Path) -> Path:
+        """
+        Best-effort: find a stable project root for session/config files.
+
+        Priority:
+          1) nearest ancestor containing `.ccb_config/`
+          2) nearest ancestor containing a known session file (legacy or new layout)
+          3) git repo root (if available)
+          4) start_dir
+        """
+        start_dir = Path(start_dir)
+        try:
+            start_dir = start_dir.resolve()
+        except Exception:
+            start_dir = start_dir.absolute()
+
+        for candidate in (start_dir, *start_dir.parents):
+            try:
+                if (candidate / ".ccb_config").is_dir():
+                    return candidate
+            except Exception:
+                continue
+
+        for name in (".codex-session", ".gemini-session", ".opencode-session", ".claude-session"):
+            try:
+                found = find_project_session_file(start_dir, name)
+            except Exception:
+                found = None
+            if found:
+                if found.parent.name == ".ccb_config":
+                    return found.parent.parent
+                return found.parent
+
+        try:
+            cp = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                cwd=str(start_dir),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=1,
+            )
+            if cp.returncode == 0:
+                root = (cp.stdout or "").strip()
+                if root:
+                    p = Path(root)
+                    if p.exists():
+                        return p
+        except Exception:
+            pass
+
+        return start_dir
+
     def _project_config_dir(self) -> Path:
-        return Path.cwd() / ".ccb_config"
+        return self.project_root / ".ccb_config"
 
     def _project_session_file(self, filename: str) -> Path:
         cfg = self._project_config_dir()
@@ -546,7 +623,7 @@ class AILauncher:
             return
 
         for name in (".codex-session", ".gemini-session", ".opencode-session", ".claude-session"):
-            legacy = Path.cwd() / name
+            legacy = self.project_root / name
             if not legacy.exists():
                 continue
             try:
@@ -699,7 +776,21 @@ class AILauncher:
         if not script.exists():
             return
         try:
-            subprocess.run([str(script)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            debug = os.environ.get("CCB_DEBUG") in ("1", "true", "yes")
+            cp = subprocess.run(
+                [str(script)],
+                check=False,
+                capture_output=debug,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            if cp.returncode != 0 and debug:
+                out = (cp.stdout or "").strip()
+                err = (cp.stderr or "").strip()
+                detail = "\n".join([s for s in [out, err] if s])
+                if detail:
+                    print(f"⚠️ ccb tmux ui script failed (rc={cp.returncode}):\n{detail}", file=sys.stderr)
         except Exception:
             return
 
@@ -1010,6 +1101,19 @@ class AILauncher:
         Always scans session logs to find the latest session for current cwd,
         then updates local .codex-session file.
         """
+        # Fast-path: use project session file if available (supports `.ccb_config/` + legacy dotfiles).
+        try:
+            existing_session = find_project_session_file(Path.cwd(), ".codex-session")
+        except Exception:
+            existing_session = None
+        if existing_session:
+            data = self._read_json_file(existing_session)
+            sid = data.get("codex_session_id")
+            recorded_norm = _extract_session_work_dir_norm(data)
+            root_norm = _normalize_path_for_match(str(self.project_root))
+            if isinstance(sid, str) and sid.strip() and root_norm and _normpath_within(recorded_norm, root_norm):
+                return sid.strip(), True
+
         project_session = self._project_session_file(".codex-session")
 
         # Always scan Codex session logs for the latest session bound to this cwd.
@@ -1017,8 +1121,8 @@ class AILauncher:
         root = Path(os.environ.get("CODEX_SESSION_ROOT") or (Path.home() / ".codex" / "sessions")).expanduser()
         if not root.exists():
             return None, False
-        work_keys = _work_dir_match_keys(Path.cwd())
-        if not work_keys:
+        root_norm = _normalize_path_for_match(str(self.project_root))
+        if not root_norm:
             return None, False
         try:
             logs = sorted(
@@ -1028,40 +1132,52 @@ class AILauncher:
             )
         except Exception:
             logs = []
-        for log_path in logs[:400]:
+
+        scan_limit = 400
+        raw_limit = (os.environ.get("CCB_CODEX_SCAN_LIMIT") or "").strip()
+        if raw_limit:
+            try:
+                scan_limit = max(100, min(20000, int(raw_limit)))
+            except Exception:
+                scan_limit = 400
+
+        for log_path in logs[:scan_limit]:
             try:
                 with log_path.open("r", encoding="utf-8", errors="ignore") as handle:
-                    first = handle.readline().strip()
+                    head = [handle.readline().strip() for _ in range(30)]
             except OSError:
                 continue
-            if not first:
-                continue
-            try:
-                entry = json.loads(first)
-            except Exception:
-                continue
-            if not isinstance(entry, dict) or entry.get("type") != "session_meta":
-                continue
-            payload = entry.get("payload") if isinstance(entry.get("payload"), dict) else {}
-            cwd = payload.get("cwd")
-            if not isinstance(cwd, str) or not cwd.strip():
-                continue
-            if _normalize_path_for_match(cwd) not in work_keys:
-                continue
-            sid = payload.get("id")
-            if isinstance(sid, str) and sid:
-                # Update local .codex-session file with latest session id
-                data = self._read_json_file(project_session) if project_session.exists() else {}
-                work_dir = Path.cwd()
-                data.update({
-                    "codex_session_id": sid,
-                    "codex_session_path": str(log_path),
-                    "work_dir": str(work_dir),
-                    "work_dir_norm": _normalize_path_for_match(str(work_dir)),
-                    "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                })
-                self._write_json_file(project_session, data)
-                return sid, True
+            for line in head:
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(entry, dict) or entry.get("type") != "session_meta":
+                    continue
+                payload = entry.get("payload") if isinstance(entry.get("payload"), dict) else {}
+                cwd = payload.get("cwd")
+                if not isinstance(cwd, str) or not cwd.strip():
+                    continue
+                cwd_norm = _normalize_path_for_match(cwd)
+                # Accept sessions launched from any directory under the same project root.
+                if not _normpath_within(cwd_norm, root_norm):
+                    continue
+                sid = payload.get("id")
+                if isinstance(sid, str) and sid:
+                    # Update local .codex-session file with latest session id
+                    data = self._read_json_file(project_session) if project_session.exists() else {}
+                    data.update({
+                        "codex_session_id": sid,
+                        "codex_session_path": str(log_path),
+                        "work_dir": str(self.project_root),
+                        "work_dir_norm": _normalize_path_for_match(str(self.project_root)),
+                        "start_dir": str(self.invocation_dir),
+                        "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    })
+                    self._write_json_file(project_session, data)
+                    return sid, True
         return None, False
 
     def _ensure_codex_auto_approval(self) -> None:
@@ -1269,7 +1385,7 @@ class AILauncher:
                 print(f"ℹ️ {t('no_history_fresh', provider='Codex')}")
         return cmd
 
-    def _get_latest_gemini_project_hash(self) -> tuple[str | None, bool]:
+    def _get_latest_gemini_project_hash(self) -> tuple[str | None, bool, Path | None]:
         """
         Returns (project_hash, has_any_history_for_cwd).
         Gemini CLI stores sessions under ~/.gemini/tmp/<sha256(cwd)>/chats/.
@@ -1285,6 +1401,14 @@ class AILauncher:
             pass
         try:
             candidates.append(str(Path.cwd().resolve()))
+        except Exception:
+            pass
+        try:
+            candidates.append(str(self.project_root.absolute()))
+        except Exception:
+            candidates.append(str(self.project_root))
+        try:
+            candidates.append(str(self.project_root.resolve()))
         except Exception:
             pass
         env_pwd = (os.environ.get("PWD") or "").strip()
@@ -1305,16 +1429,26 @@ class AILauncher:
                 continue
             session_files = list(chats_dir.glob("session-*.json"))
             if session_files:
-                return project_hash, True
+                resume_dir = None
+                try:
+                    p = Path(candidate)
+                    if p.is_dir():
+                        resume_dir = p
+                except Exception:
+                    resume_dir = None
+                return project_hash, True, resume_dir
 
-        return None, False
+        return None, False, None
 
     def _build_gemini_start_cmd(self) -> str:
         cmd = "gemini --yolo" if self.auto else "gemini"
         if self.resume:
-            _, has_history = self._get_latest_gemini_project_hash()
+            _, has_history, resume_dir = self._get_latest_gemini_project_hash()
             if has_history:
-                cmd = f"{cmd} --resume latest"
+                if resume_dir:
+                    cmd = f"{_build_cd_cmd(resume_dir)}{cmd} --resume latest"
+                else:
+                    cmd = f"{cmd} --resume latest"
                 print(f"🔁 {t('resuming_session', provider='Gemini', session_id='')}")
             else:
                 print(f"ℹ️ {t('no_history_fresh', provider='Gemini')}")
@@ -1632,7 +1766,7 @@ class AILauncher:
         if not self.resume:
             data = self._clear_codex_log_binding(data)
 
-        work_dir = Path.cwd()
+        work_dir = self.project_root
         data.update({
             "session_id": self.session_id,
             "runtime_dir": str(runtime),
@@ -1645,6 +1779,7 @@ class AILauncher:
             "tmux_log": str(runtime / "bridge_output.log"),
             "work_dir": str(work_dir),
             "work_dir_norm": _normalize_path_for_match(str(work_dir)),
+            "start_dir": str(self.invocation_dir),
             "active": True,
             "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         })
@@ -1690,7 +1825,9 @@ class AILauncher:
             "tmux_session": tmux_session,
             "pane_id": pane_id,
             "pane_title_marker": pane_title_marker,
-            "work_dir": str(Path.cwd()),
+            "work_dir": str(self.project_root),
+            "work_dir_norm": _normalize_path_for_match(str(self.project_root)),
+            "start_dir": str(self.invocation_dir),
             "active": True,
             "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "start_cmd": str(start_cmd) if start_cmd else None,
@@ -1719,7 +1856,9 @@ class AILauncher:
             "tmux_session": tmux_session,
             "pane_id": pane_id,
             "pane_title_marker": pane_title_marker,
-            "work_dir": str(Path.cwd()),
+            "work_dir": str(self.project_root),
+            "work_dir_norm": _normalize_path_for_match(str(self.project_root)),
+            "start_dir": str(self.invocation_dir),
             "active": True,
             "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "start_cmd": str(start_cmd) if start_cmd else None,
@@ -1762,40 +1901,70 @@ class AILauncher:
         key = re.sub(r"[^A-Za-z0-9]", "-", str(fallback_path))
         return projects_root / key
 
-    def _get_latest_claude_session_id(self) -> tuple[str | None, bool]:
+    def _get_latest_claude_session_id(self) -> tuple[str | None, bool, Path | None]:
         """
         Returns (session_id, has_any_history).
         - session_id: latest UUID-like session id if found (for `claude --resume <id>`).
         - has_any_history: whether this project has any Claude sessions on disk.
         """
-        project_dir = self._claude_project_dir(Path.cwd())
-        if not project_dir.exists():
-            return None, False
-
-        session_files = list(project_dir.glob("*.jsonl"))
-        if not session_files:
-            return None, False
+        candidates: list[Path] = []
+        for candidate in (Path.cwd(), self.invocation_dir, self.project_root):
+            try:
+                p = candidate.resolve()
+            except Exception:
+                p = candidate.absolute()
+            if p not in candidates:
+                candidates.append(p)
 
         session_env_root = Path.home() / ".claude" / "session-env"
+        best_uuid: Path | None = None
+        best_any: Path | None = None
+        has_any_history = False
+        best_cwd: Path | None = None
 
-        uuid_sessions: list[Path] = []
-        for session_file in session_files:
-            try:
-                uuid.UUID(session_file.stem)
-                # Ignore zero-byte placeholders and sessions Claude cannot actually resume.
-                if session_file.stat().st_size <= 0:
-                    continue
-                if not (session_env_root / session_file.stem).exists():
-                    continue
-                uuid_sessions.append(session_file)
-            except Exception:
+        for work_dir in candidates:
+            project_dir = self._claude_project_dir(work_dir)
+            if not project_dir.exists():
                 continue
 
-        if not uuid_sessions:
-            return None, True
+            session_files = list(project_dir.glob("*.jsonl"))
+            if not session_files:
+                continue
+            has_any_history = True
 
-        latest = max(uuid_sessions, key=lambda p: p.stat().st_mtime)
-        return latest.stem, True
+            try:
+                best_in_dir = max(session_files, key=lambda p: p.stat().st_mtime)
+                if best_any is None or best_in_dir.stat().st_mtime > best_any.stat().st_mtime:
+                    best_any = best_in_dir
+                    best_cwd = work_dir
+            except Exception:
+                pass
+
+            for session_file in session_files:
+                try:
+                    uuid.UUID(session_file.stem)
+                    if session_file.stat().st_size <= 0:
+                        continue
+                    if not (session_env_root / session_file.stem).exists():
+                        continue
+                except Exception:
+                    continue
+                if best_uuid is None:
+                    best_uuid = session_file
+                    best_cwd = work_dir
+                    continue
+                try:
+                    if session_file.stat().st_mtime > best_uuid.stat().st_mtime:
+                        best_uuid = session_file
+                        best_cwd = work_dir
+                except Exception:
+                    continue
+
+        if best_uuid is not None:
+            return best_uuid.stem, True, best_cwd
+        if has_any_history:
+            return None, True, best_cwd
+        return None, False, None
 
     def _find_claude_cmd(self) -> str:
         """Find Claude CLI executable"""
@@ -1877,7 +2046,7 @@ class AILauncher:
             if cca_path:
                 cmd.extend(["--permission-mode", "plan"])
         if self.resume:
-            _, has_history = self._get_latest_claude_session_id()
+            _, has_history, _ = self._get_latest_claude_session_id()
             if has_history:
                 cmd.append("--continue")
                 print(f"🔁 {t('resuming_claude', session_id='')}")
@@ -1902,7 +2071,12 @@ class AILauncher:
             # Let subprocess inherit stdio by default. Explicitly passing sys.stdin/out/err
             # can produce non-console handles on Windows (especially after re-wrapping
             # stdout/stderr for UTF-8), which may trigger issues in Node-based CLIs.
-            return subprocess.run(cmd, env=env).returncode
+            run_cwd = str(self.project_root) if self.resume else str(Path.cwd())
+            if self.resume:
+                _, has_history, resume_dir = self._get_latest_claude_session_id()
+                if has_history and resume_dir:
+                    run_cwd = str(resume_dir)
+            return subprocess.run(cmd, env=env, cwd=run_cwd).returncode
         except KeyboardInterrupt:
             print(f"\n⚠️ {t('user_interrupted')}")
             return 130

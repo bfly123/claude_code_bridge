@@ -6,6 +6,7 @@ Test connectivity with Codex
 
 import sys
 import os
+import argparse
 from pathlib import Path
 
 script_dir = Path(__file__).resolve().parent
@@ -19,6 +20,11 @@ try:
 
     def main():
         try:
+            parser = argparse.ArgumentParser(prog="cping", add_help=True)
+            parser.add_argument("--session-file", dest="session_file", default=None, help="Path to .codex-session (or .ccb_config/.codex-session)")
+            args = parser.parse_args()
+            if args.session_file:
+                os.environ["CCB_SESSION_FILE"] = str(args.session_file)
             comm = CodexCommunicator()
             healthy, message = comm.ping(display=False)
             print(message)

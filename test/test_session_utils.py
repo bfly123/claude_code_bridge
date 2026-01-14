@@ -14,7 +14,7 @@ def test_find_project_session_file_walks_upwards(tmp_path: Path) -> None:
     session.write_text("{}", encoding="utf-8")
 
     found = find_project_session_file(leaf, ".codex-session")
-    assert found == session
+    assert found is None
 
 
 def test_safe_write_session_atomic_write(tmp_path: Path) -> None:
@@ -30,4 +30,3 @@ def test_safe_write_session_atomic_write(tmp_path: Path) -> None:
     assert err2 is None
     assert target.read_text(encoding="utf-8") == '{"hello":"again"}\n'
     assert not target.with_suffix(".tmp").exists()
-

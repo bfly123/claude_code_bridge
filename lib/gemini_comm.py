@@ -16,6 +16,7 @@ from typing import Optional, Tuple, Dict, Any, List
 from terminal import get_backend_for_session, get_pane_id_from_session
 from ccb_config import apply_backend_env
 from i18n import t
+from session_utils import find_project_session_file
 
 apply_backend_env()
 
@@ -561,16 +562,15 @@ class GeminiCommunicator:
             self._log_reader_primed = True
 
     def _find_session_file(self) -> Optional[Path]:
-        current = Path.cwd()
-        while current != current.parent:
-            candidate = current / ".ccb_config" / ".gemini-session"
-            if candidate.exists():
-                return candidate
-            legacy = current / ".gemini-session"
-            if legacy.exists():
-                return legacy
-            current = current.parent
-        return None
+        env_session = (os.environ.get("CCB_SESSION_FILE") or "").strip()
+        if env_session:
+            try:
+                session_path = Path(os.path.expanduser(env_session))
+                if session_path.name == ".gemini-session" and session_path.is_file():
+                    return session_path
+            except Exception:
+                pass
+        return find_project_session_file(Path.cwd(), ".gemini-session")
 
     def _prime_log_binding(self) -> None:
         session_path = self.log_reader.current_session_path()

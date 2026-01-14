@@ -23,6 +23,8 @@ try:
     from ccb_protocol import strip_trailing_markers
     from pane_registry import load_registry_by_session_id, load_registry_by_claude_pane
     from session_utils import find_project_session_file
+    from askd_client import resolve_work_dir
+    from providers import CASK_CLIENT_SPEC
 except ImportError as exc:
     print(f"Import failed: {exc}")
     sys.exit(1)
@@ -37,9 +39,9 @@ def _debug(message: str) -> None:
     print(f"[DEBUG] {message}", file=sys.stderr)
 
 
-def _load_session_log_path() -> tuple[Path | None, str | None]:
+def _load_session_log_path(work_dir: Path, explicit_session_file: Path | None) -> tuple[Path | None, str | None]:
     """Load codex_session_path from .codex-session (or .ccb_config/.codex-session) if exists"""
-    session_file = find_project_session_file(Path.cwd(), ".codex-session")
+    session_file = explicit_session_file or find_project_session_file(work_dir, ".codex-session")
     if not session_file:
         return None, None
     try:
@@ -107,12 +109,19 @@ def main(argv: list[str]) -> int:
         parser = argparse.ArgumentParser(prog="cpend", add_help=True)
         parser.add_argument("n", nargs="?", type=int, default=1, help="Show the latest N conversations")
         parser.add_argument("--raw", action="store_true", help="Do not strip protocol/harness marker lines")
+        parser.add_argument("--session-file", dest="session_file", default=None, help="Path to .codex-session (or .ccb_config/.codex-session)")
         args = parser.parse_args(argv[1:])
         n = max(1, int(args.n or 1))
         raw = bool(args.raw)
 
+        work_dir, explicit_session_file = resolve_work_dir(
+            CASK_CLIENT_SPEC,
+            cli_session_file=args.session_file,
+            env_session_file=os.environ.get("CCB_SESSION_FILE"),
+        )
+
         registry_log_path, registry_record = _load_registry_log_path()
-        session_log_path, session_id = _load_session_log_path()
+        session_log_path, session_id = _load_session_log_path(work_dir, explicit_session_file)
 
         log_path = registry_log_path or session_log_path
         if not registry_log_path and log_path:
