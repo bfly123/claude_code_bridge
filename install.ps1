@@ -323,6 +323,7 @@ function Install-Native {
       }
     }
   }
+  Install-CodexSkills
   Install-ClaudeConfig
 
   Write-Host ""
@@ -334,6 +335,31 @@ function Install-Native {
   Write-Host "  ccb up gemini   # Start with Gemini backend"
   Write-Host "  ccb up opencode # Start with OpenCode backend"
   Write-Host "  ccb-layout      # Start 2x2 layout (Codex+Gemini+OpenCode)"
+}
+
+function Install-CodexSkills {
+  $skillsSrc = Join-Path $repoRoot "codex_skills"
+  $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE ".codex" }
+  $skillsDst = Join-Path $codexHome "skills"
+
+  if (-not (Test-Path $skillsSrc)) {
+    return
+  }
+
+  if (-not (Test-Path $skillsDst)) {
+    New-Item -ItemType Directory -Path $skillsDst -Force | Out-Null
+  }
+
+  Get-ChildItem -Path $skillsSrc -Directory | ForEach-Object {
+    $skillName = $_.Name
+    $skillDst = Join-Path $skillsDst $skillName
+    if (Test-Path $skillDst) {
+      Remove-Item -Recurse -Force $skillDst
+    }
+    Copy-Item -Recurse -Force $_.FullName $skillDst
+    Write-Host "  Installed Codex skill: $skillName"
+  }
+  Write-Host "Updated Codex skills directory: $skillsDst"
 }
 
 function Install-ClaudeConfig {
