@@ -788,6 +788,15 @@ class CodexCommunicator:
                 codex_pid = int(f.read().strip())
             try:
                 os.kill(codex_pid, 0)
+            except PermissionError:
+                # 沙箱阻止了 os.kill，使用 ps 命令验证
+                import subprocess
+                try:
+                    result = subprocess.run(["ps", "-p", str(codex_pid)], capture_output=True, timeout=2)
+                    if result.returncode != 0:
+                        return False, f"Codex process (PID:{codex_pid}) has exited"
+                except Exception:
+                    pass  # 无法验证，假设存在
             except OSError:
                 return False, f"Codex process (PID:{codex_pid}) has exited"
 
@@ -801,6 +810,15 @@ class CodexCommunicator:
                 return False, "Failed to read bridge process PID"
             try:
                 os.kill(bridge_pid, 0)
+            except PermissionError:
+                # 沙箱阻止了 os.kill，使用 ps 命令验证
+                import subprocess
+                try:
+                    result = subprocess.run(["ps", "-p", str(bridge_pid)], capture_output=True, timeout=2)
+                    if result.returncode != 0:
+                        return False, f"Bridge process (PID:{bridge_pid}) has exited"
+                except Exception:
+                    pass  # 无法验证，假设存在
             except OSError:
                 return False, f"Bridge process (PID:{bridge_pid}) has exited"
 
