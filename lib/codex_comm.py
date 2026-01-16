@@ -20,6 +20,7 @@ from ccb_config import apply_backend_env
 from i18n import t
 from pane_registry import upsert_registry, registry_path_for_session, load_registry_by_session_id
 from session_utils import find_project_session_file
+from project_id import compute_ccb_project_id
 
 apply_backend_env()
 
@@ -1017,6 +1018,14 @@ class CodexCommunicator:
         except Exception:
             return
 
+        ccb_project_id = ""
+        try:
+            wd_hint = self.session_info.get("work_dir")
+            if isinstance(wd_hint, str) and wd_hint.strip():
+                ccb_project_id = compute_ccb_project_id(Path(wd_hint.strip()))
+        except Exception:
+            ccb_project_id = ""
+
         path_str = str(log_path_obj)
         session_id = self._extract_session_id(log_path_obj)
         resume_cmd = f"codex resume {session_id}" if session_id else None
@@ -1047,6 +1056,9 @@ class CodexCommunicator:
         if session_id and data.get("codex_session_id") != session_id:
             data["codex_session_id"] = session_id
             updated = True
+        if ccb_project_id and data.get("ccb_project_id") != ccb_project_id:
+            data["ccb_project_id"] = ccb_project_id
+            updated = True
         if resume_cmd:
             if data.get("codex_start_cmd") != resume_cmd:
                 data["codex_start_cmd"] = resume_cmd
@@ -1076,13 +1088,27 @@ class CodexCommunicator:
 
         registry_path = registry_path_for_session(self.session_id)
         if registry_path.exists():
-            ok = upsert_registry({
-                "ccb_session_id": self.session_id,
-                "codex_pane_id": self.pane_id or None,
-                "codex_session_id": session_id,
-                "codex_session_path": path_str,
-                "work_dir": self.session_info.get("work_dir"),
-            })
+            ok = upsert_registry(
+                {
+                    "ccb_session_id": self.session_id,
+                    "ccb_project_id": ccb_project_id or None,
+                    "work_dir": self.session_info.get("work_dir"),
+                    "terminal": self.terminal,
+                    "providers": {
+                        "codex": {
+                            "pane_id": self.pane_id or None,
+                            "pane_title_marker": self.pane_title_marker or None,
+                            "session_file": self.project_session_file,
+                            "codex_session_id": session_id,
+                            "codex_session_path": path_str,
+                        }
+                    },
+                    # Legacy duplicates (older tools might read these flat keys).
+                    "codex_pane_id": self.pane_id or None,
+                    "codex_session_id": session_id,
+                    "codex_session_path": path_str,
+                }
+            )
             if not ok:
                 print("⚠️  Failed to update cpend registry", file=sys.stderr)
 

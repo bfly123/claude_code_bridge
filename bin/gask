@@ -27,13 +27,81 @@ from env_utils import env_bool
 from askd_client import (
     state_file_from_env,
     find_project_session_file,
-    resolve_work_dir,
+    resolve_work_dir_with_registry,
     try_daemon_request,
     maybe_start_daemon,
     wait_for_daemon_ready,
     check_background_mode,
 )
 from providers import GASK_CLIENT_SPEC
+
+
+def _daemon_startup_wait_s(timeout: float) -> float:
+    raw = (os.environ.get("CCB_GASKD_STARTUP_WAIT_S") or "").strip()
+    if raw:
+        try:
+            v = float(raw)
+        except Exception:
+            v = 0.0
+        if v > 0:
+            return min(max(0.2, v), max(0.2, float(timeout)))
+    return min(8.0, max(1.0, float(timeout)))
+
+
+def _daemon_retry_wait_s(timeout: float) -> float:
+    raw = (os.environ.get("CCB_GASKD_RETRY_WAIT_S") or "").strip()
+    if raw:
+        try:
+            v = float(raw)
+        except Exception:
+            v = 0.0
+        if v > 0:
+            return min(1.0, max(0.05, v))
+    return min(0.3, max(0.05, float(timeout) / 50.0))
+
+
+def _daemon_request_with_retries(work_dir: Path, message: str, timeout: float, quiet: bool) -> tuple[str, int] | None:
+    """
+    Best-effort daemon request with retries to avoid autostart races.
+
+    Without this, concurrent first invocations can all try to start the daemon and some calls may fail.
+    """
+    state_file = state_file_from_env(GASK_CLIENT_SPEC.state_file_env)
+
+    result = try_daemon_request(GASK_CLIENT_SPEC, work_dir, message, timeout, quiet, state_file)
+    if result is not None:
+        return result
+
+    if not env_bool(GASK_CLIENT_SPEC.enabled_env, True):
+        return None
+    if not find_project_session_file(work_dir, GASK_CLIENT_SPEC.session_filename):
+        return None
+
+    if state_file and state_file.exists():
+        try:
+            from gaskd_daemon import ping_daemon
+
+            if not ping_daemon(timeout_s=0.2, state_file=state_file):
+                try:
+                    state_file.unlink()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    started = maybe_start_daemon(GASK_CLIENT_SPEC, work_dir)
+    if started:
+        wait_for_daemon_ready(GASK_CLIENT_SPEC, _daemon_startup_wait_s(timeout), state_file)
+
+    wait_s = _daemon_retry_wait_s(timeout)
+    deadline = time.time() + min(3.0, max(0.2, float(timeout)))
+    while time.time() < deadline:
+        result = try_daemon_request(GASK_CLIENT_SPEC, work_dir, message, timeout, quiet, state_file)
+        if result is not None:
+            return result
+        time.sleep(wait_s)
+
+    return None
 
 def _wait_for_done_reply(log_reader, state: dict, timeout: float, req_id: str, quiet: bool):
     deadline = time.time() + timeout
@@ -120,23 +188,17 @@ def main(argv: list[str]) -> int:
             timeout = 3600.0
 
     try:
-        # Strict mode: require run_in_background=true in Claude Code
-        if os.environ.get("CLAUDECODE") == "1" and not check_background_mode():
-            print("[ERROR] gask MUST be called with run_in_background=true", file=sys.stderr)
-            print("Correct usage: Bash(gask \"...\", run_in_background=true)", file=sys.stderr)
-            return EXIT_ERROR
+        # Foreground execution is allowed; background-mode enforcement is handled by the caller (if any).
 
-        work_dir, _ = resolve_work_dir(
+        work_dir, _ = resolve_work_dir_with_registry(
             GASK_CLIENT_SPEC,
+            provider="gemini",
             cli_session_file=session_file,
             env_session_file=os.environ.get("CCB_SESSION_FILE"),
         )
 
         # Prefer daemon mode: daemon performs per-session serialization and should accept concurrent submissions.
-        daemon_result = try_daemon_request(GASK_CLIENT_SPEC, work_dir, message, timeout, quiet, state_file_from_env(GASK_CLIENT_SPEC.state_file_env))
-        if daemon_result is None and maybe_start_daemon(GASK_CLIENT_SPEC, work_dir):
-            wait_for_daemon_ready(GASK_CLIENT_SPEC, timeout_s=min(2.0, max(0.2, float(timeout))))
-            daemon_result = try_daemon_request(GASK_CLIENT_SPEC, work_dir, message, timeout, quiet, state_file_from_env(GASK_CLIENT_SPEC.state_file_env))
+        daemon_result = _daemon_request_with_retries(work_dir, message, timeout, quiet)
         if daemon_result is not None:
             reply, exit_code = daemon_result
             if output_path:

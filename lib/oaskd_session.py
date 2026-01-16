@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from ccb_config import apply_backend_env
+from project_id import compute_ccb_project_id
 from session_utils import find_project_session_file as _find_project_session_file, safe_write_session
 from terminal import get_backend_for_session
 
@@ -187,13 +188,15 @@ def load_project_session(work_dir: Path) -> Optional[OpenCodeProjectSession]:
 
 
 def compute_session_key(session: OpenCodeProjectSession) -> str:
-    marker = session.pane_title_marker
-    if marker:
-        return f"opencode_marker:{marker}"
-    pane = session.pane_id
-    if pane:
-        return f"opencode_pane:{pane}"
-    sid = session.session_id
-    if sid:
-        return f"opencode:{sid}"
-    return f"opencode_file:{session.session_file}"
+    """
+    Compute the daemon routing/serialization key for this provider.
+
+    Hard rule: include provider + ccb_project_id to isolate projects and providers.
+    """
+    pid = str(session.data.get("ccb_project_id") or "").strip()
+    if not pid:
+        try:
+            pid = compute_ccb_project_id(Path(session.work_dir))
+        except Exception:
+            pid = ""
+    return f"opencode:{pid}" if pid else "opencode:unknown"

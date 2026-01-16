@@ -27,7 +27,7 @@ from env_utils import env_bool
 from askd_client import (
     state_file_from_env,
     find_project_session_file,
-    resolve_work_dir,
+    resolve_work_dir_with_registry,
     try_daemon_request,
     maybe_start_daemon,
     wait_for_daemon_ready,
@@ -119,9 +119,9 @@ def _parse_args(argv: list[str]) -> Tuple[Optional[Path], float, str, bool, Opti
     message = " ".join(parts).strip()
     if timeout is None:
         try:
-            timeout = float(os.environ.get("CCB_SYNC_TIMEOUT", "3600.0"))
+            timeout = float(os.environ.get("CCB_SYNC_TIMEOUT", "-1"))
         except Exception:
-            timeout = 3600.0
+            timeout = -1.0
     return output, timeout, message, quiet, session_file
 
 
@@ -134,19 +134,16 @@ def main(argv: list[str]) -> int:
             _usage()
             return EXIT_ERROR
 
-        # Strict mode: require run_in_background=true in Claude Code
-        if os.environ.get("CLAUDECODE") == "1" and not check_background_mode():
-            print("[ERROR] cask MUST be called with run_in_background=true", file=sys.stderr)
-            print("Correct usage: Bash(cask \"...\", run_in_background=true)", file=sys.stderr)
-            return EXIT_ERROR
+        # Foreground execution is allowed; background-mode enforcement is handled by the caller (if any).
 
         # Check if supervisor mode is enabled via roles config
         executor = _get_executor_from_roles()
         if executor == "codex+opencode":
             message = SUPERVISOR_PROMPT + message
 
-        work_dir, _ = resolve_work_dir(
+        work_dir, _ = resolve_work_dir_with_registry(
             CASK_CLIENT_SPEC,
+            provider="codex",
             cli_session_file=session_file,
             env_session_file=os.environ.get("CCB_SESSION_FILE"),
         )

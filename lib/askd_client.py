@@ -13,6 +13,8 @@ from typing import Optional, Tuple
 from env_utils import env_bool
 from providers import ProviderClientSpec
 from session_utils import find_project_session_file
+from project_id import compute_ccb_project_id
+from pane_registry import load_registry_by_project_id
 
 
 def resolve_work_dir(
@@ -63,6 +65,76 @@ def resolve_work_dir(
     if session_path.parent.name == ".ccb_config":
         return session_path.parent.parent, session_path
     return session_path.parent, session_path
+
+
+def resolve_work_dir_with_registry(
+    spec: ProviderClientSpec,
+    *,
+    provider: str,
+    cli_session_file: str | None = None,
+    env_session_file: str | None = None,
+    default_cwd: Path | None = None,
+    registry_only_env: str = "CCB_REGISTRY_ONLY",
+) -> tuple[Path, Path | None]:
+    """
+    Resolve work_dir, additionally supporting registry routing by ccb_project_id.
+
+    Priority:
+      1) cli_session_file (--session-file)
+      2) env_session_file (CCB_SESSION_FILE)
+      3) registry lookup by ccb_project_id + provider
+      4) default_cwd / Path.cwd()
+    """
+    raw = (cli_session_file or "").strip() or (env_session_file or "").strip()
+    if raw:
+        return resolve_work_dir(
+            spec,
+            cli_session_file=cli_session_file,
+            env_session_file=env_session_file,
+            default_cwd=default_cwd,
+        )
+
+    cwd = default_cwd or Path.cwd()
+    try:
+        project_id = compute_ccb_project_id(cwd)
+    except Exception:
+        project_id = ""
+    if project_id:
+        rec = load_registry_by_project_id(project_id, provider)
+        if isinstance(rec, dict):
+            providers = rec.get("providers") if isinstance(rec.get("providers"), dict) else {}
+            entry = providers.get(str(provider).strip().lower()) if isinstance(providers, dict) else None
+            session_file = None
+            if isinstance(entry, dict):
+                sf = entry.get("session_file")
+                if isinstance(sf, str) and sf.strip():
+                    session_file = sf.strip()
+            if not session_file:
+                wd = rec.get("work_dir")
+                if isinstance(wd, str) and wd.strip():
+                    try:
+                        found = find_project_session_file(Path(wd.strip()), spec.session_filename)
+                    except Exception:
+                        found = None
+                    if found:
+                        session_file = str(found)
+                    else:
+                        session_file = str(Path(wd.strip()) / ".ccb_config" / spec.session_filename)
+            if session_file:
+                try:
+                    return resolve_work_dir(
+                        spec,
+                        cli_session_file=session_file,
+                        env_session_file=None,
+                        default_cwd=cwd,
+                    )
+                except Exception:
+                    pass
+
+    if env_bool(registry_only_env, False):
+        raise ValueError(f"{registry_only_env}=1: registry routing failed for provider={provider!r} cwd={cwd}")
+
+    return (cwd, None)
 
 
 def autostart_enabled(primary_env: str, legacy_env: str, default: bool = True) -> bool:
@@ -120,8 +192,8 @@ def try_daemon_request(spec: ProviderClientSpec, work_dir: Path, message: str, t
             sock.settimeout(0.5)
             sock.sendall((json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))
             buf = b""
-            deadline = time.time() + float(timeout) + 5.0
-            while b"\n" not in buf and time.time() < deadline:
+            deadline = None if float(timeout) < 0 else (time.time() + float(timeout) + 5.0)
+            while b"\n" not in buf and (deadline is None or time.time() < deadline):
                 try:
                     chunk = sock.recv(65536)
                 except socket.timeout:
@@ -202,6 +274,10 @@ def check_background_mode() -> bool:
     if os.environ.get("CLAUDECODE") != "1":
         return True
     if os.environ.get("CCB_ALLOW_FOREGROUND") in ("1", "true", "yes"):
+        return True
+    # Codex CLI / tool harness environments often run commands in a PTY but are still safe to run in
+    # foreground (the assistant controls execution). Allow these to avoid false failures.
+    if os.environ.get("CODEX_RUNTIME_DIR") or os.environ.get("CODEX_SESSION_ID"):
         return True
     try:
         import stat

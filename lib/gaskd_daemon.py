@@ -20,6 +20,8 @@ from gaskd_protocol import (
 )
 from gaskd_session import compute_session_key, load_project_session
 from gemini_comm import GeminiLogReader
+from pane_registry import upsert_registry
+from project_id import compute_ccb_project_id
 from terminal import get_backend_for_session
 from askd_runtime import state_file_path, log_path, write_log, random_token
 import askd_rpc
@@ -102,6 +104,26 @@ def _detect_request_cancelled(session_path: Path, *, from_index: int, req_id: st
     return False
 
 
+def _read_gemini_session_id(session_path: Path) -> str:
+    if not session_path or not session_path.exists():
+        return ""
+    # Gemini CLI may write in-place; retry briefly on JSONDecodeError.
+    for attempt in range(10):
+        try:
+            with session_path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            if isinstance(payload, dict) and isinstance(payload.get("sessionId"), str):
+                return payload["sessionId"]
+            return ""
+        except json.JSONDecodeError:
+            if attempt < 9:
+                time.sleep(0.05)
+                continue
+            return ""
+        except Exception:
+            return ""
+
+
 @dataclass
 class _QueuedTask:
     request: GaskdRequest
@@ -171,10 +193,41 @@ class _SessionWorker(BaseSessionWorker[_QueuedTask, GaskdResult]):
                 pass
         state = log_reader.capture_state()
 
+        # Best-effort: persist the latest binding so other processes (gpend, registry routing, etc.)
+        # can follow session rotations ("new") without manual intervention.
+        try:
+            session_path = state.get("session_path")
+            session_id = _read_gemini_session_id(session_path) if isinstance(session_path, Path) else ""
+            session.update_gemini_binding(session_path=session_path if isinstance(session_path, Path) else None, session_id=session_id or None)
+            ccb_pid = str(session.data.get("ccb_project_id") or "").strip()
+            if not ccb_pid:
+                ccb_pid = compute_ccb_project_id(Path(session.work_dir))
+            ccb_session_id = str(session.data.get("ccb_session_id") or session.data.get("session_id") or "").strip()
+            if ccb_session_id:
+                upsert_registry(
+                    {
+                        "ccb_session_id": ccb_session_id,
+                        "ccb_project_id": ccb_pid or None,
+                        "work_dir": str(session.work_dir),
+                        "terminal": session.terminal,
+                        "providers": {
+                            "gemini": {
+                                "pane_id": session.pane_id or None,
+                                "pane_title_marker": session.pane_title_marker or None,
+                                "session_file": str(session.session_file),
+                                "gemini_session_id": session.data.get("gemini_session_id"),
+                                "gemini_session_path": session.data.get("gemini_session_path"),
+                            }
+                        },
+                    }
+                )
+        except Exception:
+            pass
+
         prompt = wrap_gemini_prompt(req.message, task.req_id)
         backend.send_text(pane_id, prompt)
 
-        deadline = time.time() + float(req.timeout_s)
+        deadline = None if float(req.timeout_s) < 0.0 else (time.time() + float(req.timeout_s))
         done_seen = False
         done_ms: int | None = None
         latest_reply = ""
@@ -183,9 +236,13 @@ class _SessionWorker(BaseSessionWorker[_QueuedTask, GaskdResult]):
         last_pane_check = time.time()
 
         while True:
-            remaining = deadline - time.time()
-            if remaining <= 0:
-                break
+            if deadline is not None:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                wait_step = min(remaining, 1.0)
+            else:
+                wait_step = 1.0
 
             if time.time() - last_pane_check >= pane_check_interval:
                 try:
@@ -211,7 +268,7 @@ class _SessionWorker(BaseSessionWorker[_QueuedTask, GaskdResult]):
                 scan_from_i = 0
 
             prev_session_path = state.get("session_path")
-            reply, state = log_reader.wait_for_message(state, min(remaining, 1.0))
+            reply, state = log_reader.wait_for_message(state, wait_step)
 
             # Detect user cancellation via Gemini session JSON info message.
             try:
@@ -291,7 +348,8 @@ class GaskdServer:
                 return {"type": "gask.response", "v": 1, "id": msg.get("id"), "exit_code": 1, "reply": f"Bad request: {exc}"}
 
             task = self.pool.submit(req)
-            task.done_event.wait(timeout=req.timeout_s + 5.0)
+            wait_timeout = None if float(req.timeout_s) < 0.0 else (float(req.timeout_s) + 5.0)
+            task.done_event.wait(timeout=wait_timeout)
             result = task.result
             if not result:
                 return {"type": "gask.response", "v": 1, "id": req.client_id, "exit_code": 2, "reply": ""}
@@ -317,8 +375,27 @@ class GaskdServer:
             token=self.token,
             state_file=self.state_file,
             request_handler=_handle_request,
+            request_queue_size=128,
+            on_stop=self._cleanup_state_file,
         )
         return server.serve_forever()
+
+    def _cleanup_state_file(self) -> None:
+        try:
+            st = read_state(self.state_file)
+        except Exception:
+            st = None
+        try:
+            if isinstance(st, dict) and int(st.get("pid") or 0) == os.getpid():
+                self.state_file.unlink(missing_ok=True)  # py3.8+: missing_ok
+        except TypeError:
+            try:
+                if isinstance(st, dict) and int(st.get("pid") or 0) == os.getpid() and self.state_file.exists():
+                    self.state_file.unlink()
+            except Exception:
+                pass
+        except Exception:
+            pass
 
 
 def read_state(state_file: Optional[Path] = None) -> Optional[dict]:

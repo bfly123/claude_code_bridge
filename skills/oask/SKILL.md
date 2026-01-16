@@ -15,7 +15,7 @@ Send the user’s request to OpenCode asynchronously.
 Bash(oask <<'EOF'
 $ARGUMENTS
 EOF
-, run_in_background=true)
+)
 ```
 
 ## CRITICAL Rules

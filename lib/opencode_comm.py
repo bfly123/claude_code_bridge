@@ -21,7 +21,9 @@ from ccb_protocol import REQ_ID_PREFIX
 from ccb_config import apply_backend_env
 from i18n import t
 from terminal import get_backend_for_session, get_pane_id_from_session
-from session_utils import find_project_session_file
+from session_utils import find_project_session_file, safe_write_session
+from pane_registry import upsert_registry
+from project_id import compute_ccb_project_id
 
 apply_backend_env()
 
@@ -1006,7 +1008,36 @@ class OpenCodeCommunicator:
         self.marker_prefix = "oask"
         self.project_session_file = self.session_info.get("_session_file")
 
-        self.log_reader = OpenCodeLogReader()
+        # Prefer storage-based autodetection instead of git-derived project ids when possible.
+        self.log_reader = OpenCodeLogReader(
+            work_dir=Path(self.session_info.get("work_dir") or Path.cwd()),
+            project_id="global",
+            session_id_filter=(str(self.session_info.get("opencode_session_id") or "").strip() or None),
+        )
+
+        # Best-effort: publish to registry for project_id routing.
+        try:
+            wd = self.session_info.get("work_dir")
+            ccb_pid = compute_ccb_project_id(Path(wd)) if isinstance(wd, str) and wd else ""
+            upsert_registry(
+                {
+                    "ccb_session_id": self.session_id,
+                    "ccb_project_id": ccb_pid or None,
+                    "work_dir": wd,
+                    "terminal": self.terminal,
+                    "providers": {
+                        "opencode": {
+                            "pane_id": self.pane_id or None,
+                            "pane_title_marker": self.session_info.get("pane_title_marker"),
+                            "session_file": self.project_session_file,
+                            "opencode_project_id": self.session_info.get("opencode_project_id"),
+                            "opencode_session_id": self.session_info.get("opencode_session_id"),
+                        }
+                    },
+                }
+            )
+        except Exception:
+            pass
 
         if not lazy_init:
             healthy, msg = self._check_session_health()
@@ -1067,6 +1098,16 @@ class OpenCodeCommunicator:
                 return None
 
             data["_session_file"] = str(project_session)
+
+            # Best-effort migration: ensure ccb_project_id is present.
+            try:
+                if not (data.get("ccb_project_id") or "").strip():
+                    wd = data.get("work_dir")
+                    if isinstance(wd, str) and wd.strip():
+                        data["ccb_project_id"] = compute_ccb_project_id(Path(wd.strip()))
+                        safe_write_session(project_session, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+            except Exception:
+                pass
             return data
         except Exception:
             return None

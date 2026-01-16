@@ -332,7 +332,7 @@ class _SessionWorker(BaseSessionWorker[_QueuedTask, CaskdResult]):
 
         backend.send_text(pane_id, prompt)
 
-        deadline = time.time() + float(req.timeout_s)
+        deadline = None if float(req.timeout_s) < 0.0 else (time.time() + float(req.timeout_s))
         chunks: list[str] = []
         anchor_seen = False
         done_seen = False
@@ -343,8 +343,8 @@ class _SessionWorker(BaseSessionWorker[_QueuedTask, CaskdResult]):
         # If we can't observe our user anchor within a short grace window, the log binding is likely stale.
         # In that case we drop the bound session filter and rebind to the latest log, starting from a tail
         # offset (NOT EOF) to avoid missing a reply that already landed.
-        anchor_grace_deadline = min(deadline, time.time() + 1.5)
-        anchor_collect_grace = min(deadline, time.time() + 2.0)
+        anchor_grace_deadline = min(deadline, time.time() + 1.5) if deadline is not None else (time.time() + 1.5)
+        anchor_collect_grace = min(deadline, time.time() + 2.0) if deadline is not None else (time.time() + 2.0)
         rebounded = False
         saw_any_event = False
         tail_bytes = int(os.environ.get("CCB_CASKD_REBIND_TAIL_BYTES", str(1024 * 1024 * 2)) or (1024 * 1024 * 2))
@@ -354,9 +354,13 @@ class _SessionWorker(BaseSessionWorker[_QueuedTask, CaskdResult]):
         pane_check_interval = float(os.environ.get("CCB_CASKD_PANE_CHECK_INTERVAL", default_interval) or default_interval)
 
         while True:
-            remaining = deadline - time.time()
-            if remaining <= 0:
-                break
+            if deadline is not None:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                wait_step = min(remaining, 0.5)
+            else:
+                wait_step = 0.5
 
             # Fail fast if the pane dies mid-request (e.g. Codex killed).
             if time.time() - last_pane_check >= pane_check_interval:
@@ -424,7 +428,7 @@ class _SessionWorker(BaseSessionWorker[_QueuedTask, CaskdResult]):
                         pass
                 last_pane_check = time.time()
 
-            event, state = reader.wait_for_event(state, min(remaining, 0.5))
+            event, state = reader.wait_for_event(state, wait_step)
             if event is None:
                 if (not rebounded) and (not anchor_seen) and time.time() >= anchor_grace_deadline and codex_session_id:
                     # Escape hatch: drop the session_id_filter so the reader can follow the latest log for this work_dir.
@@ -783,7 +787,8 @@ class CaskdServer:
                 return {"type": "cask.response", "v": 1, "id": msg.get("id"), "exit_code": 1, "reply": f"Bad request: {exc}"}
 
             task = self.pool.submit(req)
-            task.done_event.wait(timeout=req.timeout_s + 5.0)
+            wait_timeout = None if float(req.timeout_s) < 0.0 else (float(req.timeout_s) + 5.0)
+            task.done_event.wait(timeout=wait_timeout)
             result = task.result
             if not result:
                 return {"type": "cask.response", "v": 1, "id": req.client_id, "exit_code": 2, "reply": ""}
@@ -813,8 +818,27 @@ class CaskdServer:
             token=self.token,
             state_file=self.state_file,
             request_handler=_handle_request,
+            request_queue_size=128,
+            on_stop=self._cleanup_state_file,
         )
         return server.serve_forever()
+
+    def _cleanup_state_file(self) -> None:
+        try:
+            st = read_state(self.state_file)
+        except Exception:
+            st = None
+        try:
+            if isinstance(st, dict) and int(st.get("pid") or 0) == os.getpid():
+                self.state_file.unlink(missing_ok=True)  # py3.8+: missing_ok
+        except TypeError:
+            try:
+                if isinstance(st, dict) and int(st.get("pid") or 0) == os.getpid() and self.state_file.exists():
+                    self.state_file.unlink()
+            except Exception:
+                pass
+        except Exception:
+            pass
 
 
 def read_state(state_file: Optional[Path] = None) -> Optional[dict]:

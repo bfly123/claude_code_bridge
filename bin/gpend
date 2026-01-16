@@ -20,9 +20,11 @@ from i18n import t
 try:
     from cli_output import EXIT_ERROR, EXIT_NO_REPLY, EXIT_OK
     from gemini_comm import GeminiLogReader
-    from askd_client import resolve_work_dir
+    from askd_client import resolve_work_dir_with_registry
     from providers import GASK_CLIENT_SPEC
     from session_utils import find_project_session_file
+    from project_id import compute_ccb_project_id
+    from pane_registry import load_registry_by_project_id
 except ImportError as exc:
     print(f"Import failed: {exc}")
     sys.exit(1)
@@ -88,16 +90,35 @@ def main(argv: list[str]) -> int:
         args = parser.parse_args(argv[1:])
 
         n = max(1, int(args.n or 1))
-        work_dir, _ = resolve_work_dir(
+        work_dir, explicit_session_file = resolve_work_dir_with_registry(
             GASK_CLIENT_SPEC,
+            provider="gemini",
             cli_session_file=args.session_file,
             env_session_file=os.environ.get("CCB_SESSION_FILE"),
         )
+
+        # Optional: prefer registry-provided gemini_session_path when available.
+        registry_session_path: Path | None = None
+        try:
+            pid = compute_ccb_project_id(work_dir)
+        except Exception:
+            pid = ""
+        if pid:
+            rec = load_registry_by_project_id(pid, "gemini")
+            if rec:
+                providers = rec.get("providers") if isinstance(rec.get("providers"), dict) else {}
+                gemini = providers.get("gemini") if isinstance(providers, dict) else None
+                path_str = (gemini or {}).get("gemini_session_path") if isinstance(gemini, dict) else None
+                if isinstance(path_str, str) and path_str.strip():
+                    registry_session_path = Path(path_str.strip()).expanduser()
 
         # Try session-specific path first
         session_path = _load_session_path(work_dir)
         if session_path:
             _debug(f"Using gemini_session_path from .gemini-session: {session_path}")
+        elif registry_session_path and registry_session_path.exists():
+            session_path = registry_session_path
+            _debug(f"Using gemini_session_path from registry: {session_path}")
 
         reader = GeminiLogReader(work_dir=work_dir)
         if session_path and session_path.exists():

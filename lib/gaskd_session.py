@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from ccb_config import apply_backend_env
+from project_id import compute_ccb_project_id
 from session_utils import find_project_session_file as _find_project_session_file, safe_write_session
 from terminal import get_backend_for_session
 
@@ -128,6 +129,44 @@ class GeminiProjectSession:
 
         return False, f"Pane not alive: {pane_id}"
 
+    def update_gemini_binding(self, *, session_path: Optional[Path], session_id: Optional[str]) -> None:
+        updated = False
+        if session_path:
+            try:
+                session_path_str = str(Path(session_path).expanduser())
+            except Exception:
+                session_path_str = str(session_path)
+            if session_path_str and self.data.get("gemini_session_path") != session_path_str:
+                self.data["gemini_session_path"] = session_path_str
+                updated = True
+
+            # Best-effort: store Gemini project hash for debugging/inspection.
+            try:
+                project_hash = Path(session_path_str).parent.parent.name
+            except Exception:
+                project_hash = ""
+            if project_hash and self.data.get("gemini_project_hash") != project_hash:
+                self.data["gemini_project_hash"] = project_hash
+                updated = True
+
+        if session_id and self.data.get("gemini_session_id") != session_id:
+            self.data["gemini_session_id"] = session_id
+            updated = True
+
+        # Ensure ccb_project_id exists (best-effort).
+        if not (self.data.get("ccb_project_id") or "").strip():
+            try:
+                self.data["ccb_project_id"] = compute_ccb_project_id(Path(self.work_dir))
+                updated = True
+            except Exception:
+                pass
+
+        if updated:
+            self.data["updated_at"] = _now_str()
+            if self.data.get("active") is False:
+                self.data["active"] = True
+            self._write_back()
+
     def _write_back(self) -> None:
         payload = json.dumps(self.data, ensure_ascii=False, indent=2) + "\n"
         ok, _err = safe_write_session(self.session_file, payload)
@@ -146,13 +185,15 @@ def load_project_session(work_dir: Path) -> Optional[GeminiProjectSession]:
 
 
 def compute_session_key(session: GeminiProjectSession) -> str:
-    marker = session.pane_title_marker
-    if marker:
-        return f"gemini_marker:{marker}"
-    pane = session.pane_id
-    if pane:
-        return f"gemini_pane:{pane}"
-    sid = session.gemini_session_id
-    if sid:
-        return f"gemini:{sid}"
-    return f"gemini_file:{session.session_file}"
+    """
+    Compute the daemon routing/serialization key for this provider.
+
+    Hard rule: include provider + ccb_project_id to isolate projects and providers.
+    """
+    pid = str(session.data.get("ccb_project_id") or "").strip()
+    if not pid:
+        try:
+            pid = compute_ccb_project_id(Path(session.work_dir))
+        except Exception:
+            pid = ""
+    return f"gemini:{pid}" if pid else "gemini:unknown"
