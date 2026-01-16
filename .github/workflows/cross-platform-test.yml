@@ -1,0 +1,55 @@
+name: Cross-Platform Compatibility Test
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ['3.11']
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+
+      - name: Run project_id tests
+        run: |
+          python -m pytest test/test_project_id.py -v
+
+      - name: Run registry tests
+        run: |
+          python -m pytest test/test_registry_project_id.py -v
+
+      - name: Test path normalization (cross-platform)
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'lib')
+          from project_id import normalize_work_dir
+
+          # Test basic normalization
+          result = normalize_work_dir('/a/b/../c')
+          assert result == '/a/c', f'Expected /a/c, got {result}'
+
+          print('✅ Path normalization test passed')
+          "
