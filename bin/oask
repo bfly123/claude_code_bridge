@@ -32,6 +32,14 @@ from askd_client import (
 from providers import OASK_CLIENT_SPEC
 
 
+ASYNC_GUARDRAIL = """[CCB_ASYNC_SUBMITTED provider=opencode]
+IMPORTANT: Task submitted to OpenCode. You MUST:
+1. Tell user "OpenCode processing..."
+2. END YOUR TURN IMMEDIATELY
+3. Do NOT wait, poll, check status, or use any more tools
+"""
+
+
 def _daemon_request_with_retries(work_dir: Path, message: str, timeout: float, quiet: bool) -> Optional[tuple[str, int]]:
     """
     Best-effort daemon request with retries to avoid autostart races.
@@ -107,14 +115,15 @@ def _daemon_retry_wait_s(timeout: float) -> float:
 
 
 def _usage() -> None:
-    print("Usage: oask [--async] [--session-file FILE] [--timeout SECONDS] [--output FILE] <message>", file=sys.stderr)
+    print("Usage: oask [--async] [--sync] [--session-file FILE] [--timeout SECONDS] [--output FILE] <message>", file=sys.stderr)
 
 
-def _parse_args(argv: list[str]) -> Tuple[Optional[Path], float, str, bool, Optional[str], bool]:
+def _parse_args(argv: list[str]) -> Tuple[Optional[Path], float, str, bool, Optional[str], bool, bool]:
     output: Optional[Path] = None
     timeout: Optional[float] = None
     quiet = False
     async_mode = False
+    sync_mode = False
     session_file: Optional[str] = None
     parts: list[str] = []
 
@@ -128,6 +137,9 @@ def _parse_args(argv: list[str]) -> Tuple[Optional[Path], float, str, bool, Opti
             continue
         if token == "--async":
             async_mode = True
+            continue
+        if token == "--sync":
+            sync_mode = True
             continue
         if token == "--session-file":
             try:
@@ -159,14 +171,14 @@ def _parse_args(argv: list[str]) -> Tuple[Optional[Path], float, str, bool, Opti
             timeout = 3600.0
     if async_mode:
         timeout = 0.0
-    return output, timeout, message, quiet, session_file, async_mode
+    return output, timeout, message, quiet, session_file, async_mode, sync_mode
 
 
 def main(argv: list[str]) -> int:
     try:
         from cli_output import EXIT_ERROR, EXIT_NO_REPLY, EXIT_OK, atomic_write_text
 
-        output_path, timeout, message, quiet, session_file, async_mode = _parse_args(argv)
+        output_path, timeout, message, quiet, session_file, async_mode, sync_mode = _parse_args(argv)
         if not message and not sys.stdin.isatty():
             message = read_stdin_text().strip()
         if not message:
@@ -186,6 +198,9 @@ def main(argv: list[str]) -> int:
         daemon_result = _daemon_request_with_retries(work_dir, message, timeout, quiet)
         if daemon_result is not None:
             reply, exit_code = daemon_result
+            # Inject guardrail prompt for Claude (skip in sync mode for Codex)
+            if not sync_mode:
+                print(ASYNC_GUARDRAIL, file=sys.stderr, flush=True)
             if output_path:
                 atomic_write_text(output_path, reply + "\n")
                 return exit_code

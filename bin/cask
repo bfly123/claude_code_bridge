@@ -45,6 +45,13 @@ You are the SUPERVISOR, NOT the executor.
 
 """
 
+ASYNC_GUARDRAIL = """[CCB_ASYNC_SUBMITTED provider=codex]
+IMPORTANT: Task submitted to Codex. You MUST:
+1. Tell user "Codex processing..."
+2. END YOUR TURN IMMEDIATELY
+3. Do NOT wait, poll, check status, or use any more tools
+"""
+
 
 def _get_executor_from_roles() -> Optional[str]:
     """Read executor from roles config (priority: session > project > global)."""
@@ -76,13 +83,14 @@ def _get_executor_from_roles() -> Optional[str]:
 
 
 def _usage() -> None:
-    print("Usage: cask [--session-file FILE] [--timeout SECONDS] [--output FILE] <message>", file=sys.stderr)
+    print("Usage: cask [--sync] [--session-file FILE] [--timeout SECONDS] [--output FILE] <message>", file=sys.stderr)
 
 
-def _parse_args(argv: list[str]) -> Tuple[Optional[Path], float, str, bool, Optional[str]]:
+def _parse_args(argv: list[str]) -> Tuple[Optional[Path], float, str, bool, Optional[str], bool]:
     output: Optional[Path] = None
     timeout: Optional[float] = None
     quiet = False
+    sync_mode = False
     session_file: Optional[str] = None
     parts: list[str] = []
 
@@ -93,6 +101,9 @@ def _parse_args(argv: list[str]) -> Tuple[Optional[Path], float, str, bool, Opti
             raise SystemExit(0)
         if token in ("-q", "--quiet"):
             quiet = True
+            continue
+        if token == "--sync":
+            sync_mode = True
             continue
         if token == "--session-file":
             try:
@@ -122,12 +133,12 @@ def _parse_args(argv: list[str]) -> Tuple[Optional[Path], float, str, bool, Opti
             timeout = float(os.environ.get("CCB_SYNC_TIMEOUT", "-1"))
         except Exception:
             timeout = -1.0
-    return output, timeout, message, quiet, session_file
+    return output, timeout, message, quiet, session_file, sync_mode
 
 
 def main(argv: list[str]) -> int:
     try:
-        output_path, timeout, message, quiet, session_file = _parse_args(argv)
+        output_path, timeout, message, quiet, session_file, sync_mode = _parse_args(argv)
         if not message and not sys.stdin.isatty():
             message = read_stdin_text().strip()
         if not message:
@@ -156,6 +167,9 @@ def main(argv: list[str]) -> int:
             daemon_result = try_daemon_request(CASK_CLIENT_SPEC, work_dir, message, timeout, quiet, state_file)
         if daemon_result is not None:
             reply, exit_code = daemon_result
+            # Inject guardrail prompt for Claude (skip in sync mode for Codex)
+            if not sync_mode:
+                print(ASYNC_GUARDRAIL, file=sys.stderr, flush=True)
             if output_path:
                 atomic_write_text(output_path, reply + "\n")
                 return exit_code

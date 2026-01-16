@@ -17,14 +17,30 @@ Use `oask` to forward the user's request to the OpenCode pane started by `ccb up
 
 ## Quick Start
 
-- Preferred (wait & return reply): `oask -q --timeout -1 "$ARGUMENTS"`
-- Multiline (optional): `oask <<'EOF'` … `EOF`
+- Preferred (wait & return reply): `oask --sync -q "$ARGUMENTS"`
+- Multiline (optional): `oask --sync -q <<'EOF'` … `EOF`
 
 ## Workflow (Mandatory)
 
 1. Ensure OpenCode backend is up (`oping`, or run `ccb up opencode`).
-2. Run `oask -q --timeout -1` with the user's request and DO NOT send a second request until it exits.
+2. Run `oask --sync -q` with the user's request.
+3. **IMPORTANT**: Use `timeout_ms: 3600000` (1 hour) to allow long-running tasks.
+4. DO NOT send a second request until the current one exits.
+
+## CRITICAL: Wait Silently (READ THIS)
+
+After running `oask`, you MUST:
+- **DO NOTHING** while waiting for the command to return
+- **DO NOT** check status, monitor progress, or run any other commands
+- **DO NOT** read files, search code, or do "useful" work while waiting
+- **DO NOT** output any text like "waiting..." or "checking..."
+- **JUST WAIT** silently until oask returns with the result
+
+The command may take 10-60 minutes. This is NORMAL. Be patient.
+
+If you find yourself wanting to do something while waiting, STOP. Just wait.
 
 ## Notes
 
+- Always use `--sync` flag when calling from Codex.
 - Do not use `--async` from Codex: it returns immediately (no output), which causes the next task to be sent before the previous one completes.
