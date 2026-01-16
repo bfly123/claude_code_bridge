@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from ccb_config import apply_backend_env
+from project_id import compute_ccb_project_id
 from session_utils import find_project_session_file as _find_project_session_file, safe_write_session
 from terminal import get_backend_for_session
 
@@ -162,16 +163,15 @@ def load_project_session(work_dir: Path) -> Optional[CodexProjectSession]:
 
 
 def compute_session_key(session: CodexProjectSession) -> str:
-    # Use a stable per-pane key for serialization.
-    # codex_session_id can change when the user runs `codex resume` inside the same pane; using it as a key
-    # can accidentally create a second worker and cause concurrent injection to the same pane.
-    marker = session.pane_title_marker
-    if marker:
-        return f"codex_marker:{marker}"
-    pane = session.pane_id
-    if pane:
-        return f"codex_pane:{pane}"
-    sid = session.codex_session_id
-    if sid:
-        return f"codex:{sid}"
-    return f"codex_file:{session.session_file}"
+    """
+    Compute the daemon routing/serialization key for this provider.
+
+    Hard rule: include provider + ccb_project_id to isolate projects and providers.
+    """
+    pid = str(session.data.get("ccb_project_id") or "").strip()
+    if not pid:
+        try:
+            pid = compute_ccb_project_id(Path(session.work_dir))
+        except Exception:
+            pid = ""
+    return f"codex:{pid}" if pid else "codex:unknown"

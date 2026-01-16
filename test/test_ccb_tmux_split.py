@@ -22,6 +22,7 @@ def _load_ccb_module() -> object:
 def test_run_up_sorts_providers_in_tmux(monkeypatch, tmp_path: Path) -> None:
     ccb = _load_ccb_module()
     monkeypatch.chdir(tmp_path)
+    (tmp_path / ".ccb_config").mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("TMUX_PANE", "%0")
     monkeypatch.setattr(ccb, "detect_terminal", lambda: "tmux")
 
@@ -48,6 +49,7 @@ def test_run_up_sorts_providers_in_tmux(monkeypatch, tmp_path: Path) -> None:
 def test_start_codex_tmux_writes_bridge_pid(monkeypatch, tmp_path: Path) -> None:
     ccb = _load_ccb_module()
     monkeypatch.chdir(tmp_path)
+    (tmp_path / ".ccb_config").mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("TMUX_PANE", "%0")
 
     # Ensure runtime dir lands under tmp_path.

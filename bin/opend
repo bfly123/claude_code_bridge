@@ -19,8 +19,8 @@ setup_windows_encoding()
 from i18n import t
 
 
-def _load_project_id(work_dir: Path, explicit_session_file: Path | None) -> str:
-    """Load project_id from .opencode-session or compute from work_dir"""
+def _load_session_id_filter(work_dir: Path, explicit_session_file: Path | None) -> str | None:
+    """Load OpenCode internal session id (ses_*) from .opencode-session if present."""
     session_file = explicit_session_file
     if session_file is None:
         try:
@@ -33,14 +33,12 @@ def _load_project_id(work_dir: Path, explicit_session_file: Path | None) -> str:
         try:
             with session_file.open("r", encoding="utf-8-sig") as f:
                 data = json.load(f)
-            wd = data.get("work_dir")
-            if wd:
-                work_dir = Path(wd)
+            sid = str(data.get("opencode_session_id") or "").strip()
+            if sid.startswith("ses_"):
+                return sid
         except Exception:
             pass
-
-    from opencode_comm import compute_opencode_project_id
-    return compute_opencode_project_id(work_dir)
+    return None
 
 
 try:
@@ -61,17 +59,19 @@ def main(argv: list[str]) -> int:
         parser.add_argument("--session-file", dest="session_file", default=None, help="Path to .opencode-session (or .ccb_config/.opencode-session)")
         args = parser.parse_args(argv[1:])
 
-        from askd_client import resolve_work_dir
+        from askd_client import resolve_work_dir_with_registry
         from providers import OASK_CLIENT_SPEC
 
-        work_dir, explicit_session_file = resolve_work_dir(
+        work_dir, explicit_session_file = resolve_work_dir_with_registry(
             OASK_CLIENT_SPEC,
+            provider="opencode",
             cli_session_file=args.session_file,
             env_session_file=os.environ.get("CCB_SESSION_FILE"),
         )
 
-        project_id = _load_project_id(work_dir, explicit_session_file)
-        reader = OpenCodeLogReader(project_id=project_id, work_dir=work_dir)
+        session_filter = _load_session_id_filter(work_dir, explicit_session_file)
+        # Prefer storage-based autodetection for project_id; avoids stale git-derived ids.
+        reader = OpenCodeLogReader(project_id="global", work_dir=work_dir, session_id_filter=session_filter)
         message = reader.latest_message()
         if not message:
             print(t("no_reply_available", provider="OpenCode"), file=sys.stderr)

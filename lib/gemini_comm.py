@@ -17,6 +17,8 @@ from terminal import get_backend_for_session, get_pane_id_from_session
 from ccb_config import apply_backend_env
 from i18n import t
 from session_utils import find_project_session_file
+from pane_registry import upsert_registry
+from project_id import compute_ccb_project_id
 
 apply_backend_env()
 
@@ -530,6 +532,30 @@ class GeminiCommunicator:
         self.project_session_file = self.session_info.get("_session_file")
         self.backend = get_backend_for_session(self.session_info)
 
+        # Best-effort: publish to registry for project_id routing.
+        try:
+            wd = self.session_info.get("work_dir")
+            ccb_pid = compute_ccb_project_id(Path(wd)) if isinstance(wd, str) and wd else ""
+            upsert_registry(
+                {
+                    "ccb_session_id": self.session_id,
+                    "ccb_project_id": ccb_pid or None,
+                    "work_dir": wd,
+                    "terminal": self.terminal,
+                    "providers": {
+                        "gemini": {
+                            "pane_id": self.pane_id or None,
+                            "pane_title_marker": self.session_info.get("pane_title_marker"),
+                            "session_file": self.project_session_file,
+                            "gemini_session_id": self.session_info.get("gemini_session_id"),
+                            "gemini_session_path": self.session_info.get("gemini_session_path") or self.session_info.get("session_path"),
+                        }
+                    },
+                }
+            )
+        except Exception:
+            pass
+
         # Lazy initialization: defer log reader and health check
         self._log_reader: Optional[GeminiLogReader] = None
         self._log_reader_primed = False
@@ -767,6 +793,15 @@ class GeminiCommunicator:
             updated = True
 
         try:
+            if not (data.get("ccb_project_id") or "").strip():
+                wd = data.get("work_dir")
+                if isinstance(wd, str) and wd.strip():
+                    data["ccb_project_id"] = compute_ccb_project_id(Path(wd.strip()))
+                    updated = True
+        except Exception:
+            pass
+
+        try:
             project_hash = session_path.parent.parent.name
         except Exception:
             project_hash = ""
@@ -808,6 +843,30 @@ class GeminiCommunicator:
                     tmp_file.unlink(missing_ok=True)
             except Exception:
                 pass
+
+        # Best-effort: keep registry in sync with the latest binding.
+        try:
+            wd = data.get("work_dir")
+            ccb_pid = str(data.get("ccb_project_id") or "").strip()
+            upsert_registry(
+                {
+                    "ccb_session_id": self.session_id,
+                    "ccb_project_id": ccb_pid or None,
+                    "work_dir": wd,
+                    "terminal": self.terminal,
+                    "providers": {
+                        "gemini": {
+                            "pane_id": self.pane_id or None,
+                            "pane_title_marker": data.get("pane_title_marker"),
+                            "session_file": str(project_file),
+                            "gemini_session_id": data.get("gemini_session_id"),
+                            "gemini_session_path": data.get("gemini_session_path"),
+                        }
+                    },
+                }
+            )
+        except Exception:
+            pass
 
     def ping(self, display: bool = True) -> Tuple[bool, str]:
         healthy, status = self._check_session_health()

@@ -11,7 +11,7 @@ from typing import Optional
 from worker_pool import BaseSessionWorker, PerSessionWorkerPool
 
 from oaskd_protocol import OaskdRequest, OaskdResult, is_done_text, make_req_id, strip_done_text, wrap_opencode_prompt
-from oaskd_session import compute_session_key, load_project_session
+from oaskd_session import load_project_session
 from opencode_comm import OpenCodeLogReader
 from process_lock import ProviderLock
 from terminal import get_backend_for_session
@@ -20,6 +20,7 @@ from env_utils import env_bool
 import askd_rpc
 from askd_server import AskDaemonServer
 from providers import OASKD_SPEC
+from project_id import compute_ccb_project_id
 
 
 def _now_ms() -> int:
@@ -67,7 +68,10 @@ class _SessionWorker(BaseSessionWorker[_QueuedTask, OaskdResult]):
         # Cross-process serialization: if another client falls back to direct mode, it uses the same
         # per-session ProviderLock ("opencode", cwd=f"session:{session_key}"). Without this, daemon and
         # direct-mode requests can interleave in the same OpenCode pane and cause reply mismatches/hangs.
-        lock_timeout = min(300.0, max(1.0, float(req.timeout_s)))
+        if float(req.timeout_s) < 0.0:
+            lock_timeout = 300.0
+        else:
+            lock_timeout = min(300.0, max(1.0, float(req.timeout_s)))
         lock = ProviderLock("opencode", cwd=f"session:{self.session_key}", timeout=lock_timeout)
         if not lock.acquire():
             return OaskdResult(
@@ -116,7 +120,9 @@ class _SessionWorker(BaseSessionWorker[_QueuedTask, OaskdResult]):
 
             log_reader = OpenCodeLogReader(
                 work_dir=Path(session.work_dir),
-                project_id=(session.opencode_project_id or "global"),
+                # Prefer storage-based autodetection for robustness across OpenCode restarts/updates and
+                # to avoid relying on git-derived project ids when possible.
+                project_id="global",
                 session_id_filter=session.opencode_session_id_filter,
             )
             state = _tail_state_for_session(log_reader)
@@ -135,7 +141,19 @@ class _SessionWorker(BaseSessionWorker[_QueuedTask, OaskdResult]):
             prompt = wrap_opencode_prompt(req.message, task.req_id)
             backend.send_text(pane_id, prompt)
 
-            deadline = time.time() + float(req.timeout_s)
+            # Async mode: when timeout_s == 0, only ensure the prompt is injected (serialized via the lock)
+            # and return immediately without waiting for OpenCode storage to update.
+            if float(req.timeout_s) == 0.0:
+                return OaskdResult(
+                    exit_code=0,
+                    reply="",
+                    req_id=task.req_id,
+                    session_key=self.session_key,
+                    done_seen=True,
+                    done_ms=_now_ms() - started_ms,
+                )
+
+            deadline = None if float(req.timeout_s) < 0.0 else (time.time() + float(req.timeout_s))
             chunks: list[str] = []
             done_seen = False
             done_ms: int | None = None
@@ -144,9 +162,13 @@ class _SessionWorker(BaseSessionWorker[_QueuedTask, OaskdResult]):
             last_pane_check = time.time()
 
             while True:
-                remaining = deadline - time.time()
-                if remaining <= 0:
-                    break
+                if deadline is not None:
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        break
+                    wait_step = min(remaining, 1.0)
+                else:
+                    wait_step = 1.0
 
                 if time.time() - last_pane_check >= pane_check_interval:
                     try:
@@ -165,7 +187,7 @@ class _SessionWorker(BaseSessionWorker[_QueuedTask, OaskdResult]):
                         )
                     last_pane_check = time.time()
 
-                reply, state = log_reader.wait_for_message(state, min(remaining, 1.0))
+                reply, state = log_reader.wait_for_message(state, wait_step)
 
                 # Detect user cancellation using OpenCode server logs (handles the race where storage isn't updated).
                 if cancel_enabled and session_id and cancel_cursor is not None:
@@ -244,7 +266,21 @@ class _WorkerPool:
         task = _QueuedTask(request=request, created_ms=_now_ms(), req_id=req_id, done_event=threading.Event())
 
         session = load_project_session(Path(request.work_dir))
-        session_key = compute_session_key(session) if session else "opencode:unknown"
+        ccb_project_id = ""
+        try:
+            if session:
+                ccb_project_id = str(session.data.get("ccb_project_id") or "").strip()
+                if not ccb_project_id:
+                    ccb_project_id = compute_ccb_project_id(Path(session.work_dir))
+                    if ccb_project_id:
+                        # Best-effort migration: persist for future runs.
+                        session.data["ccb_project_id"] = ccb_project_id
+                        session._write_back()
+            else:
+                ccb_project_id = compute_ccb_project_id(Path(request.work_dir))
+        except Exception:
+            ccb_project_id = ""
+        session_key = f"opencode:{ccb_project_id}" if ccb_project_id else "opencode:unknown"
 
         worker = self._pool.get_or_create(session_key, _SessionWorker)
         worker.enqueue(task)
@@ -283,7 +319,8 @@ class OaskdServer:
                 f"[INFO] recv client_id={req.client_id} work_dir={req.work_dir} timeout_s={int(req.timeout_s)} msg_len={len(req.message)}",
             )
             task = self.pool.submit(req)
-            task.done_event.wait(timeout=req.timeout_s + 5.0)
+            wait_timeout = None if float(req.timeout_s) < 0.0 else (float(req.timeout_s) + 5.0)
+            task.done_event.wait(timeout=wait_timeout)
             result = task.result
             if not result:
                 return {"type": "oask.response", "v": 1, "id": req.client_id, "exit_code": 2, "reply": ""}

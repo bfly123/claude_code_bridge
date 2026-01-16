@@ -23,7 +23,7 @@ from env_utils import env_bool
 from askd_client import (
     state_file_from_env,
     find_project_session_file,
-    resolve_work_dir,
+    resolve_work_dir_with_registry,
     try_daemon_request,
     maybe_start_daemon,
     wait_for_daemon_ready,
@@ -107,13 +107,14 @@ def _daemon_retry_wait_s(timeout: float) -> float:
 
 
 def _usage() -> None:
-    print("Usage: oask [--session-file FILE] [--timeout SECONDS] [--output FILE] <message>", file=sys.stderr)
+    print("Usage: oask [--async] [--session-file FILE] [--timeout SECONDS] [--output FILE] <message>", file=sys.stderr)
 
 
-def _parse_args(argv: list[str]) -> Tuple[Optional[Path], float, str, bool, Optional[str]]:
+def _parse_args(argv: list[str]) -> Tuple[Optional[Path], float, str, bool, Optional[str], bool]:
     output: Optional[Path] = None
     timeout: Optional[float] = None
     quiet = False
+    async_mode = False
     session_file: Optional[str] = None
     parts: list[str] = []
 
@@ -124,6 +125,9 @@ def _parse_args(argv: list[str]) -> Tuple[Optional[Path], float, str, bool, Opti
             raise SystemExit(0)
         if token in ("-q", "--quiet"):
             quiet = True
+            continue
+        if token == "--async":
+            async_mode = True
             continue
         if token == "--session-file":
             try:
@@ -153,27 +157,27 @@ def _parse_args(argv: list[str]) -> Tuple[Optional[Path], float, str, bool, Opti
             timeout = float(os.environ.get("CCB_SYNC_TIMEOUT", "3600.0"))
         except Exception:
             timeout = 3600.0
-    return output, timeout, message, quiet, session_file
+    if async_mode:
+        timeout = 0.0
+    return output, timeout, message, quiet, session_file, async_mode
 
 
 def main(argv: list[str]) -> int:
     try:
         from cli_output import EXIT_ERROR, EXIT_NO_REPLY, EXIT_OK, atomic_write_text
 
-        output_path, timeout, message, quiet, session_file = _parse_args(argv)
+        output_path, timeout, message, quiet, session_file, async_mode = _parse_args(argv)
         if not message and not sys.stdin.isatty():
             message = read_stdin_text().strip()
         if not message:
             _usage()
             return EXIT_ERROR
 
-        if os.environ.get("CLAUDECODE") == "1" and not check_background_mode():
-            print("[ERROR] oask MUST be called with run_in_background=true", file=sys.stderr)
-            print("Correct usage: Bash(oask \"...\", run_in_background=true)", file=sys.stderr)
-            return EXIT_ERROR
+        # Foreground execution is allowed; background-mode enforcement is handled by the caller (if any).
 
-        work_dir, _ = resolve_work_dir(
+        work_dir, _ = resolve_work_dir_with_registry(
             OASK_CLIENT_SPEC,
+            provider="opencode",
             cli_session_file=session_file,
             env_session_file=os.environ.get("CCB_SESSION_FILE"),
         )
@@ -185,9 +189,10 @@ def main(argv: list[str]) -> int:
             if output_path:
                 atomic_write_text(output_path, reply + "\n")
                 return exit_code
-            sys.stdout.write(reply)
-            if not reply.endswith("\n"):
-                sys.stdout.write("\n")
+            if not async_mode:
+                sys.stdout.write(reply)
+                if not reply.endswith("\n"):
+                    sys.stdout.write("\n")
             return exit_code
 
         if not env_bool(OASK_CLIENT_SPEC.enabled_env, True):

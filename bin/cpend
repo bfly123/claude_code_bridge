@@ -21,10 +21,11 @@ try:
     from cli_output import EXIT_ERROR, EXIT_NO_REPLY, EXIT_OK
     from codex_comm import CodexLogReader, SESSION_ID_PATTERN
     from ccb_protocol import strip_trailing_markers
-    from pane_registry import load_registry_by_session_id, load_registry_by_claude_pane
+    from pane_registry import load_registry_by_session_id, load_registry_by_claude_pane, load_registry_by_project_id
     from session_utils import find_project_session_file
-    from askd_client import resolve_work_dir
+    from askd_client import resolve_work_dir_with_registry
     from providers import CASK_CLIENT_SPEC
+    from project_id import compute_ccb_project_id
 except ImportError as exc:
     print(f"Import failed: {exc}")
     sys.exit(1)
@@ -61,7 +62,9 @@ def _load_registry_log_path() -> tuple[Path | None, dict | None]:
     if session_id:
         record = load_registry_by_session_id(session_id)
         if record:
-            path_str = record.get("codex_session_path")
+            providers = record.get("providers") if isinstance(record.get("providers"), dict) else {}
+            codex = providers.get("codex") if isinstance(providers, dict) else None
+            path_str = (codex or {}).get("codex_session_path") if isinstance(codex, dict) else record.get("codex_session_path")
             if path_str:
                 path = Path(path_str).expanduser()
                 _debug(f"Using registry by CODEX_SESSION_ID: {path}")
@@ -71,7 +74,9 @@ def _load_registry_log_path() -> tuple[Path | None, dict | None]:
     if pane_id:
         record = load_registry_by_claude_pane(pane_id)
         if record:
-            path_str = record.get("codex_session_path")
+            providers = record.get("providers") if isinstance(record.get("providers"), dict) else {}
+            codex = providers.get("codex") if isinstance(providers, dict) else None
+            path_str = (codex or {}).get("codex_session_path") if isinstance(codex, dict) else record.get("codex_session_path")
             if path_str:
                 path = Path(path_str).expanduser()
                 _debug(f"Using registry by WEZTERM_PANE: {path}")
@@ -114,13 +119,29 @@ def main(argv: list[str]) -> int:
         n = max(1, int(args.n or 1))
         raw = bool(args.raw)
 
-        work_dir, explicit_session_file = resolve_work_dir(
+        work_dir, explicit_session_file = resolve_work_dir_with_registry(
             CASK_CLIENT_SPEC,
+            provider="codex",
             cli_session_file=args.session_file,
             env_session_file=os.environ.get("CCB_SESSION_FILE"),
         )
 
         registry_log_path, registry_record = _load_registry_log_path()
+        if not registry_log_path:
+            try:
+                pid = compute_ccb_project_id(work_dir)
+            except Exception:
+                pid = ""
+            if pid:
+                rec = load_registry_by_project_id(pid, "codex")
+                if rec:
+                    providers = rec.get("providers") if isinstance(rec.get("providers"), dict) else {}
+                    codex = providers.get("codex") if isinstance(providers, dict) else None
+                    path_str = (codex or {}).get("codex_session_path") if isinstance(codex, dict) else None
+                    if isinstance(path_str, str) and path_str.strip():
+                        registry_log_path = Path(path_str.strip()).expanduser()
+                        registry_record = rec
+                        _debug(f"Using registry by ccb_project_id: {registry_log_path}")
         session_log_path, session_id = _load_session_log_path(work_dir, explicit_session_file)
 
         log_path = registry_log_path or session_log_path

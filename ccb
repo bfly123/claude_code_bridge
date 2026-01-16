@@ -30,6 +30,7 @@ from compat import setup_windows_encoding
 from ccb_config import get_backend_env
 from session_utils import safe_write_session, check_session_writable, find_project_session_file
 from pane_registry import upsert_registry
+from project_id import compute_ccb_project_id
 from i18n import t
 
 setup_windows_encoding()
@@ -1718,6 +1719,7 @@ class AILauncher:
         work_dir = self.project_root
         data.update({
             "session_id": self.session_id,
+            "ccb_project_id": compute_ccb_project_id(work_dir),
             "runtime_dir": str(runtime),
             "input_fifo": str(input_fifo),
             "output_fifo": str(output_fifo),
@@ -1740,6 +1742,22 @@ class AILauncher:
         if not ok:
             print(err, file=sys.stderr)
             return False
+        try:
+            upsert_registry({
+                "ccb_session_id": self.session_id,
+                "ccb_project_id": compute_ccb_project_id(self.project_root),
+                "work_dir": str(self.project_root),
+                "terminal": self.terminal_type,
+                "providers": {
+                    "codex": {
+                        "pane_id": pane_id,
+                        "pane_title_marker": pane_title_marker,
+                        "session_file": str(session_file),
+                    }
+                },
+            })
+        except Exception:
+            pass
         return True
 
     def _write_cend_registry(self, claude_pane_id: str, codex_pane_id: str | None) -> bool:
@@ -1749,8 +1767,13 @@ class AILauncher:
             "ccb_session_id": self.session_id,
             "claude_pane_id": claude_pane_id,
             "codex_pane_id": codex_pane_id,
+            "ccb_project_id": compute_ccb_project_id(self.project_root),
             "work_dir": str(Path.cwd()),
             "terminal": self.terminal_type,
+            "providers": {
+                "claude": {"pane_id": claude_pane_id},
+                "codex": {"pane_id": codex_pane_id},
+            },
         }
         ok = upsert_registry(record)
         if not ok:
@@ -1769,6 +1792,7 @@ class AILauncher:
 
         data = {
             "session_id": self.session_id,
+            "ccb_project_id": compute_ccb_project_id(self.project_root),
             "runtime_dir": str(runtime),
             "terminal": self.terminal_type,
             "tmux_session": tmux_session,
@@ -1786,6 +1810,22 @@ class AILauncher:
         if not ok:
             print(err, file=sys.stderr)
             return False
+        try:
+            upsert_registry({
+                "ccb_session_id": self.session_id,
+                "ccb_project_id": compute_ccb_project_id(self.project_root),
+                "work_dir": str(self.project_root),
+                "terminal": self.terminal_type,
+                "providers": {
+                    "gemini": {
+                        "pane_id": pane_id,
+                        "pane_title_marker": pane_title_marker,
+                        "session_file": str(session_file),
+                    }
+                },
+            })
+        except Exception:
+            pass
         return True
 
     def _write_opencode_session(self, runtime, tmux_session, pane_id=None, pane_title_marker=None, start_cmd=None):
@@ -1800,6 +1840,7 @@ class AILauncher:
         data = {
             "session_id": self.session_id,
             "ccb_session_id": self.session_id,
+            "ccb_project_id": compute_ccb_project_id(self.project_root),
             "runtime_dir": str(runtime),
             "terminal": self.terminal_type,
             "tmux_session": tmux_session,
@@ -1817,6 +1858,22 @@ class AILauncher:
         if not ok:
             print(err, file=sys.stderr)
             return False
+        try:
+            upsert_registry({
+                "ccb_session_id": self.session_id,
+                "ccb_project_id": compute_ccb_project_id(self.project_root),
+                "work_dir": str(self.project_root),
+                "terminal": self.terminal_type,
+                "providers": {
+                    "opencode": {
+                        "pane_id": pane_id,
+                        "pane_title_marker": pane_title_marker,
+                        "session_file": str(session_file),
+                    }
+                },
+            })
+        except Exception:
+            pass
         return True
 
     def _claude_project_dir(self, work_dir: Path) -> Path:
@@ -2159,17 +2216,143 @@ class AILauncher:
 
 
 def cmd_up(args):
+    def _env_truthy(name: str) -> bool:
+        raw = os.environ.get(name)
+        if raw is None:
+            return False
+        v = raw.strip().lower()
+        if v in {"1", "true", "yes", "y", "on"}:
+            return True
+        if v in {"0", "false", "no", "n", "off"}:
+            return False
+        return False
+
+    def _prompt_yes_no(prompt: str) -> bool:
+        try:
+            reply = input(prompt).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return False
+        return reply in {"y", "yes"}
+
+    def _is_dangerous_root(cwd: Path) -> tuple[bool, str]:
+        try:
+            resolved = cwd.resolve()
+        except Exception:
+            resolved = cwd.absolute()
+
+        try:
+            home = Path.home().resolve()
+        except Exception:
+            try:
+                home = Path.home().absolute()
+            except Exception:
+                home = None
+
+        if home and resolved == home:
+            return True, "$HOME"
+
+        # POSIX root: "/"; Windows drive root: "C:\\"
+        try:
+            anchor = Path(resolved.anchor) if resolved.anchor else None
+        except Exception:
+            anchor = None
+        if anchor and resolved == anchor:
+            return True, "filesystem root"
+
+        return False, ""
+
+    def _find_parent_anchor_dir(cwd: Path) -> Path | None:
+        """
+        Find the nearest ancestor `.ccb_config/` (project anchor) directory.
+
+        Used only to warn when `ccb up` is invoked from a subdirectory of an existing project root,
+        to avoid accidentally creating a nested anchor. Session/config lookup remains local-only.
+        """
+        try:
+            start = cwd.resolve()
+        except Exception:
+            start = cwd.absolute()
+
+        for parent in start.parents:
+            candidate = parent / ".ccb_config"
+            if not candidate.is_dir():
+                continue
+            # Ignore anchors at $HOME or filesystem root (too broad / likely accidental).
+            is_dangerous, _reason = _is_dangerous_root(parent)
+            if is_dangerous:
+                continue
+            return candidate
+        return None
+
     providers = _parse_providers(args.providers or ["codex"])
     if not providers:
         return 2
     cfg = Path.cwd() / ".ccb_config"
-    if not cfg.is_dir():
-        print("❌ Missing required project config directory: .ccb_config", file=sys.stderr)
-        print(f"   cwd: {Path.cwd()}", file=sys.stderr)
-        print("💡 Fix:", file=sys.stderr)
-        print(f"   mkdir -p {cfg}", file=sys.stderr)
-        print("   (Tip: you may be in the wrong directory; run this in your project root.)", file=sys.stderr)
+    if cfg.exists() and not cfg.is_dir():
+        print("❌ Invalid .ccb_config: exists but is not a directory", file=sys.stderr)
+        print(f"   path: {cfg}", file=sys.stderr)
+        print("💡 Fix: remove it or rename it, then retry.", file=sys.stderr)
         return 2
+
+    if not cfg.is_dir():
+        init_requested = bool(getattr(args, "init", False)) or _env_truthy("CCB_INIT_PROJECT")
+        is_dangerous, danger_reason = _is_dangerous_root(Path.cwd())
+        parent_anchor = _find_parent_anchor_dir(Path.cwd())
+        if parent_anchor:
+            project_root = parent_anchor.parent
+            print(
+                "❌ .ccb_config not found in current directory, but an existing project anchor was found in a parent directory.",
+                file=sys.stderr,
+            )
+            print(f"   cwd:         {Path.cwd()}", file=sys.stderr)
+            print(f"   project_root:{project_root}", file=sys.stderr)
+            print("💡 Fix: cd to the project root and run `ccb up` there.", file=sys.stderr)
+            print(f"   cd {project_root}", file=sys.stderr)
+            return 2
+
+        if not sys.stdin.isatty():
+            print("❌ Missing required project config directory: .ccb_config", file=sys.stderr)
+            print(f"   cwd: {Path.cwd()}", file=sys.stderr)
+            print("💡 Fix:", file=sys.stderr)
+            print(f"   mkdir -p {cfg}", file=sys.stderr)
+            print("   (Tip: you may be in the wrong directory; run this in your project root.)", file=sys.stderr)
+            if not init_requested:
+                print("   (Non-interactive: pass --init or set CCB_INIT_PROJECT=1 to auto-create.)", file=sys.stderr)
+                return 2
+            if is_dangerous and not _env_truthy("CCB_INIT_PROJECT_DANGEROUS"):
+                print(f"❌ Refusing to auto-create .ccb_config in {danger_reason} in non-interactive mode.", file=sys.stderr)
+                print("💡 If you really intend to do this, set CCB_INIT_PROJECT_DANGEROUS=1 and retry.", file=sys.stderr)
+                return 2
+            try:
+                cfg.mkdir(parents=False, exist_ok=True)
+                print(f"✅ Created: {cfg}", file=sys.stderr)
+            except Exception as exc:
+                print(f"❌ Failed to create {cfg}: {exc}", file=sys.stderr)
+                return 2
+        else:
+            print("⚠️ .ccb_config not found in current directory.", file=sys.stderr)
+            print(f"   cwd: {Path.cwd()}", file=sys.stderr)
+            print("   This usually means you are not in your project root.", file=sys.stderr)
+
+            if is_dangerous:
+                print(f"⚠️ Dangerous directory detected ({danger_reason}).", file=sys.stderr)
+
+            # Always require an explicit confirmation when creating.
+            if not _prompt_yes_no("Create .ccb_config in THIS directory? (y/N) "):
+                print("Cancelled.", file=sys.stderr)
+                print(f"💡 If this is your project root: mkdir -p {cfg}", file=sys.stderr)
+                return 2
+            if is_dangerous:
+                if not _prompt_yes_no(f"Confirm again: create .ccb_config in {danger_reason}? (y/N) "):
+                    print("Cancelled.", file=sys.stderr)
+                    return 2
+            try:
+                cfg.mkdir(parents=False, exist_ok=True)
+                print(f"✅ Created: {cfg}", file=sys.stderr)
+            except Exception as exc:
+                print(f"❌ Failed to create {cfg}: {exc}", file=sys.stderr)
+                return 2
+
     launcher = AILauncher(
         providers=providers,
         resume=args.resume,
@@ -2803,6 +2986,11 @@ def main():
         "providers",
         nargs="*",
         help="Backends to start (space or comma separated): codex, gemini, opencode",
+    )
+    up_parser.add_argument(
+        "--init",
+        action="store_true",
+        help="Initialize project by creating .ccb_config if missing (still asks for confirmation when interactive)",
     )
     up_parser.add_argument("-r", "--resume", "--restore", action="store_true", help="Resume context")
     up_parser.add_argument("-a", "--auto", action="store_true", help="Full auto permission mode")
