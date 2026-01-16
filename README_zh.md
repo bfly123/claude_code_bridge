@@ -1,6 +1,6 @@
 <div align="center">
 
-# Claude Code Bridge (ccb) v4.0.9
+# Claude Code Bridge (ccb) v4.1.0
 
 **基于终端分屏的 Claude & Codex & Gemini 丝滑协作工具**
 
@@ -15,7 +15,7 @@
   <img src="https://img.shields.io/badge/Every_Model_Controllable-CF1322?style=for-the-badge" alt="Every Model Controllable">
 </p>
 
-[![Version](https://img.shields.io/badge/version-4.0.9-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-4.1.0-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 [English](README.md) | **中文**
@@ -430,6 +430,11 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile
 
 <details>
 <summary><b>更新历史</b></summary>
+
+### v4.1.0
+- **异步护栏**: `cask/gask/oask` 执行后输出护栏提示，防止 Claude 继续轮询
+- **同步模式**: 添加 `--sync` 参数，Codex 调用时跳过护栏提示
+- **Codex Skills 更新**: `oask/gask` 使用 `--sync` 静默等待
 
 ### v4.0
 - **全部重构**：整体架构重写，更清晰、更稳定
