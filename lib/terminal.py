@@ -918,12 +918,85 @@ class WeztermBackend(TerminalBackend):
 _backend_cache: Optional[TerminalBackend] = None
 
 
+def _current_tty() -> str | None:
+    for fd in (0, 1, 2):
+        try:
+            return os.ttyname(fd)
+        except Exception:
+            continue
+    return None
+
+
+def _inside_tmux() -> bool:
+    if not (os.environ.get("TMUX") or os.environ.get("TMUX_PANE")):
+        return False
+    if not shutil.which("tmux"):
+        return False
+
+    tty = _current_tty()
+    pane = (os.environ.get("TMUX_PANE") or "").strip()
+
+    if pane:
+        try:
+            cp = _run(
+                ["tmux", "display-message", "-p", "-t", pane, "#{pane_tty}"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=0.5,
+            )
+            pane_tty = (cp.stdout or "").strip()
+            if cp.returncode == 0 and tty and pane_tty == tty:
+                return True
+        except Exception:
+            pass
+
+    if tty:
+        try:
+            cp = _run(
+                ["tmux", "display-message", "-p", "#{client_tty}"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=0.5,
+            )
+            client_tty = (cp.stdout or "").strip()
+            if cp.returncode == 0 and client_tty == tty:
+                return True
+        except Exception:
+            pass
+
+    if not tty and pane:
+        try:
+            cp = _run(
+                ["tmux", "display-message", "-p", "-t", pane, "#{pane_id}"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=0.5,
+            )
+            pane_id = (cp.stdout or "").strip()
+            if cp.returncode == 0 and pane_id.startswith("%"):
+                return True
+        except Exception:
+            pass
+
+    return False
+
+
+def _inside_wezterm() -> bool:
+    return bool((os.environ.get("WEZTERM_PANE") or "").strip())
+
+
 def detect_terminal() -> Optional[str]:
     # Priority 1: detect *current* terminal session from env vars.
     # Check tmux first - it's the "inner" environment when running WezTerm with tmux.
-    if os.environ.get("TMUX") or os.environ.get("TMUX_PANE"):
+    if _inside_tmux():
         return "tmux"
-    if os.environ.get("WEZTERM_PANE"):
+    if _inside_wezterm():
         return "wezterm"
 
     return None

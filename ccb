@@ -679,16 +679,6 @@ class AILauncher:
         if forced in {"wezterm", "tmux"}:
             return forced
 
-        # When inside tmux, use tmux (check first - tmux is the "inner" environment
-        # when running inside WezTerm with tmux)
-        if os.environ.get("TMUX") or os.environ.get("TMUX_PANE"):
-            return "tmux"
-        # When inside WezTerm pane (without tmux), use wezterm
-        if os.environ.get("WEZTERM_PANE"):
-            return "wezterm"
-
-        # Not inside any multiplexer:
-        # Allow WezTerm-only mode only when actually inside a WezTerm pane.
         detected = detect_terminal()
         if detected:
             return detected
@@ -2211,6 +2201,17 @@ class AILauncher:
 
 
 def cmd_up(args):
+    # Enforce terminal environment requirement
+    terminal = detect_terminal()
+    if terminal is None:
+        print("[ERROR] CCB must run inside tmux or WezTerm.", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("Please start tmux first:", file=sys.stderr)
+        print("  tmux", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("Or use WezTerm terminal emulator.", file=sys.stderr)
+        return 1
+
     def _env_truthy(name: str) -> bool:
         raw = os.environ.get(name)
         if raw is None:
