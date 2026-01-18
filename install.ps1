@@ -32,6 +32,7 @@ $script:SCRIPTS_TO_LINK = @(
   "cask", "caskd", "cpend", "cping",
   "gask", "gaskd", "gpend", "gping",
   "oask", "oaskd", "opend", "oping",
+  "lask",
   "ccb-layout"
 )
 
@@ -235,6 +236,7 @@ function Install-Native {
     "cask", "caskd", "cping", "cpend",
     "gask", "gaskd", "gping", "gpend",
     "oask", "oaskd", "oping", "opend",
+    "lask",
     "ccb-layout"
   )
 
