@@ -20,14 +20,11 @@ EOF
 , run_in_background=true)
 ```
 
-## CRITICAL Rules
+## Rules
 
-- Always use `run_in_background=true`.
 - After running `gask`, say “Gemini processing...” and immediately end your turn.
 - Do not wait for results or check status in the same turn.
 
 ## Notes
 
-- If it fails, check backend health with `gping`, or start it with `ccb up gemini`.
-- For short 1-liners you can also do: `Bash(gask "…", run_in_background=true)` (but prefer heredoc for arbitrary text).
-- For a more complete pattern (including heredoc/multiline): `../docs/async-ask-pattern.md`
+- If it fails, check backend health with `gping`.

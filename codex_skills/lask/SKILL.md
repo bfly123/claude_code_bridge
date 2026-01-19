@@ -1,26 +1,29 @@
 ---
 name: lask
-description: Send message to Claude pane (fire-and-forget). Use when relaying info back to Claude from Codex/Gemini/OpenCode.
+description: Send a task to Claude via the `lask` CLI and wait for the reply. Use only when the user explicitly delegates to Claude; not for questions about Claude itself.
 metadata:
-  short-description: Send a message to Claude via lask
+  short-description: Ask Claude (wait for reply) via lask
   backend: claude
 ---
 
-# lask (Send to Claude)
+# lask (Ask Claude)
 
-Send a message to the active Claude pane. Does not wait for reply.
+Send a message to the active Claude pane and wait for the reply.
 
 ## Prereqs (Backend)
 
-- Requires a CCB session registry (created by `ccb up ...`) containing a `claude_pane_id`.
+- Requires a CCB session registry containing a `claude_pane_id`.
 - `lask` must run in the same environment as `ccb` (WSL vs native Windows).
 
-## Quick Start
+## Execution (MANDATORY)
 
-- Preferred (works best on Windows too): `lask "$ARGUMENTS"`
-- Multiline (optional): `lask <<'EOF'` … `EOF`
+```bash
+lask --sync -q <<'EOF'
+$ARGUMENTS
+EOF
+```
 
 ## Notes
 
-- Fire-and-forget: only sends text, does not wait for Claude's response.
-- If it fails to find the session/Claude pane, run `ccb up ...` (from within tmux/WezTerm) first.
+- `lask` is synchronous; the `--sync` flag disables guardrail prompts intended for Claude.
+- If it fails to find the session/Claude pane, check backend health with `lping`.

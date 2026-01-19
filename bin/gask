@@ -229,7 +229,7 @@ def main(argv: list[str]) -> int:
             return EXIT_ERROR
         if not find_project_session_file(work_dir, GASK_CLIENT_SPEC.session_filename):
             print("[ERROR] No active Gemini session found for this directory.", file=sys.stderr)
-            print("Run `ccb up gemini` in this project first.", file=sys.stderr)
+            print("Run `ccb gemini` (or add gemini to ccb.config) in this project first.", file=sys.stderr)
             return EXIT_ERROR
         print("[ERROR] gask daemon required but not available.", file=sys.stderr)
         print("Start it with `gaskd` (or enable autostart via CCB_GASKD_AUTOSTART=1).", file=sys.stderr)

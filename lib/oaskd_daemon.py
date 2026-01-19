@@ -88,7 +88,7 @@ class _SessionWorker(BaseSessionWorker[_QueuedTask, OaskdResult]):
             if not session:
                 return OaskdResult(
                     exit_code=1,
-                    reply="❌ No active OpenCode session found for work_dir. Run 'ccb up opencode' in that project first.",
+                    reply="❌ No active OpenCode session found for work_dir. Run 'ccb opencode' (or add opencode to ccb.config) in that project first.",
                     req_id=task.req_id,
                     session_key=self.session_key,
                     done_seen=False,

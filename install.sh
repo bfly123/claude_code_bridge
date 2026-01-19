@@ -101,7 +101,9 @@ SCRIPTS_TO_LINK=(
   bin/opend
   bin/oping
   bin/lask
-  bin/ccb-layout
+  bin/laskd
+  bin/lpend
+  bin/lping
   ccb
 )
 
@@ -764,7 +766,7 @@ Fast path (minimize latency):
 - If the user message is only the prefix (no question): ask a 1-line clarification for what to send.
 
 Actions:
-- Ask a question (default) -> `Bash(ASK_CMD, run_in_background=true)`, tell user "`ASSISTANT` processing (task: xxx)", then END your turn
+- Ask a question (default) -> `Bash(<cask|gask|oask> <<'EOF' ... EOF, run_in_background=true)`, tell user "`ASSISTANT` processing (task: xxx)", then END your turn
 - Check connectivity -> run `PING_CMD`
 - Use blocking/wait or "show previous reply" commands ONLY if the user explicitly requests them
 
@@ -773,14 +775,17 @@ Important restrictions:
   - Do NOT use `*pend` / `*end` unless the user explicitly requests
 
   ### Command Map
-  | Assistant | Prefixes | ASK_CMD (background) | PING_CMD | Explicit-request-only |
+  | Assistant | Prefixes | ASK (background) | PING_CMD | Explicit-request-only |
   |---|---|---|---|---|
-  | Codex | `@codex`, `codex:`, `ask codex`, `let codex`, `/cask` | `printf '%s' '<question>'` \| `cask` | `cping` | `cpend` |
-  | Gemini | `@gemini`, `gemini:`, `ask gemini`, `let gemini`, `/gask` | `printf '%s' '<question>'` \| `gask` | `gping` | `gpend` |
-  | OpenCode | `@opencode`, `opencode:`, `ask opencode`, `let opencode`, `/oask` | `printf '%s' '<question>'` \| `oask` | `oping` | `opend` |
+  | Codex | `@codex`, `codex:`, `ask codex`, `let codex`, `/cask` | `cask <<'EOF' ... EOF` | `cping` | `cpend` |
+  | Gemini | `@gemini`, `gemini:`, `ask gemini`, `let gemini`, `/gask` | `gask <<'EOF' ... EOF` | `gping` | `gpend` |
+  | OpenCode | `@opencode`, `opencode:`, `ask opencode`, `let opencode`, `/oask` | `oask <<'EOF' ... EOF` | `oping` | `opend` |
 
 Examples:
-- `codex: review this code` -> `Bash(printf '%s' 'review this code' | cask, run_in_background=true)`, END turn
+- `codex: review this code` -> `Bash(cask <<'EOF'
+review this code
+EOF
+, run_in_background=true)`, END turn
 - `is gemini alive?` -> `gping`
 <!-- CCB_CONFIG_END -->
 AI_RULES

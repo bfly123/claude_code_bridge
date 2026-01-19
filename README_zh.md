@@ -2,23 +2,22 @@
 
 # Claude Code Bridge (ccb) v4.1.3
 
-**基于终端分屏的 Claude & Codex & Gemini 丝滑协作工具**
-
-**打造真实的大模型专家协作团队，给 Claude Code / Codex / Gemini / OpenCode 配上"不会遗忘"的搭档**
+**基于终端分屏的全新多模型交互协作工具**
+**Claude & Codex & Gemini &opencode**
+**超低token时时通讯，发挥cli全部功能**
 
 <p>
   <img src="https://img.shields.io/badge/交互皆可见-096DD9?style=for-the-badge" alt="交互皆可见">
   <img src="https://img.shields.io/badge/模型皆可控-CF1322?style=for-the-badge" alt="模型皆可控">
-</p>
-<p>
-  <img src="https://img.shields.io/badge/Every_Interaction_Visible-096DD9?style=for-the-badge" alt="Every Interaction Visible">
-  <img src="https://img.shields.io/badge/Every_Model_Controllable-CF1322?style=for-the-badge" alt="Every Model Controllable">
 </p>
 
 [![Version](https://img.shields.io/badge/version-4.1.3-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 [English](README.md) | **中文**
+
+
+/home/bfly/yunwei/claude_codex/assets/show.png
 
 <img src="assets/readme_previews/video2.gif" alt="任意终端窗口协作演示" width="900">
 
@@ -30,20 +29,20 @@
 
 --- 
 
-**简介：** 多模型协作能够有效避免模型偏见、认知漏洞和上下文限制，然而 MCP、Skills 等直接调用 API 方式存在诸多局限性。本项目打造了一套新的可见即可得的方案。
+**简介：** 多模型协作能够有效避免模型偏见、认知漏洞和上下文限制，然而 MCP、Skills 等直接调用 API 方式存在诸多局限性可不可控性。本项目打造了一套全新的可见即可得方案。
 
 ## ⚡ 核心优势
 
 | 特性 | 价值 |
 | :--- | :--- |
-| **🖥️ 可见可控** | 多模型分屏 CLI 挂载，所见即所得，完全掌控。 |
-| **🧠 持久上下文** | 每个 AI 独立记忆，关闭后可随时恢复（`-r` 参数）。 |
-| **📉 节省 Token** | 仅发送轻量级指令，而非整个代码库历史 (~20k tokens)。 |
-| **🪟 原生终端体验** | 直接集成于 **WezTerm** (推荐) 或 tmux，无需配置复杂的服务器。 |
+| **可见可控** | 多模型分屏 CLI 挂载，所见即所得，完全掌控。 |
+| **持久上下文** | 每个 AI 独立记忆，关闭后可随时恢复（`-r` 参数）。 |
+| **节省 Token** | 通过守护程序仅收发送轻量级指令。 |
+| **原生终端体验** | 直接集成于**tmux**（任何term推荐）或 **WezTerm** （原生win推荐）。 |
 
 ---
 
-有人反复问我，和其他工作流软件的区别是什么，我用一句话回答：该项目只是不满api调用的agent交互方式而打造的可见可控的多模型通讯方案，该项目并不是工作流项目，但是基于它可以更容易发展出你所理想的工作流。
+有人问我，和其他工作流软件的区别是什么，我用一句话回答：该项目只是不满api调用的agent交互方式而打造的**可见可控的多模型通讯方案**，该项目并不是工作流项目，但是基于它可以更容易发展出你所理想的工作流。
 
 <h2 align="center">🚀 v4.0 新版本特性</h2>
 
@@ -64,13 +63,7 @@
 
 v3.0 带来了革命性的 **智能守护进程 (Smart Daemons)** 架构，实现了并行执行、跨 Agent 协调和企业级稳定性。
 
-<div align="center">
 
-![Parallel](https://img.shields.io/badge/Strategy-Parallel_Queue-blue?style=flat-square)
-![Stability](https://img.shields.io/badge/Daemon-Auto_Managed-green?style=flat-square)
-![Interruption](https://img.shields.io/badge/Gemini-Interruption_Aware-orange?style=flat-square)
-
-</div>
 
 <h3 align="center">✨ 核心特性</h3>
 
@@ -195,24 +188,45 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 install
 
 ### 启动
 ```bash
-ccb up codex            # 启动 Codex
-ccb up gemini           # 启动 Gemini
-ccb up opencode         # 启动 OpenCode
-ccb up codex gemini     # 同时启动两个
-ccb up codex gemini opencode  # 同时启动三个（空格分隔）
-ccb up codex,gemini,opencode  # 同时启动三个（逗号分隔）
+ccb                    # 按 ccb.config 启动（默认：四个全开）
+ccb codex              # 仅启动 Codex
+ccb gemini             # 仅启动 Gemini
+ccb opencode           # 仅启动 OpenCode
+ccb claude             # 仅启动 Claude
+ccb codex gemini       # 同时启动两个
+ccb codex gemini opencode claude  # 同时启动四个（空格分隔）
+ccb codex,gemini,opencode,claude  # 同时启动四个（逗号分隔）
 
 tmux 提示：CCB 的 tmux 状态栏/窗格标题主题只会在 CCB 运行期间启用。
-ccb-layout              # 启动 2x2 四 AI 布局（Codex+Gemini+OpenCode）
+
+布局规则：当前 pane 对应 providers 列表的最后一个。额外 pane 顺序为 `[cmd?, providers 反序]`；第一个额外 pane 在右上，其后先填满左列（从上到下），再填右列（从上到下）。例：4 个 pane 左2右2，5 个 pane 左2右3。
+提示：`ccb up` 已移除，请使用 `ccb ...` 或配置 `ccb.config`。
 ```
 
 ### 常用参数
 | 参数 | 说明 | 示例 |
 | :--- | :--- | :--- |
-| `-r` | 恢复上次会话上下文 | `ccb up codex -r` |
-| `-a` | 全自动模式，跳过权限确认 | `ccb up codex -a` |
+| `-r` | 恢复上次会话上下文 | `ccb -r` |
+| `-a` | 全自动模式，跳过权限确认 | `ccb -a` |
 | `-h` | 查看详细帮助信息 | `ccb -h` |
 | `-v` | 查看当前版本和检测更新 | `ccb -v` |
+
+### ccb.config
+默认查找顺序：
+- `.ccb_config/ccb.config`（项目级）
+- `~/.ccb/ccb.config`（全局）
+
+推荐的简化格式：
+```text
+codex,gemini,opencode,claude
+```
+
+开启 cmd pane（默认标题/命令）：
+```text
+codex,gemini,opencode,claude,cmd
+```
+
+cmd pane 作为第一个额外 pane 参与布局，不会改变当前 pane 对应的 AI。
 
 ### 后续更新
 ```bash
@@ -278,7 +292,7 @@ cd claude_code_bridge
 #### 3.3 安装后如何测试（`cping`）
 
 ```bash
-ccb up codex
+ccb codex
 cping
 ```
 
@@ -304,7 +318,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 install
 #### 4.2 安装后如何测试
 
 ```powershell
-ccb up codex
+ccb codex
 cping
 ```
 
@@ -317,7 +331,7 @@ cping
 - **最主要原因：搞错 WSL 和原生环境（装/跑不在同一侧）**
   - 例子：你在 WSL 里装了 `ccb`，但 `codex` 在原生 Windows 跑；或反过来。此时两边的路径、会话目录、管道/窗格检测都对不上，`cping` 大概率失败。
 - **Codex 会话并没有启动或已退出**
-  - 先执行 `ccb up codex`，并确认 Codex 对应的 WezTerm 窗格还存在、没有被手动关闭。
+  - 先执行 `ccb codex`（或在 ccb.config 中启用 codex），并确认 Codex 对应的 WezTerm 窗格还存在、没有被手动关闭。
 - **WezTerm CLI 不可用或找不到**
   - `ccb` 在 WezTerm 模式下需要调用 `wezterm cli list` 等命令；如果 `wezterm` 不在 PATH，或 WSL 里找不到 `wezterm.exe`，会导致检测失败（可重开终端或按提示配置 `CODEX_WEZTERM_BIN`）。
 - **PATH/终端未刷新**
@@ -448,7 +462,7 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile
 - **CLI**: 新增 `--print-version` 参数用于快速版本检查
 
 ### v4.1.1
-- **CLI 修复**: 修复 `ccb up` 在 tmux 中重启时参数丢失 (如 `-a`) 的问题
+- **CLI 修复**: 修复 `ccb` 在 tmux 中重启时参数丢失 (如 `-a`) 的问题
 - **体验优化**: 非交互式环境下提供更清晰的错误提示
 - **安装**: 强制更新 skills 以确保应用最新版本
 

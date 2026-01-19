@@ -32,8 +32,7 @@ $script:SCRIPTS_TO_LINK = @(
   "cask", "caskd", "cpend", "cping",
   "gask", "gaskd", "gpend", "gping",
   "oask", "oaskd", "opend", "oping",
-  "lask",
-  "ccb-layout"
+  "lask", "laskd", "lpend", "lping"
 )
 
 $script:CLAUDE_MARKDOWN = @(
@@ -236,8 +235,7 @@ function Install-Native {
     "cask", "caskd", "cping", "cpend",
     "gask", "gaskd", "gping", "gpend",
     "oask", "oaskd", "oping", "opend",
-    "lask",
-    "ccb-layout"
+    "lask", "laskd", "lping", "lpend"
   )
 
   # In MSYS/Git-Bash, invoking the script file directly will honor the shebang.
@@ -341,10 +339,11 @@ function Install-Native {
   Write-Host "Restart your terminal (WezTerm) for PATH changes to take effect."
   Write-Host ""
   Write-Host "Quick start:"
-  Write-Host "  ccb up codex    # Start with Codex backend"
-  Write-Host "  ccb up gemini   # Start with Gemini backend"
-  Write-Host "  ccb up opencode # Start with OpenCode backend"
-  Write-Host "  ccb-layout      # Start 2x2 layout (Codex+Gemini+OpenCode)"
+  Write-Host "  ccb             # Start providers from ccb.config (default: all four)"
+  Write-Host "  ccb codex       # Start with Codex backend"
+  Write-Host "  ccb gemini      # Start with Gemini backend"
+  Write-Host "  ccb opencode    # Start with OpenCode backend"
+  Write-Host "  ccb claude      # Start with Claude backend"
 }
 
 function Install-CodexSkills {
@@ -462,7 +461,7 @@ Fast path (minimize latency):
 - If the user message is only the prefix (no question): ask a 1-line clarification for what to send.
 
 Actions:
-- Ask a question (default) -> ``Bash(ASK_CMD "<question>", run_in_background=true)``, tell user "ASSISTANT processing (task: xxx)", then END your turn
+- Ask a question (default) -> ``Bash(@"`n<question>`n"@ | <cask|gask|oask>, run_in_background=true)``, tell user "ASSISTANT processing (task: xxx)", then END your turn
 - Check connectivity -> run ``PING_CMD``
 - Use blocking/wait or "show previous reply" commands ONLY if the user explicitly requests them
 
@@ -471,14 +470,14 @@ Important restrictions:
 - Do NOT use ``*-w`` / ``*pend`` / ``*end`` unless the user explicitly requests
 
 ### Command Map
-| Assistant | Prefixes | ASK_CMD (background) | PING_CMD | Explicit-request-only |
+| Assistant | Prefixes | ASK (background) | PING_CMD | Explicit-request-only |
 |---|---|---|---|---|
-| Codex | ``@codex``, ``codex:``, ``ask codex``, ``let codex``, ``/cask`` | ``cask`` | ``cping`` | ``cpend`` |
-| Gemini | ``@gemini``, ``gemini:``, ``ask gemini``, ``let gemini``, ``/gask`` | ``gask`` | ``gping`` | ``gpend`` |
-| OpenCode | ``@opencode``, ``opencode:``, ``ask opencode``, ``let opencode``, ``/oask`` | ``oask`` | ``oping`` | ``opend`` |
+| Codex | ``@codex``, ``codex:``, ``ask codex``, ``let codex``, ``/cask`` | ``@"`n<question>`n"@ | cask`` | ``cping`` | ``cpend`` |
+| Gemini | ``@gemini``, ``gemini:``, ``ask gemini``, ``let gemini``, ``/gask`` | ``@"`n<question>`n"@ | gask`` | ``gping`` | ``gpend`` |
+| OpenCode | ``@opencode``, ``opencode:``, ``ask opencode``, ``let opencode``, ``/oask`` | ``@"`n<question>`n"@ | oask`` | ``oping`` | ``opend`` |
 
 Examples:
-- ``codex: review this code`` -> ``Bash(cask "...", run_in_background=true)``, END turn
+- ``codex: review this code`` -> ``Bash(@"`nreview this code`n"@ | cask, run_in_background=true)``, END turn
 - ``is gemini alive?`` -> ``gping``
 <!-- CCB_CONFIG_END -->
 "@

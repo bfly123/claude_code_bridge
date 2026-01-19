@@ -55,6 +55,16 @@ OASKD_SPEC = ProviderDaemonSpec(
 )
 
 
+LASKD_SPEC = ProviderDaemonSpec(
+    daemon_key="laskd",
+    protocol_prefix="lask",
+    state_file_name="laskd.json",
+    log_file_name="laskd.log",
+    idle_timeout_env="CCB_LASKD_IDLE_TIMEOUT_S",
+    lock_name="laskd",
+)
+
+
 CASK_CLIENT_SPEC = ProviderClientSpec(
     protocol_prefix="cask",
     enabled_env="CCB_CASKD",
@@ -88,4 +98,16 @@ OASK_CLIENT_SPEC = ProviderClientSpec(
     session_filename=".opencode-session",
     daemon_bin_name="oaskd",
     daemon_module="oaskd_daemon",
+)
+
+
+LASK_CLIENT_SPEC = ProviderClientSpec(
+    protocol_prefix="lask",
+    enabled_env="CCB_LASKD",
+    autostart_env_primary="CCB_LASKD_AUTOSTART",
+    autostart_env_legacy="CCB_AUTO_LASKD",
+    state_file_env="CCB_LASKD_STATE_FILE",
+    session_filename=".claude-session",
+    daemon_bin_name="laskd",
+    daemon_module="laskd_daemon",
 )

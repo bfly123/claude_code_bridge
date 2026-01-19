@@ -623,7 +623,7 @@ class CodexCommunicator:
     def __init__(self, lazy_init: bool = False):
         self.session_info = self._load_session_info()
         if not self.session_info:
-            raise RuntimeError("❌ No active Codex session found. Run 'ccb up codex' first")
+            raise RuntimeError("❌ No active Codex session found. Run 'ccb codex' (or add codex to ccb.config) first")
 
         self.session_id = self.session_info["session_id"]
         self.runtime_dir = Path(self.session_info["runtime_dir"])
@@ -653,7 +653,7 @@ class CodexCommunicator:
             self._ensure_log_reader()
             healthy, msg = self._check_session_health()
             if not healthy:
-                raise RuntimeError(f"❌ Session unhealthy: {msg}\nTip: Run 'ccb up codex' to start a new session")
+                raise RuntimeError(f"❌ Session unhealthy: {msg}\nTip: Run 'ccb codex' (or add codex to ccb.config) to start a new session")
 
     @property
     def log_reader(self) -> CodexLogReader:

@@ -996,7 +996,7 @@ class OpenCodeCommunicator:
     def __init__(self, lazy_init: bool = False):
         self.session_info = self._load_session_info()
         if not self.session_info:
-            raise RuntimeError("❌ No active OpenCode session found. Run 'ccb up opencode' first")
+            raise RuntimeError("❌ No active OpenCode session found. Run 'ccb opencode' (or add opencode to ccb.config) first")
 
         self.session_id = self.session_info["session_id"]
         self.runtime_dir = Path(self.session_info["runtime_dir"])
@@ -1042,7 +1042,7 @@ class OpenCodeCommunicator:
         if not lazy_init:
             healthy, msg = self._check_session_health()
             if not healthy:
-                raise RuntimeError(f"❌ Session unhealthy: {msg}\nTip: Run 'ccb up opencode' to start a new session")
+                raise RuntimeError(f"❌ Session unhealthy: {msg}\nTip: Run 'ccb opencode' (or add opencode to ccb.config) to start a new session")
 
     def _find_session_file(self) -> Optional[Path]:
         env_session = (os.environ.get("CCB_SESSION_FILE") or "").strip()

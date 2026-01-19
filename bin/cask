@@ -183,7 +183,7 @@ def main(argv: list[str]) -> int:
             return EXIT_ERROR
         if not find_project_session_file(work_dir, CASK_CLIENT_SPEC.session_filename):
             print("[ERROR] No active Codex session found for this directory.", file=sys.stderr)
-            print("Run `ccb up codex` in this project first.", file=sys.stderr)
+            print("Run `ccb codex` (or add codex to ccb.config) in this project first.", file=sys.stderr)
             return EXIT_ERROR
         print("[ERROR] cask daemon required but not available.", file=sys.stderr)
         print("Start it with `caskd` (or enable autostart via CCB_CASKD_AUTOSTART=1).", file=sys.stderr)

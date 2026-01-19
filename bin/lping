@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""
+lping - Test Claude connectivity
+"""
+
+import sys
+import os
+import argparse
+from pathlib import Path
+
+script_dir = Path(__file__).resolve().parent
+lib_dir = script_dir.parent / "lib"
+sys.path.insert(0, str(lib_dir))
+from compat import setup_windows_encoding
+setup_windows_encoding()
+
+try:
+    from claude_comm import ClaudeCommunicator
+
+    def main() -> int:
+        try:
+            parser = argparse.ArgumentParser(prog="lping", add_help=True)
+            parser.add_argument("--session-file", dest="session_file", default=None, help="Path to .claude-session (or .ccb_config/.claude-session)")
+            args = parser.parse_args()
+            if args.session_file:
+                os.environ["CCB_SESSION_FILE"] = str(args.session_file)
+            comm = ClaudeCommunicator()
+            healthy, message = comm.ping(display=False)
+            print(message)
+            return 0 if healthy else 1
+        except Exception as e:
+            print(f"[ERROR] Claude connectivity test failed: {e}")
+            return 1
+
+    if __name__ == "__main__":
+        sys.exit(main())
+
+except ImportError as e:
+    print(f"[ERROR] Module import failed: {e}")
+    sys.exit(1)

@@ -10,22 +10,25 @@ metadata:
 
 # oask (Ask OpenCode)
 
-Use `oask` to forward the user's request to the OpenCode pane started by `ccb up opencode`.
+Use `oask` to forward the user's request to the OpenCode pane.
 
 ## Prereqs (Backend)
 
-- `oping` should succeed; otherwise start it with `ccb up opencode`.
+- `oping` should succeed.
 - `oask` must run in the same environment as `ccb` (WSL vs native Windows).
 
-## Quick Start
+## Execution (MANDATORY)
 
-- Preferred (wait & return reply): `oask --sync -q "$ARGUMENTS"`
-- Multiline (optional): `oask --sync -q <<'EOF'` … `EOF`
+```bash
+oask --sync -q <<'EOF'
+$ARGUMENTS
+EOF
+```
 
 ## Workflow (Mandatory)
 
-1. Ensure OpenCode backend is up (`oping`, or run `ccb up opencode`).
-2. Run `oask --sync -q` with the user's request.
+1. Ensure OpenCode backend is up (`oping`).
+2. Run the command above with the user's request.
 3. **IMPORTANT**: Use `timeout_ms: 3600000` (1 hour) to allow long-running tasks.
 4. DO NOT send a second request until the current one exits.
 

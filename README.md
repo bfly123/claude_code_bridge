@@ -199,24 +199,53 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 install
 
 ### Run
 ```bash
-ccb up codex            # Start Codex
-ccb up gemini           # Start Gemini
-ccb up opencode         # Start OpenCode
-ccb up codex gemini     # Start both
-ccb up codex gemini opencode  # Start all three (spaces)
-ccb up codex,gemini,opencode  # Start all three (commas)
+ccb                    # Start providers from ccb.config (default: all four)
+ccb codex              # Start Codex only
+ccb gemini             # Start Gemini only
+ccb opencode           # Start OpenCode only
+ccb claude             # Start Claude only
+ccb codex gemini       # Start both
+ccb codex gemini opencode claude  # Start all four (spaces)
+ccb codex,gemini,opencode,claude  # Start all four (commas)
 
 tmux tip: CCB's tmux status/pane theming is enabled only while CCB is running.
-ccb-layout              # Start 2x2 layout (Codex+Gemini+OpenCode)
+
+Layout rule: the last provider runs in the current pane. Extras are ordered as `[cmd?, reversed providers]`; the first extra goes to the top-right, then the left column fills top-to-bottom, then the right column fills top-to-bottom. Examples: 4 panes = left2/right2, 5 panes = left2/right3.
+Note: `ccb up` is removed; use `ccb ...` or configure `ccb.config`.
 ```
 
 ### Flags
 | Flag | Description | Example |
 | :--- | :--- | :--- |
-| `-r` | Resume previous session context | `ccb up codex -r` |
-| `-a` | Auto-mode, skip permission prompts | `ccb up codex -a` |
+| `-r` | Resume previous session context | `ccb -r` |
+| `-a` | Auto-mode, skip permission prompts | `ccb -a` |
 | `-h` | Show help information | `ccb -h` |
 | `-v` | Show version and check for updates | `ccb -v` |
+
+### ccb.config
+Default lookup order:
+- `.ccb_config/ccb.config` (project)
+- `~/.ccb/ccb.config` (global)
+
+Simple format (recommended):
+```text
+codex,gemini,opencode,claude
+```
+
+Enable cmd pane (default title/command):
+```text
+codex,gemini,opencode,claude,cmd
+```
+
+Advanced JSON (optional, for flags or custom cmd pane):
+```json
+{
+  "providers": ["codex", "gemini", "opencode", "claude"],
+  "cmd": { "enabled": true, "title": "CCB-Cmd", "start_cmd": "bash" },
+  "flags": { "auto": false, "resume": false }
+}
+```
+Cmd pane participates in the layout as the first extra pane and does not change which AI runs in the current pane.
 
 ### Update
 ```bash
@@ -267,7 +296,7 @@ Check distro name with `wsl -l -v` in PowerShell.
 ### 4) Troubleshooting: `cping` Not Working
 
 - **Most common:** Environment mismatch (ccb in WSL but codex in native Windows, or vice versa)
-- **Codex session not running:** Run `ccb up codex` first
+- **Codex session not running:** Run `ccb codex` (or add codex to ccb.config) first
 - **WezTerm CLI not found:** Ensure `wezterm` is in PATH
 - **Terminal not refreshed:** Restart WezTerm after installation
 - **Text sent but not submitted (no Enter) on Windows WezTerm:** Set `CCB_WEZTERM_ENTER_METHOD=key` and ensure your WezTerm supports `wezterm cli send-key`
@@ -412,7 +441,7 @@ Once started, collaborate naturally. Claude will detect when to delegate tasks.
 - **CLI**: Added `--print-version` flag for fast version checks
 
 ### v4.1.1
-- **CLI Fix**: Improved flag preservation (e.g., `-a`) when relaunching `ccb up` in tmux
+- **CLI Fix**: Improved flag preservation (e.g., `-a`) when relaunching `ccb` in tmux
 - **UX**: Better error messages when running in non-interactive sessions
 - **Install**: Force update skills to ensure latest versions are applied
 
@@ -432,7 +461,7 @@ Once started, collaborate naturally. Claude will detect when to delegate tasks.
 ### v4.0.7
 - **Tmux Status Bar Redesign**: Dual-line status bar with modern dot indicators (●/○), git branch, CCA status, and CCB version display
 - **Session Freshness**: Always scan logs for latest session instead of using cached session file
-- **Simplified Auto Mode**: Removed CCA detection logic from `ccb up -a`, now purely uses `--dangerously-skip-permissions`
+- **Simplified Auto Mode**: Removed CCA detection logic from `ccb -a`, now purely uses `--dangerously-skip-permissions`
 
 ### v4.0.6
 - **Session Overrides**: `cping/gping/oping/cpend/opend` support `--session-file` / `CCB_SESSION_FILE` to bypass wrong `cwd`

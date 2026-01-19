@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+"""
+lpend - View latest Claude reply
+"""
+
+import json
+import os
+import argparse
+import sys
+from pathlib import Path
+
+script_dir = Path(__file__).resolve().parent
+lib_dir = script_dir.parent / "lib"
+sys.path.insert(0, str(lib_dir))
+from compat import setup_windows_encoding
+setup_windows_encoding()
+
+from cli_output import EXIT_ERROR, EXIT_NO_REPLY, EXIT_OK
+from claude_comm import ClaudeLogReader
+from ccb_protocol import strip_trailing_markers
+from pane_registry import load_registry_by_session_id, load_registry_by_claude_pane, load_registry_by_project_id
+from session_utils import find_project_session_file
+from askd_client import resolve_work_dir_with_registry
+from providers import LASK_CLIENT_SPEC
+from project_id import compute_ccb_project_id
+
+
+def _debug_enabled() -> bool:
+    return (os.environ.get("CCB_DEBUG") in ("1", "true", "yes")) or (os.environ.get("LPEND_DEBUG") in ("1", "true", "yes"))
+
+
+def _debug(message: str) -> None:
+    if not _debug_enabled():
+        return
+    print(f"[DEBUG] {message}", file=sys.stderr)
+
+
+def _load_session_log_path(work_dir: Path, explicit_session_file: Path | None) -> tuple[Path | None, str | None]:
+    session_file = explicit_session_file or find_project_session_file(work_dir, ".claude-session")
+    if not session_file:
+        return None, None
+    try:
+        with session_file.open("r", encoding="utf-8-sig", errors="replace") as f:
+            data = json.load(f)
+        path_str = data.get("claude_session_path")
+        session_id = data.get("claude_session_id") or data.get("session_id")
+        if path_str:
+            return Path(path_str).expanduser(), session_id
+    except Exception as exc:
+        _debug(f"Failed to read .claude-session ({session_file}): {exc}")
+    return None, None
+
+
+def _load_registry_log_path() -> tuple[Path | None, dict | None]:
+    session_id = (os.environ.get("CCB_SESSION_ID") or "").strip()
+    if session_id:
+        record = load_registry_by_session_id(session_id)
+        if record:
+            providers = record.get("providers") if isinstance(record.get("providers"), dict) else {}
+            claude = providers.get("claude") if isinstance(providers, dict) else None
+            path_str = (claude or {}).get("claude_session_path") if isinstance(claude, dict) else record.get("claude_session_path")
+            if path_str:
+                path = Path(path_str).expanduser()
+                _debug(f"Using registry by CCB_SESSION_ID: {path}")
+                return path, record
+
+    pane_id = (os.environ.get("WEZTERM_PANE") or os.environ.get("TMUX_PANE") or "").strip()
+    if pane_id:
+        record = load_registry_by_claude_pane(pane_id)
+        if record:
+            providers = record.get("providers") if isinstance(record.get("providers"), dict) else {}
+            claude = providers.get("claude") if isinstance(providers, dict) else None
+            path_str = (claude or {}).get("claude_session_path") if isinstance(claude, dict) else record.get("claude_session_path")
+            if path_str:
+                path = Path(path_str).expanduser()
+                _debug(f"Using registry by pane id: {path}")
+                return path, record
+    return None, None
+
+
+def _parse_n(argv: list[str]) -> int:
+    if len(argv) <= 1:
+        return 1
+    try:
+        n = int(argv[1])
+    except ValueError:
+        return 1
+    return max(1, n)
+
+
+def main(argv: list[str]) -> int:
+    try:
+        parser = argparse.ArgumentParser(prog="lpend", add_help=True)
+        parser.add_argument("n", nargs="?", type=int, default=1, help="Show the latest N conversations")
+        parser.add_argument("--raw", action="store_true", help="Do not strip protocol/harness marker lines")
+        parser.add_argument("--session-file", dest="session_file", default=None, help="Path to .claude-session (or .ccb_config/.claude-session)")
+        args = parser.parse_args(argv[1:])
+        n = max(1, int(args.n or 1))
+        raw = bool(args.raw)
+
+        work_dir, explicit_session_file = resolve_work_dir_with_registry(
+            LASK_CLIENT_SPEC,
+            provider="claude",
+            cli_session_file=args.session_file,
+            env_session_file=os.environ.get("CCB_SESSION_FILE"),
+        )
+
+        registry_log_path, registry_record = _load_registry_log_path()
+        if not registry_log_path:
+            try:
+                pid = compute_ccb_project_id(work_dir)
+            except Exception:
+                pid = ""
+            if pid:
+                rec = load_registry_by_project_id(pid, "claude")
+                if rec:
+                    providers = rec.get("providers") if isinstance(rec.get("providers"), dict) else {}
+                    claude = providers.get("claude") if isinstance(providers, dict) else None
+                    path_str = (claude or {}).get("claude_session_path") if isinstance(claude, dict) else None
+                    if isinstance(path_str, str) and path_str.strip():
+                        registry_log_path = Path(path_str.strip()).expanduser()
+                        registry_record = rec
+                        _debug(f"Using registry by ccb_project_id: {registry_log_path}")
+
+        session_log_path, _session_id = _load_session_log_path(work_dir, explicit_session_file)
+        log_path = registry_log_path or session_log_path
+        if not registry_log_path and log_path:
+            _debug(f"Using claude_session_path from .claude-session: {log_path}")
+
+        reader = ClaudeLogReader(work_dir=work_dir)
+        if log_path:
+            reader.set_preferred_session(log_path)
+
+        if n > 1:
+            conversations = reader.latest_conversations(n)
+            if not conversations:
+                print("No reply available", file=sys.stderr)
+                return EXIT_NO_REPLY
+            for i, (question, reply) in enumerate(conversations):
+                if question:
+                    print(f"Q: {question}")
+                cleaned = reply if raw else strip_trailing_markers(reply or "")
+                print(f"A: {cleaned}")
+                if i < len(conversations) - 1:
+                    print("---")
+            return EXIT_OK
+
+        message = reader.latest_message()
+        if not message:
+            print("No reply available", file=sys.stderr)
+            return EXIT_NO_REPLY
+        print(message if raw else strip_trailing_markers(message))
+        return EXIT_OK
+    except Exception as exc:
+        if _debug_enabled():
+            import traceback
+
+            traceback.print_exc()
+        print(f"[ERROR] execution failed: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

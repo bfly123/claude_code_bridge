@@ -215,7 +215,7 @@ def main(argv: list[str]) -> int:
             return EXIT_ERROR
         if not find_project_session_file(work_dir, OASK_CLIENT_SPEC.session_filename):
             print("[ERROR] No active OpenCode session found for this directory.", file=sys.stderr)
-            print("Run `ccb up opencode` in this project first.", file=sys.stderr)
+            print("Run `ccb opencode` (or add opencode to ccb.config) in this project first.", file=sys.stderr)
             return EXIT_ERROR
         print("[ERROR] oask daemon required but not available.", file=sys.stderr)
         print("Start it with `oaskd` (or enable autostart via CCB_OASKD_AUTOSTART=1).", file=sys.stderr)

@@ -521,7 +521,7 @@ class GeminiCommunicator:
     def __init__(self, lazy_init: bool = False):
         self.session_info = self._load_session_info()
         if not self.session_info:
-            raise RuntimeError("❌ No active Gemini session found, please run ccb up gemini first")
+            raise RuntimeError("❌ No active Gemini session found, please run ccb gemini (or add gemini to ccb.config) first")
 
         self.session_id = self.session_info["session_id"]
         self.runtime_dir = Path(self.session_info["runtime_dir"])
@@ -564,7 +564,7 @@ class GeminiCommunicator:
             self._ensure_log_reader()
             healthy, msg = self._check_session_health()
             if not healthy:
-                raise RuntimeError(f"❌ Session unhealthy: {msg}\nHint: Please run ccb up gemini")
+                raise RuntimeError(f"❌ Session unhealthy: {msg}\nHint: Please run ccb gemini (or add gemini to ccb.config)")
 
     @property
     def log_reader(self) -> GeminiLogReader:

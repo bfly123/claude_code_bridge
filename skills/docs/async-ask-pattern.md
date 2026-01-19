@@ -1,27 +1,17 @@
 # Async Ask Pattern (cask/gask/oask)
 
-Use this pattern to delegate work to a partner AI (Codex/Gemini/OpenCode) asynchronously.
+Use this pattern only when the user explicitly delegates to Codex/Gemini/OpenCode.
+Do not use it for questions about the tools themselves.
 
-## When To Use
+## Command Map
 
-Use ONLY when the user explicitly delegates to one of:
-- Codex: `@codex`, `ask codex`, `let codex`, “让 codex …”, “请 codex …”
-- Gemini: `@gemini`, `ask gemini`, `let gemini`, “让 gemini …”, “请 gemini …”
-- OpenCode: `@opencode`, `ask opencode`, `let opencode`, “让 opencode …”, “请 opencode …”
-
-DO NOT use when the user asks questions *about* the tool itself.
-
-## Command Mapping
-
-- Codex → `cask` → status: `ccb status codex`
-- Gemini → `gask` → status: `ccb status gemini`
-- OpenCode → `oask` → status: `ccb status opencode`
+- Codex -> `cask` (health: `cping`)
+- Gemini -> `gask` (health: `gping`)
+- OpenCode -> `oask` (health: `oping`)
 
 ## Execution (MANDATORY)
 
-Always run in background. For arbitrary text (quotes, backticks, multiline), prefer a multiline-safe form:
-
-Linux/macOS/WSL (bash heredoc; prevents shell backtick/`$()` expansion):
+Linux/macOS/WSL:
 
 ```bash
 Bash(<cask|gask|oask> <<'EOF'
@@ -30,7 +20,7 @@ EOF
 , run_in_background=true)
 ```
 
-Windows (PowerShell here-string):
+Windows PowerShell:
 
 ```powershell
 Bash(@"
@@ -38,38 +28,8 @@ Bash(@"
 "@ | <cask|gask|oask>, run_in_background=true)
 ```
 
-For short 1-liners, passing as a quoted argument is OK, but be careful with quotes/backticks:
+## Rules
 
-```bash
-Bash(<cask|gask|oask> "one line request", run_in_background=true)
-```
-
-## Workflow (IMPORTANT)
-
-1. Submit task to background (partner AI processes elsewhere).
-2. Immediately end the current turn. Do not wait.
-3. The system will recall you when the background command returns.
-
-## After Execution (MANDATORY)
-
-If Bash succeeds:
-- Tell the user: “<Provider> processing...”
-- Immediately end your turn.
-- Do not check status or do additional work in the same turn.
-
-If Bash fails:
-- Report the error output.
-- Suggest checking backend status with the mapping above.
-
-## Wrong vs Right
-
-- Risky: `Bash(cask "…")` (may break on quotes/backticks; keep it simple)
-- Preferred (bash): `Bash(cask <<'EOF' … EOF, run_in_background=true)` then end turn
-- Preferred (PowerShell): `Bash(@" … "@ | cask, run_in_background=true)` then end turn
-
-## Parameters
-
-Supported by `cask/gask/oask`:
-- `--timeout SECONDS` (default 3600)
-- `--output FILE` (write reply to FILE)
-- `-q/--quiet` (reduce stderr noise; timeout still returns non-zero)
+- End the current turn immediately after submission.
+- Wait for the Bash notification callback; do not poll or use `*pend/*end` unless explicitly requested.
+- If Bash fails, report the error and suggest `cping/gping/oping`.

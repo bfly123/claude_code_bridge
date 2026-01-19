@@ -155,7 +155,7 @@ class _SessionWorker(BaseSessionWorker[_QueuedTask, GaskdResult]):
         if not session:
             return GaskdResult(
                 exit_code=1,
-                reply="❌ No active Gemini session found for work_dir. Run 'ccb up gemini' in that project first.",
+                reply="❌ No active Gemini session found for work_dir. Run 'ccb gemini' (or add gemini to ccb.config) in that project first.",
                 req_id=task.req_id,
                 session_key=self.session_key,
                 done_seen=False,

@@ -28,6 +28,7 @@ sys.path.insert(0, str(script_dir / "lib"))
 from terminal import TmuxBackend, WeztermBackend, detect_terminal, is_wsl, get_shell_type
 from compat import setup_windows_encoding
 from ccb_config import get_backend_env
+from ccb_start_config import DEFAULT_PROVIDERS, ensure_default_start_config, load_start_config
 from session_utils import safe_write_session, check_session_writable, find_project_session_file
 from pane_registry import upsert_registry
 from project_id import compute_ccb_project_id
@@ -529,10 +530,12 @@ class AILauncher:
         providers: list,
         resume: bool = False,
         auto: bool = False,
+        cmd_config: dict | None = None,
     ):
         self.providers = providers or ["codex"]
         self.resume = resume
         self.auto = auto
+        self.cmd_config = self._normalize_cmd_config(cmd_config)
         self.script_dir = Path(__file__).resolve().parent
         self.invocation_dir = Path.cwd()
         # Project root is strictly the current working directory.
@@ -550,7 +553,10 @@ class AILauncher:
         self.tmux_sessions = {}
         self.tmux_panes = {}
         self.wezterm_panes = {}
+        self.extra_panes = {}
         self.processes = {}
+        self.anchor_provider = None
+        self.anchor_pane_id = None
         self._migrate_legacy_project_files()
 
     def _project_config_dir(self) -> Path:
@@ -585,6 +591,114 @@ class AILauncher:
                 legacy.replace(cfg / f"{name}.legacy.{suffix}")
             except Exception:
                 pass
+
+    def _normalize_cmd_config(self, raw: dict | None) -> dict:
+        if raw is None or raw is False:
+            return {"enabled": False}
+        if isinstance(raw, bool):
+            return {"enabled": bool(raw)}
+        if isinstance(raw, str):
+            return {"enabled": True, "start_cmd": raw.strip()}
+        if isinstance(raw, dict):
+            enabled = raw.get("enabled")
+            if enabled is None:
+                enabled = True
+            start_cmd = raw.get("start_cmd") or raw.get("command") or raw.get("cmd") or ""
+            title = raw.get("title") or raw.get("name") or "CCB-Cmd"
+            return {
+                "enabled": bool(enabled),
+                "start_cmd": str(start_cmd).strip(),
+                "title": str(title).strip() or "CCB-Cmd",
+            }
+        return {"enabled": False}
+
+    def _cmd_settings(self) -> dict:
+        cfg = self.cmd_config or {}
+        if not cfg or not cfg.get("enabled"):
+            return {"enabled": False}
+        title = (cfg.get("title") or "CCB-Cmd").strip() or "CCB-Cmd"
+        start_cmd = (cfg.get("start_cmd") or "").strip()
+        if not start_cmd:
+            start_cmd = self._default_cmd_start_cmd()
+        return {"enabled": True, "title": title, "start_cmd": start_cmd}
+
+    def _default_cmd_start_cmd(self) -> str:
+        if get_shell_type() == "powershell":
+            return "pwsh" if shutil.which("pwsh") else "powershell"
+        shell = (os.environ.get("SHELL") or "bash").strip() or "bash"
+        if not shutil.which(shell):
+            shell = "bash"
+        return shell
+
+    def _with_bin_path_env(self, env: dict | None = None) -> dict:
+        base = dict(env or os.environ)
+        bin_path = str(self.script_dir / "bin")
+        current = base.get("PATH") or ""
+        parts = current.split(os.pathsep) if current else []
+        if bin_path not in parts:
+            base["PATH"] = bin_path + (os.pathsep + current if current else "")
+        return base
+
+    def _current_pane_id(self) -> str:
+        if self.terminal_type == "wezterm":
+            return (os.environ.get("WEZTERM_PANE") or "").strip()
+        try:
+            backend = TmuxBackend()
+            return backend.get_current_pane_id()
+        except Exception:
+            return (os.environ.get("TMUX_PANE") or "").strip()
+
+    def _build_env_prefix(self, env: dict) -> str:
+        if not env:
+            return ""
+        if get_shell_type() == "powershell":
+            parts: list[str] = []
+            for key, val in env.items():
+                if val is None:
+                    continue
+                safe = str(val).replace("'", "''")
+                parts.append(f"$env:{key} = '{safe}'; ")
+            return "".join(parts)
+        parts = []
+        for key, val in env.items():
+            if val is None:
+                continue
+            parts.append(f"export {key}={shlex.quote(str(val))}; ")
+        return "".join(parts)
+
+    def _provider_pane_id(self, provider: str) -> str:
+        prov = (provider or "").strip().lower()
+        anchor = (self.anchor_provider or "").strip().lower()
+        if prov and prov == anchor and self.anchor_pane_id:
+            return str(self.anchor_pane_id)
+        if self.terminal_type == "wezterm":
+            return str(self.wezterm_panes.get(prov, "") or "")
+        return str(self.tmux_panes.get(prov, "") or "")
+
+    def _set_current_pane_label(self, provider: str) -> None:
+        if self.terminal_type != "tmux":
+            return
+        if not os.environ.get("TMUX"):
+            return
+        try:
+            backend = TmuxBackend()
+            pane_id = backend.get_current_pane_id()
+            title = f"CCB-{provider.capitalize()}"
+            backend.set_pane_title(pane_id, title)
+            backend.set_pane_user_option(pane_id, "@ccb_agent", provider.capitalize())
+        except Exception:
+            pass
+
+    def _run_shell_command(self, cmd: str, *, env: dict | None = None, cwd: str | None = None) -> int:
+        cmd = cmd or ""
+        env = self._with_bin_path_env(env)
+        if get_shell_type() == "powershell":
+            shell = "pwsh" if shutil.which("pwsh") else "powershell"
+            return subprocess.run([shell, "-Command", cmd], env=env, cwd=cwd).returncode
+        shell = (os.environ.get("SHELL") or "bash").strip() or "bash"
+        if not shutil.which(shell):
+            shell = "bash"
+        return subprocess.run([shell, "-lc", cmd], env=env, cwd=cwd).returncode
 
     def _maybe_start_caskd(self) -> None:
         def _bool_from_env(name: str):
@@ -751,7 +865,7 @@ class AILauncher:
         )
         return True
 
-    def _start_provider(self, provider: str) -> bool:
+    def _start_provider(self, provider: str, *, parent_pane: str | None = None, direction: str | None = None) -> str | None:
         # Handle case when no terminal detected
         if self.terminal_type is None:
             print(f"❌ {t('no_terminal_backend')}")
@@ -761,12 +875,12 @@ class AILauncher:
             if (shutil.which("tmux") or shutil.which("tmux.exe")) and not (os.environ.get("TMUX") or os.environ.get("TMUX_PANE")):
                 print(f"   - {t('tmux_installed_not_inside')}")
             print(f"   - {t('or_set_ccb_terminal')}")
-            return False
+            return None
 
         # WezTerm mode: no tmux dependency
         if self.terminal_type == "wezterm":
             print(f"🚀 {t('starting_backend', provider=provider.capitalize(), terminal='wezterm')}")
-            return self._start_provider_wezterm(provider)
+            return self._start_provider_wezterm(provider, parent_pane=parent_pane, direction=direction)
 
         # tmux mode: check if tmux is available
         if not shutil.which("tmux"):
@@ -774,32 +888,38 @@ class AILauncher:
             if detect_terminal() == "wezterm":
                 self.terminal_type = "wezterm"
                 print(f"🚀 {t('starting_backend', provider=provider.capitalize(), terminal='wezterm - tmux unavailable')}")
-                return self._start_provider_wezterm(provider)
+                return self._start_provider_wezterm(provider, parent_pane=parent_pane, direction=direction)
             else:
                 print(f"❌ {t('tmux_not_installed')}")
                 print(f"   {t('install_wezterm_or_tmux')}")
-                return False
+                return None
 
         # Require an existing tmux client session (no auto-launch).
         if not (os.environ.get("TMUX") or os.environ.get("TMUX_PANE")):
             print(f"❌ {t('tmux_installed_not_inside')}", file=sys.stderr)
             print(f"💡 Run: tmux", file=sys.stderr)
             print(f"   Then: {' '.join(['ccb', *sys.argv[1:]])}", file=sys.stderr)
-            return False
+            return None
 
         print(f"🚀 {t('starting_backend', provider=provider.capitalize(), terminal='tmux')}")
 
         if provider == "codex":
-            return self._start_codex_tmux()
+            return self._start_codex_tmux(parent_pane=parent_pane, direction=direction)
         elif provider == "gemini":
-            return self._start_gemini_tmux()
+            return self._start_gemini_tmux(parent_pane=parent_pane, direction=direction)
         elif provider == "opencode":
-            return self._start_opencode_tmux()
+            return self._start_opencode_tmux(parent_pane=parent_pane, direction=direction)
         else:
             print(f"❌ {t('unknown_provider', provider=provider)}")
-            return False
+            return None
 
-    def _start_provider_wezterm(self, provider: str) -> bool:
+    def _start_provider_wezterm(
+        self,
+        provider: str,
+        *,
+        parent_pane: str | None = None,
+        direction: str | None = None,
+    ) -> str | None:
         runtime = self.runtime_dir / provider
         runtime.mkdir(parents=True, exist_ok=True)
 
@@ -807,35 +927,19 @@ class AILauncher:
         keep_open = os.environ.get("CODEX_WEZTERM_KEEP_OPEN", "1").lower() not in {"0", "false", "no", "off"}
         if keep_open:
             start_cmd = _build_keep_open_cmd(provider, start_cmd)
-        want_grid = {"codex", "gemini", "opencode"}.issubset(set(self.providers))
-        current_pane = os.environ.get("WEZTERM_PANE")
-        if want_grid and current_pane:
-            # 2x2 grid with current pane as top-left:
-            # codex -> top-right, gemini -> bottom-left, opencode -> bottom-right.
-            if not self.wezterm_panes:
-                direction = "right"
-                parent_pane = current_pane
-            elif provider == "gemini":
-                direction = "bottom"
-                parent_pane = current_pane
-            else:
-                direction = "bottom"
-                parent_pane = self.wezterm_panes.get("codex") or next(iter(self.wezterm_panes.values()))
-        else:
-            # Legacy layout: right column stack (top/bottom).
-            direction = "right" if not self.wezterm_panes else "bottom"
-            parent_pane = None
-            if direction == "bottom":
-                try:
-                    parent_pane = next(iter(self.wezterm_panes.values()))
-                except StopIteration:
-                    parent_pane = None
+        use_direction = (direction or ("right" if not self.wezterm_panes else "bottom")).strip() or "right"
+        use_parent = parent_pane
+        if not use_parent and use_direction == "bottom":
+            try:
+                use_parent = next(reversed(self.wezterm_panes.values()))
+            except StopIteration:
+                use_parent = None
 
         pane_title_marker = f"CCB-{provider.capitalize()}"
         title_cmd = _build_pane_title_cmd(pane_title_marker)
         full_cmd = title_cmd + _build_export_path_cmd(self.script_dir / "bin") + start_cmd
         backend = WeztermBackend()
-        pane_id = backend.create_pane(full_cmd, str(Path.cwd()), direction=direction, percent=50, parent_pane=parent_pane)
+        pane_id = backend.create_pane(full_cmd, str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent)
         self.wezterm_panes[provider] = pane_id
 
         if provider == "codex":
@@ -851,14 +955,13 @@ class AILauncher:
                 pane_title_marker=pane_title_marker,
                 codex_start_cmd=start_cmd,
             )
-            self._write_cend_registry(os.environ.get("WEZTERM_PANE", ""), pane_id)
         elif provider == "gemini":
             self._write_gemini_session(runtime, None, pane_id=pane_id, pane_title_marker=pane_title_marker, start_cmd=start_cmd)
         else:
             self._write_opencode_session(runtime, None, pane_id=pane_id, pane_title_marker=pane_title_marker, start_cmd=start_cmd)
 
         print(f"✅ {t('started_backend', provider=provider.capitalize(), terminal='wezterm pane', pane_id=pane_id)}")
-        return True
+        return pane_id
 
     def _work_dir_strings(self, work_dir: Path) -> list[str]:
         candidates: list[str] = []
@@ -929,7 +1032,15 @@ class AILauncher:
 
     def _read_local_claude_session_id(self) -> str | None:
         data = self._read_json_file(self._claude_session_file())
-        sid = data.get("claude_session_id") or data.get("session_id")
+        sid = data.get("claude_session_id")
+        if not sid:
+            legacy = data.get("session_id")
+            if isinstance(legacy, str) and legacy.strip():
+                try:
+                    uuid.UUID(legacy)
+                    sid = legacy
+                except Exception:
+                    sid = None
         if isinstance(sid, str) and sid.strip():
             # Guard against path-format mismatch (Windows case/slash differences, MSYS paths, etc.).
             recorded_norm = _extract_session_work_dir_norm(data)
@@ -942,21 +1053,70 @@ class AILauncher:
             return sid.strip()
         return None
 
-    def _write_local_claude_session(self, session_id: str, active: bool = True) -> None:
+    def _write_local_claude_session(
+        self,
+        session_id: str | None = None,
+        *,
+        active: bool = True,
+        pane_id: str | None = None,
+        pane_title_marker: str | None = None,
+        terminal: str | None = None,
+    ) -> None:
         path = self._claude_session_file()
-        data = self._read_json_file(path)
-        work_dir = Path.cwd()
-        data.update(
-            {
-                "claude_session_id": session_id,
-                "work_dir": str(work_dir),
-                "work_dir_norm": _normalize_path_for_match(str(work_dir)),
-                "active": bool(active),
-                "started_at": data.get("started_at") or time.strftime("%Y-%m-%d %H:%M:%S"),
-                "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            }
-        )
-        self._write_json_file(path, data)
+        writable, reason, fix = check_session_writable(path)
+        if not writable:
+            print(f"❌ Cannot write {path.name}: {reason}", file=sys.stderr)
+            print(f"💡 Fix: {fix}", file=sys.stderr)
+            return
+
+        data = self._read_json_file(path) if path.exists() else {}
+        work_dir = self.project_root
+        now = time.strftime("%Y-%m-%d %H:%M:%S")
+        if session_id:
+            data["claude_session_id"] = session_id
+        data["session_id"] = self.session_id
+        try:
+            data["ccb_project_id"] = compute_ccb_project_id(work_dir)
+        except Exception:
+            data["ccb_project_id"] = data.get("ccb_project_id")
+        data["work_dir"] = str(work_dir)
+        data["work_dir_norm"] = _normalize_path_for_match(str(work_dir))
+        data["start_dir"] = str(self.invocation_dir)
+        data["terminal"] = terminal or self.terminal_type
+        data["active"] = bool(active)
+        data["started_at"] = data.get("started_at") or now
+        data["updated_at"] = now
+        if pane_id:
+            data["pane_id"] = pane_id
+        if pane_title_marker:
+            data["pane_title_marker"] = pane_title_marker
+
+        payload = json.dumps(data, ensure_ascii=False, indent=2)
+        ok, err = safe_write_session(path, payload)
+        if not ok:
+            print(err, file=sys.stderr)
+            return
+        if pane_id:
+            try:
+                upsert_registry(
+                    {
+                        "ccb_session_id": self.session_id,
+                        "ccb_project_id": compute_ccb_project_id(self.project_root),
+                        "work_dir": str(self.project_root),
+                        "terminal": terminal or self.terminal_type,
+                        "providers": {
+                            "claude": {
+                                "pane_id": pane_id,
+                                "pane_title_marker": pane_title_marker,
+                                "session_file": str(path),
+                                "claude_session_id": data.get("claude_session_id"),
+                                "claude_session_path": data.get("claude_session_path"),
+                            }
+                        },
+                    }
+                )
+            except Exception:
+                pass
 
     def _get_latest_codex_session_id(self) -> tuple[str | None, bool]:
         """
@@ -1446,7 +1606,12 @@ class AILauncher:
             # Non-fatal; OpenCode can still run with interactive permissions.
             print(f"⚠️ Failed to update OpenCode config: {exc}", file=sys.stderr)
 
-    def _start_codex_tmux(self) -> bool:
+    def _start_codex_tmux(
+        self,
+        *,
+        parent_pane: str | None = None,
+        direction: str | None = None,
+    ) -> str | None:
         runtime = self.runtime_dir / "codex"
         runtime.mkdir(parents=True, exist_ok=True)
 
@@ -1463,41 +1628,30 @@ class AILauncher:
 
         backend = TmuxBackend()
 
-        want_grid = {"codex", "gemini", "opencode"}.issubset(set(self.providers))
-        current_pane = None
+        use_direction = (direction or ("right" if not self.tmux_panes else "bottom")).strip() or "right"
+        use_parent = parent_pane
+        if not use_parent:
+            try:
+                use_parent = backend.get_current_pane_id()
+            except Exception:
+                use_parent = None
+        if not use_parent and use_direction == "bottom":
+            try:
+                use_parent = next(reversed(self.tmux_panes.values()))
+            except StopIteration:
+                use_parent = None
         try:
-            current_pane = backend.get_current_pane_id()
+            if use_parent and str(use_parent).startswith("%") and not backend.pane_exists(str(use_parent)):
+                use_parent = backend.get_current_pane_id()
         except Exception:
-            current_pane = None
-        if want_grid and current_pane:
-            if not self.tmux_panes:
-                direction = "right"
-                parent_pane = current_pane
-            else:
-                direction = "bottom"
-                parent_pane = self.tmux_panes.get("codex") or next(iter(self.tmux_panes.values()))
-        else:
-            direction = "right" if not self.tmux_panes else "bottom"
-            parent_pane = None
-            if direction == "bottom":
-                try:
-                    parent_pane = next(iter(self.tmux_panes.values()))
-                except StopIteration:
-                    parent_pane = None
+            use_parent = None
 
-        pane_id = backend.create_pane("", str(Path.cwd()), direction=direction, percent=50, parent_pane=parent_pane)
+        pane_id = backend.create_pane("", str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent)
         backend.respawn_pane(pane_id, cmd=start_cmd, cwd=str(Path.cwd()), remain_on_exit=True)
         backend.set_pane_title(pane_id, pane_title_marker)
         backend.set_pane_user_option(pane_id, "@ccb_agent", "Codex")
 
         self.tmux_panes["codex"] = pane_id
-
-        claude_pane_id = None
-        try:
-            claude_pane_id = backend.get_current_pane_id()
-        except Exception:
-            claude_pane_id = os.environ.get("TMUX_PANE", "")
-        self._write_cend_registry(str(claude_pane_id or ""), pane_id)
 
         bridge_script = self.script_dir / "lib" / "codex_dual_bridge.py"
         bridge_env = os.environ.copy()
@@ -1548,9 +1702,14 @@ class AILauncher:
         )
 
         print(f"✅ {t('started_backend', provider='Codex', terminal='tmux pane', pane_id=pane_id)}")
-        return True
+        return pane_id
 
-    def _start_gemini_tmux(self) -> bool:
+    def _start_gemini_tmux(
+        self,
+        *,
+        parent_pane: str | None = None,
+        direction: str | None = None,
+    ) -> str | None:
         runtime = self.runtime_dir / "gemini"
         runtime.mkdir(parents=True, exist_ok=True)
 
@@ -1559,32 +1718,25 @@ class AILauncher:
 
         backend = TmuxBackend()
 
-        want_grid = {"codex", "gemini", "opencode"}.issubset(set(self.providers))
-        current_pane = None
+        use_direction = (direction or ("right" if not self.tmux_panes else "bottom")).strip() or "right"
+        use_parent = parent_pane
+        if not use_parent:
+            try:
+                use_parent = backend.get_current_pane_id()
+            except Exception:
+                use_parent = None
+        if not use_parent and use_direction == "bottom":
+            try:
+                use_parent = next(reversed(self.tmux_panes.values()))
+            except StopIteration:
+                use_parent = None
         try:
-            current_pane = backend.get_current_pane_id()
+            if use_parent and str(use_parent).startswith("%") and not backend.pane_exists(str(use_parent)):
+                use_parent = backend.get_current_pane_id()
         except Exception:
-            current_pane = None
-        if want_grid and current_pane:
-            if not self.tmux_panes:
-                direction = "right"
-                parent_pane = current_pane
-            elif "codex" in self.tmux_panes and "opencode" not in self.tmux_panes:
-                direction = "bottom"
-                parent_pane = current_pane
-            else:
-                direction = "bottom"
-                parent_pane = self.tmux_panes.get("codex") or next(iter(self.tmux_panes.values()))
-        else:
-            direction = "right" if not self.tmux_panes else "bottom"
-            parent_pane = None
-            if direction == "bottom":
-                try:
-                    parent_pane = next(iter(self.tmux_panes.values()))
-                except StopIteration:
-                    parent_pane = None
+            use_parent = None
 
-        pane_id = backend.create_pane("", str(Path.cwd()), direction=direction, percent=50, parent_pane=parent_pane)
+        pane_id = backend.create_pane("", str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent)
         backend.respawn_pane(pane_id, cmd=start_cmd, cwd=str(Path.cwd()), remain_on_exit=True)
         backend.set_pane_title(pane_id, pane_title_marker)
         backend.set_pane_user_option(pane_id, "@ccb_agent", "Gemini")
@@ -1600,9 +1752,14 @@ class AILauncher:
         )
 
         print(f"✅ {t('started_backend', provider='Gemini', terminal='tmux pane', pane_id=pane_id)}")
-        return True
+        return pane_id
 
-    def _start_opencode_tmux(self) -> bool:
+    def _start_opencode_tmux(
+        self,
+        *,
+        parent_pane: str | None = None,
+        direction: str | None = None,
+    ) -> str | None:
         runtime = self.runtime_dir / "opencode"
         runtime.mkdir(parents=True, exist_ok=True)
 
@@ -1611,41 +1768,28 @@ class AILauncher:
 
         backend = TmuxBackend()
 
-        want_grid = {"codex", "gemini", "opencode"}.issubset(set(self.providers))
-        current_pane = None
-        try:
-            current_pane = backend.get_current_pane_id()
-        except Exception:
-            current_pane = None
-        if want_grid and current_pane:
-            if not self.tmux_panes:
-                direction = "right"
-                parent_pane = current_pane
-            elif "codex" in self.tmux_panes and "gemini" not in self.tmux_panes:
-                direction = "bottom"
-                parent_pane = current_pane
-            else:
-                direction = "bottom"
-                parent_pane = self.tmux_panes.get("codex") or next(iter(self.tmux_panes.values()))
-        else:
-            direction = "right" if not self.tmux_panes else "bottom"
-            parent_pane = None
-            if direction == "bottom":
-                try:
-                    parent_pane = next(iter(self.tmux_panes.values()))
-                except StopIteration:
-                    parent_pane = None
+        use_direction = (direction or ("right" if not self.tmux_panes else "bottom")).strip() or "right"
+        use_parent = parent_pane
+        if not use_parent:
+            try:
+                use_parent = backend.get_current_pane_id()
+            except Exception:
+                use_parent = None
+        if not use_parent and use_direction == "bottom":
+            try:
+                use_parent = next(reversed(self.tmux_panes.values()))
+            except StopIteration:
+                use_parent = None
 
         # If the preferred parent pane disappeared (e.g. a fast-exiting backend), fall back
         # to a live pane instead of crashing.
         try:
-            if parent_pane and str(parent_pane).startswith("%") and not backend.pane_exists(str(parent_pane)):
-                # Prefer the pane where this command runs.
-                parent_pane = backend.get_current_pane_id()
+            if use_parent and str(use_parent).startswith("%") and not backend.pane_exists(str(use_parent)):
+                use_parent = backend.get_current_pane_id()
         except Exception:
-            parent_pane = None
+            use_parent = None
 
-        pane_id = backend.create_pane("", str(Path.cwd()), direction=direction, percent=50, parent_pane=parent_pane)
+        pane_id = backend.create_pane("", str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent)
         backend.respawn_pane(pane_id, cmd=start_cmd, cwd=str(Path.cwd()), remain_on_exit=True)
         backend.set_pane_title(pane_id, pane_title_marker)
         backend.set_pane_user_option(pane_id, "@ccb_agent", "OpenCode")
@@ -1661,7 +1805,205 @@ class AILauncher:
         )
 
         print(f"✅ {t('started_backend', provider='OpenCode', terminal='tmux pane', pane_id=pane_id)}")
-        return True
+        return pane_id
+
+    def _start_cmd_pane(
+        self,
+        *,
+        parent_pane: str | None,
+        direction: str | None,
+        cmd_settings: dict,
+    ) -> str | None:
+        if not cmd_settings.get("enabled"):
+            return None
+        title = (cmd_settings.get("title") or "CCB-Cmd").strip() or "CCB-Cmd"
+        start_cmd = (cmd_settings.get("start_cmd") or "").strip() or self._default_cmd_start_cmd()
+        full_cmd = (
+            _build_pane_title_cmd(title)
+            + _build_export_path_cmd(self.script_dir / "bin")
+            + _build_cd_cmd(Path.cwd())
+            + start_cmd
+        )
+
+        use_direction = (direction or "right").strip() or "right"
+        use_parent = parent_pane
+
+        if self.terminal_type == "wezterm":
+            backend = WeztermBackend()
+            pane_id = backend.create_pane(full_cmd, str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent)
+            self.extra_panes["cmd"] = pane_id
+        else:
+            backend = TmuxBackend()
+            pane_id = backend.create_pane("", str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent)
+            backend.respawn_pane(pane_id, cmd=full_cmd, cwd=str(Path.cwd()), remain_on_exit=True)
+            backend.set_pane_title(pane_id, title)
+            backend.set_pane_user_option(pane_id, "@ccb_agent", "Cmd")
+            self.extra_panes["cmd"] = pane_id
+
+        print(f"✅ Started cmd pane ({pane_id})")
+        return pane_id
+
+    def _start_codex_current_pane(self) -> int:
+        runtime = self.runtime_dir / "codex"
+        runtime.mkdir(parents=True, exist_ok=True)
+
+        input_fifo = runtime / "input.fifo"
+        output_fifo = runtime / "output.fifo"
+
+        pane_id = self._current_pane_id()
+        if not pane_id:
+            print("❌ Unable to determine current pane id for Codex", file=sys.stderr)
+            return 1
+
+        pane_title_marker = "CCB-Codex"
+        if self.terminal_type == "tmux":
+            try:
+                backend = TmuxBackend()
+                backend.set_pane_title(pane_id, pane_title_marker)
+                backend.set_pane_user_option(pane_id, "@ccb_agent", "Codex")
+            except Exception:
+                pass
+
+        if self.terminal_type == "tmux":
+            if not input_fifo.exists():
+                os.mkfifo(input_fifo, 0o600)
+            if not output_fifo.exists():
+                os.mkfifo(output_fifo, 0o644)
+
+        start_cmd = _build_export_path_cmd(self.script_dir / "bin") + self._build_codex_start_cmd()
+
+        self._write_codex_session(
+            runtime,
+            None,
+            input_fifo,
+            output_fifo,
+            pane_id=pane_id,
+            pane_title_marker=pane_title_marker,
+            codex_start_cmd=start_cmd,
+        )
+
+        # Optional: start caskd after Codex session file exists (first startup convenience).
+        self._maybe_start_caskd()
+
+        if self.terminal_type == "tmux":
+            bridge_script = self.script_dir / "lib" / "codex_dual_bridge.py"
+            bridge_env = os.environ.copy()
+            bridge_env["CODEX_TERMINAL"] = "tmux"
+            bridge_env["CODEX_TMUX_SESSION"] = pane_id
+            bridge_env["CODEX_SESSION_ID"] = self.session_id
+            bridge_env["CODEX_RUNTIME_DIR"] = str(runtime)
+            bridge_env["CODEX_INPUT_FIFO"] = str(input_fifo)
+            bridge_env["CODEX_OUTPUT_FIFO"] = str(output_fifo)
+            bridge_env["CODEX_TMUX_LOG"] = str(runtime / "bridge_output.log")
+            bridge_env["PYTHONPATH"] = str(self.script_dir) + os.pathsep + bridge_env.get("PYTHONPATH", "")
+
+            bridge_proc = subprocess.Popen(
+                [sys.executable, str(bridge_script), "--runtime-dir", str(runtime), "--session-id", self.session_id],
+                env=bridge_env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            try:
+                (runtime / "bridge.pid").write_text(str(bridge_proc.pid), encoding="utf-8")
+            except Exception:
+                pass
+
+        cmd_parts = shlex.split(self._build_codex_start_cmd())
+        env = self._with_bin_path_env()
+        env["CODEX_SESSION_ID"] = self.session_id
+        env["CODEX_RUNTIME_DIR"] = str(runtime)
+        env["CODEX_INPUT_FIFO"] = str(input_fifo)
+        env["CODEX_OUTPUT_FIFO"] = str(output_fifo)
+        env["CODEX_TERMINAL"] = self.terminal_type
+        if self.terminal_type == "wezterm":
+            env["CODEX_WEZTERM_PANE"] = pane_id
+        else:
+            env["CODEX_TMUX_SESSION"] = pane_id
+
+        try:
+            proc = subprocess.Popen(cmd_parts, env=env, cwd=str(Path.cwd()))
+        except Exception as exc:
+            print(f"❌ Failed to start Codex: {exc}", file=sys.stderr)
+            return 1
+
+        try:
+            if self.terminal_type == "tmux":
+                (runtime / "codex.pid").write_text(str(proc.pid) + "\n", encoding="utf-8")
+        except Exception:
+            pass
+
+        return proc.wait()
+
+    def _start_gemini_current_pane(self) -> int:
+        runtime = self.runtime_dir / "gemini"
+        runtime.mkdir(parents=True, exist_ok=True)
+
+        pane_id = self._current_pane_id()
+        if not pane_id:
+            print("❌ Unable to determine current pane id for Gemini", file=sys.stderr)
+            return 1
+
+        pane_title_marker = "CCB-Gemini"
+        if self.terminal_type == "tmux":
+            try:
+                backend = TmuxBackend()
+                backend.set_pane_title(pane_id, pane_title_marker)
+                backend.set_pane_user_option(pane_id, "@ccb_agent", "Gemini")
+            except Exception:
+                pass
+
+        start_cmd = _build_export_path_cmd(self.script_dir / "bin") + self._build_gemini_start_cmd()
+        self._write_gemini_session(
+            runtime,
+            None,
+            pane_id=pane_id,
+            pane_title_marker=pane_title_marker,
+            start_cmd=start_cmd,
+        )
+
+        return self._run_shell_command(start_cmd, cwd=str(Path.cwd()))
+
+    def _start_opencode_current_pane(self) -> int:
+        runtime = self.runtime_dir / "opencode"
+        runtime.mkdir(parents=True, exist_ok=True)
+
+        pane_id = self._current_pane_id()
+        if not pane_id:
+            print("❌ Unable to determine current pane id for OpenCode", file=sys.stderr)
+            return 1
+
+        pane_title_marker = "CCB-OpenCode"
+        if self.terminal_type == "tmux":
+            try:
+                backend = TmuxBackend()
+                backend.set_pane_title(pane_id, pane_title_marker)
+                backend.set_pane_user_option(pane_id, "@ccb_agent", "OpenCode")
+            except Exception:
+                pass
+
+        start_cmd = _build_export_path_cmd(self.script_dir / "bin") + self._build_opencode_start_cmd()
+        self._write_opencode_session(
+            runtime,
+            None,
+            pane_id=pane_id,
+            pane_title_marker=pane_title_marker,
+            start_cmd=start_cmd,
+        )
+
+        return self._run_shell_command(start_cmd, cwd=str(Path.cwd()))
+
+    def _start_provider_in_current_pane(self, provider: str) -> int:
+        if provider == "claude":
+            return self._start_claude()
+        if provider == "codex":
+            return self._start_codex_current_pane()
+        if provider == "gemini":
+            return self._start_gemini_current_pane()
+        if provider == "opencode":
+            return self._start_opencode_current_pane()
+        print(f"❌ {t('unknown_provider', provider=provider)}")
+        return 1
 
     def _write_codex_session(self, runtime, tmux_session, input_fifo, output_fifo, pane_id=None, pane_title_marker=None, codex_start_cmd=None):
         session_file = self._project_session_file(".codex-session")
@@ -1743,6 +2085,14 @@ class AILauncher:
         if not ok:
             print("⚠️ Failed to update cpend registry", file=sys.stderr)
         return ok
+
+    def _sync_cend_registry(self) -> None:
+        if "codex" not in self.providers or "claude" not in self.providers:
+            return
+        codex_pane_id = self._provider_pane_id("codex")
+        claude_pane_id = self._provider_pane_id("claude")
+        if codex_pane_id and claude_pane_id:
+            self._write_cend_registry(claude_pane_id, codex_pane_id)
 
     def _write_gemini_session(self, runtime, tmux_session, pane_id=None, pane_title_marker=None, start_cmd=None):
         session_file = self._project_session_file(".gemini-session")
@@ -1958,56 +2308,78 @@ class AILauncher:
             "❌ Claude CLI not found. Install: npm install -g @anthropic-ai/claude-code"
         )
 
-    def _start_claude(self) -> int:
-        print(f"🚀 {t('starting_claude')}")
-
-        env = os.environ.copy()
+    def _claude_env_overrides(self) -> dict:
+        env: dict[str, str] = {}
         if "codex" in self.providers:
             runtime = self.runtime_dir / "codex"
             env["CODEX_SESSION_ID"] = self.session_id
             env["CODEX_RUNTIME_DIR"] = str(runtime)
             env["CODEX_INPUT_FIFO"] = str(runtime / "input.fifo")
             env["CODEX_OUTPUT_FIFO"] = str(runtime / "output.fifo")
-            env["CODEX_TERMINAL"] = self.terminal_type
+            env["CODEX_TERMINAL"] = self.terminal_type or ""
+            pane_id = self._provider_pane_id("codex")
             if self.terminal_type == "wezterm":
-                env["CODEX_WEZTERM_PANE"] = self.wezterm_panes.get("codex", "")
+                env["CODEX_WEZTERM_PANE"] = pane_id
             else:
-                env["CODEX_TMUX_SESSION"] = self.tmux_panes.get("codex", "")
+                env["CODEX_TMUX_SESSION"] = pane_id
 
         if "gemini" in self.providers:
             runtime = self.runtime_dir / "gemini"
             env["GEMINI_SESSION_ID"] = self.session_id
             env["GEMINI_RUNTIME_DIR"] = str(runtime)
-            env["GEMINI_TERMINAL"] = self.terminal_type
+            env["GEMINI_TERMINAL"] = self.terminal_type or ""
+            pane_id = self._provider_pane_id("gemini")
             if self.terminal_type == "wezterm":
-                env["GEMINI_WEZTERM_PANE"] = self.wezterm_panes.get("gemini", "")
+                env["GEMINI_WEZTERM_PANE"] = pane_id
             else:
-                env["GEMINI_TMUX_SESSION"] = self.tmux_panes.get("gemini", "")
+                env["GEMINI_TMUX_SESSION"] = pane_id
 
         if "opencode" in self.providers:
             runtime = self.runtime_dir / "opencode"
             env["OPENCODE_SESSION_ID"] = self.session_id
             env["OPENCODE_RUNTIME_DIR"] = str(runtime)
-            env["OPENCODE_TERMINAL"] = self.terminal_type
+            env["OPENCODE_TERMINAL"] = self.terminal_type or ""
+            pane_id = self._provider_pane_id("opencode")
             if self.terminal_type == "wezterm":
-                env["OPENCODE_WEZTERM_PANE"] = self.wezterm_panes.get("opencode", "")
+                env["OPENCODE_WEZTERM_PANE"] = pane_id
             else:
-                env["OPENCODE_TMUX_SESSION"] = self.tmux_panes.get("opencode", "")
+                env["OPENCODE_TMUX_SESSION"] = pane_id
+
+        return env
+
+    def _build_claude_env(self) -> dict:
+        env = self._with_bin_path_env()
+        env.update(self._claude_env_overrides())
+        return env
+
+    def _claude_start_plan(self) -> tuple[list[str], str, bool]:
+        claude_cmd = self._find_claude_cmd()
+        cmd = [claude_cmd]
+        if self.auto:
+            cmd.append("--dangerously-skip-permissions")
+        has_history = False
+        resume_dir = None
+        if self.resume:
+            _, has_history, resume_dir = self._get_latest_claude_session_id()
+            if has_history:
+                cmd.append("--continue")
+        run_cwd = str(self.project_root) if self.resume else str(Path.cwd())
+        if self.resume and has_history and resume_dir:
+            run_cwd = str(resume_dir)
+        return cmd, run_cwd, has_history
+
+    def _start_claude(self) -> int:
+        print(f"🚀 {t('starting_claude')}")
+        env = self._build_claude_env()
 
         try:
-            claude_cmd = self._find_claude_cmd()
+            cmd, run_cwd, has_history = self._claude_start_plan()
         except FileNotFoundError as e:
             print(str(e))
             return 1
 
-        cmd = [claude_cmd]
-
-        if self.auto:
-            cmd.append("--dangerously-skip-permissions")
         if self.resume:
-            _, has_history, _ = self._get_latest_claude_session_id()
             if has_history:
-                cmd.append("--continue")
                 print(f"🔁 {t('resuming_claude', session_id='')}")
             else:
                 print(f"ℹ️ {t('no_claude_session')}")
@@ -2030,21 +2402,77 @@ class AILauncher:
             # Let subprocess inherit stdio by default. Explicitly passing sys.stdin/out/err
             # can produce non-console handles on Windows (especially after re-wrapping
             # stdout/stderr for UTF-8), which may trigger issues in Node-based CLIs.
-            run_cwd = str(self.project_root) if self.resume else str(Path.cwd())
-            if self.resume:
-                _, has_history, resume_dir = self._get_latest_claude_session_id()
-                if has_history and resume_dir:
-                    run_cwd = str(resume_dir)
             return subprocess.run(cmd, env=env, cwd=run_cwd).returncode
         except KeyboardInterrupt:
             print(f"\n⚠️ {t('user_interrupted')}")
             return 130
 
-    def cleanup(self):
+    def _start_claude_pane(self, *, parent_pane: str | None, direction: str | None) -> str | None:
+        print(f"🚀 {t('starting_claude')}")
+        env_overrides = self._claude_env_overrides()
+
+        try:
+            cmd_parts, run_cwd, has_history = self._claude_start_plan()
+        except FileNotFoundError as e:
+            print(str(e))
+            return None
+
+        if self.resume:
+            if has_history:
+                print(f"🔁 {t('resuming_claude', session_id='')}")
+            else:
+                print(f"ℹ️ {t('no_claude_session')}")
+
+        start_cmd = " ".join(cmd_parts)
+        full_cmd = (
+            _build_pane_title_cmd("CCB-Claude")
+            + self._build_env_prefix(env_overrides)
+            + _build_export_path_cmd(self.script_dir / "bin")
+            + start_cmd
+        )
+
+        use_direction = (direction or "right").strip() or "right"
+        use_parent = parent_pane
+
+        if self.terminal_type == "wezterm":
+            backend = WeztermBackend()
+            pane_id = backend.create_pane(full_cmd, run_cwd, direction=use_direction, percent=50, parent_pane=use_parent)
+            self.wezterm_panes["claude"] = pane_id
+        else:
+            backend = TmuxBackend()
+            pane_id = backend.create_pane("", run_cwd, direction=use_direction, percent=50, parent_pane=use_parent)
+            backend.respawn_pane(pane_id, cmd=full_cmd, cwd=run_cwd, remain_on_exit=True)
+            backend.set_pane_title(pane_id, "CCB-Claude")
+            backend.set_pane_user_option(pane_id, "@ccb_agent", "Claude")
+            self.tmux_panes["claude"] = pane_id
+
+        try:
+            self._write_local_claude_session(
+                session_id=self._read_local_claude_session_id(),
+                active=True,
+                pane_id=str(pane_id or ""),
+                pane_title_marker="CCB-Claude",
+                terminal=self.terminal_type,
+            )
+        except Exception:
+            pass
+
+        print(f"✅ {t('started_backend', provider='Claude', terminal=f'{self.terminal_type} pane', pane_id=pane_id)}")
+        return pane_id
+
+    def cleanup(
+        self,
+        *,
+        kill_panes: bool = True,
+        clear_sessions: bool = True,
+        remove_runtime: bool = True,
+        quiet: bool = False,
+    ):
         if self._cleaned:
             return
         self._cleaned = True
-        print(f"\n🧹 {t('cleaning_up')}")
+        if not quiet:
+            print(f"\n🧹 {t('cleaning_up')}")
 
         # Revert tmux UI theming early so the user's session returns to normal even if cleanup fails later.
         try:
@@ -2070,39 +2498,43 @@ class AILauncher:
         except Exception:
             pass
 
-        if self.terminal_type == "wezterm":
-            backend = WeztermBackend()
-            for provider, pane_id in self.wezterm_panes.items():
-                if pane_id:
-                    backend.kill_pane(pane_id)
-        else:
-            backend = TmuxBackend()
-            for provider, pane_id in self.tmux_panes.items():
-                if pane_id:
-                    backend.kill_pane(pane_id)
+        if kill_panes:
+            if self.terminal_type == "wezterm":
+                backend = WeztermBackend()
+                for pane_id in list(self.wezterm_panes.values()) + list(self.extra_panes.values()):
+                    if pane_id:
+                        backend.kill_pane(pane_id)
+            else:
+                backend = TmuxBackend()
+                for pane_id in list(self.tmux_panes.values()) + list(self.extra_panes.values()):
+                    if pane_id:
+                        backend.kill_pane(pane_id)
 
-        for session_file in [
-            self._project_session_file(".codex-session"),
-            self._project_session_file(".gemini-session"),
-            self._project_session_file(".opencode-session"),
-            self._project_session_file(".claude-session"),
-        ]:
-            if session_file.exists():
-                try:
-                    data = self._read_json_file(session_file)
-                    if not data:
-                        continue
-                    data["active"] = False
-                    data["ended_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-                    safe_write_session(session_file, json.dumps(data, ensure_ascii=False, indent=2))
-                except Exception:
-                    pass
+        if clear_sessions:
+            for session_file in [
+                self._project_session_file(".codex-session"),
+                self._project_session_file(".gemini-session"),
+                self._project_session_file(".opencode-session"),
+                self._project_session_file(".claude-session"),
+            ]:
+                if session_file.exists():
+                    try:
+                        data = self._read_json_file(session_file)
+                        if not data:
+                            continue
+                        data["active"] = False
+                        data["ended_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                        safe_write_session(session_file, json.dumps(data, ensure_ascii=False, indent=2))
+                    except Exception:
+                        pass
 
-        import shutil
-        if self.runtime_dir.exists():
-            shutil.rmtree(self.runtime_dir, ignore_errors=True)
+        if remove_runtime:
+            import shutil
+            if self.runtime_dir.exists():
+                shutil.rmtree(self.runtime_dir, ignore_errors=True)
 
-        print(f"✅ {t('cleanup_complete')}")
+        if not quiet:
+            print(f"✅ {t('cleanup_complete')}")
 
     def run_up(self) -> int:
         git_info = _get_git_info()
@@ -2135,9 +2567,46 @@ class AILauncher:
         if not self._require_project_config_dir():
             return 2
 
-        atexit.register(self.cleanup)
-        signal.signal(signal.SIGINT, lambda s, f: (self.cleanup(), sys.exit(0)))
-        signal.signal(signal.SIGTERM, lambda s, f: (self.cleanup(), sys.exit(0)))
+        if not self.providers:
+            print("❌ No providers configured. Define providers in ccb.config or pass them on the command line.", file=sys.stderr)
+            return 2
+
+        self.anchor_provider = self.providers[-1]
+        self.anchor_pane_id = self._current_pane_id()
+        if not self.anchor_pane_id:
+            print("❌ Unable to determine current pane id. Run inside tmux or WezTerm.", file=sys.stderr)
+            return 2
+
+        cmd_settings = self._cmd_settings()
+        spawn_items: list[str] = []
+        if cmd_settings.get("enabled"):
+            spawn_items.append("cmd")
+        spawn_items.extend(list(reversed(self.providers[:-1])))
+        total_panes = 1 + len(spawn_items)
+        left_count = 1 if total_panes <= 1 else max(1, total_panes // 2)
+        right_count = total_panes - left_count
+
+        extras = list(spawn_items)
+        right_top_item = extras[0] if right_count > 0 and extras else None
+        remaining = extras[1:] if right_top_item else extras
+
+        left_slots = max(0, left_count - 1)
+        right_slots = max(0, right_count - (1 if right_top_item else 0))
+
+        left_items = [self.anchor_provider]
+        left_items.extend(remaining[:left_slots])
+
+        right_items: list[str] = []
+        if right_top_item:
+            right_items.append(right_top_item)
+        if right_slots:
+            right_items.extend(remaining[left_slots:left_slots + right_slots])
+
+        cleanup_kwargs = {}
+
+        atexit.register(lambda: self.cleanup(**cleanup_kwargs))
+        signal.signal(signal.SIGINT, lambda s, f: (self.cleanup(**cleanup_kwargs), sys.exit(0)))
+        signal.signal(signal.SIGTERM, lambda s, f: (self.cleanup(**cleanup_kwargs), sys.exit(0)))
 
         # Best-effort cleanup of leftover `tmpclaude-*-cwd` artifacts (can be disabled via env).
         try:
@@ -2169,38 +2638,70 @@ class AILauncher:
         except Exception:
             pass
 
-        # tmux-only: label the current pane as Claude so pane titles are consistent.
-        # (Codex/Gemini/OpenCode panes are titled when created.)
+        # tmux-only: label current pane for the anchor provider so titles are consistent.
         try:
-            if self.terminal_type == "tmux" and os.environ.get("TMUX"):
-                backend = TmuxBackend()
-                pane_id = backend.get_current_pane_id()
-                backend.set_pane_title(pane_id, "Claude")
-                backend.set_pane_user_option(pane_id, "@ccb_agent", "Claude")
+            self._set_current_pane_label(self.anchor_provider)
         except Exception:
             pass
 
-        providers = list(self.providers)
-        if self.terminal_type == "wezterm" or (self.terminal_type == "tmux" and os.environ.get("TMUX_PANE")):
-            # Stable layout: codex on top, gemini on bottom (when both are present).
-            order = {"codex": 0, "gemini": 1, "opencode": 2}
-            providers.sort(key=lambda p: order.get(p, 99))
+        # Mark current Claude pane/session as active when Claude is the anchor.
+        if self.anchor_provider == "claude":
+            try:
+                self._write_local_claude_session(
+                    session_id=self._read_local_claude_session_id(),
+                    active=True,
+                    pane_id=str(self.anchor_pane_id or ""),
+                    pane_title_marker="CCB-Claude",
+                    terminal=self.terminal_type,
+                )
+            except Exception:
+                pass
 
-        for provider in providers:
-            if not self._start_provider(provider):
+        def _start_item(item: str, *, parent: str | None, direction: str | None) -> str | None:
+            if item == "cmd":
+                return self._start_cmd_pane(parent_pane=parent, direction=direction, cmd_settings=cmd_settings)
+            if item == "claude":
+                return self._start_claude_pane(parent_pane=parent, direction=direction)
+            pane_id = self._start_provider(item, parent_pane=parent, direction=direction)
+            if pane_id:
+                self._warmup_provider(item)
+            return pane_id
+
+        right_top: str | None = None
+        if right_items:
+            right_top = _start_item(right_items[0], parent=self.anchor_pane_id, direction="right")
+            if not right_top:
                 return 1
-            self._warmup_provider(provider)
+
+        last_left = self.anchor_pane_id
+        for item in left_items[1:]:
+            pane_id = _start_item(item, parent=last_left, direction="bottom")
+            if not pane_id:
+                return 1
+            last_left = pane_id
+
+        last_right = right_top
+        for item in right_items[1:]:
+            pane_id = _start_item(item, parent=last_right, direction="bottom")
+            if not pane_id:
+                return 1
+            last_right = pane_id
 
         # Optional: start caskd after Codex session file exists (first startup convenience).
-        self._maybe_start_caskd()
+        if "codex" in self.providers and self.anchor_provider != "codex":
+            self._maybe_start_caskd()
 
         try:
-            return self._start_claude()
+            try:
+                self._sync_cend_registry()
+            except Exception:
+                pass
+            return self._start_provider_in_current_pane(self.anchor_provider)
         finally:
-            self.cleanup()
+            self.cleanup(**cleanup_kwargs)
 
 
-def cmd_up(args):
+def cmd_start(args):
     # Enforce terminal environment requirement
     terminal = detect_terminal()
     if terminal is None:
@@ -2222,13 +2723,6 @@ def cmd_up(args):
         if v in {"0", "false", "no", "n", "off"}:
             return False
         return False
-
-    def _prompt_yes_no(prompt: str) -> bool:
-        try:
-            reply = input(prompt).strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            return False
-        return reply in {"y", "yes"}
 
     def _is_dangerous_root(cwd: Path) -> tuple[bool, str]:
         try:
@@ -2261,7 +2755,7 @@ def cmd_up(args):
         """
         Find the nearest ancestor `.ccb_config/` (project anchor) directory.
 
-        Used only to warn when `ccb up` is invoked from a subdirectory of an existing project root,
+        Used only to warn when `ccb` is invoked from a subdirectory of an existing project root,
         to avoid accidentally creating a nested anchor. Session/config lookup remains local-only.
         """
         try:
@@ -2280,10 +2774,8 @@ def cmd_up(args):
             return candidate
         return None
 
-    providers = _parse_providers(args.providers or ["codex"])
-    if not providers:
-        return 2
-    cfg = Path.cwd() / ".ccb_config"
+    work_dir = Path.cwd()
+    cfg = work_dir / ".ccb_config"
     if cfg.exists() and not cfg.is_dir():
         print("❌ Invalid .ccb_config: exists but is not a directory", file=sys.stderr)
         print(f"   path: {cfg}", file=sys.stderr)
@@ -2291,7 +2783,6 @@ def cmd_up(args):
         return 2
 
     if not cfg.is_dir():
-        init_requested = bool(getattr(args, "init", False)) or _env_truthy("CCB_INIT_PROJECT")
         is_dangerous, danger_reason = _is_dangerous_root(Path.cwd())
         parent_anchor = _find_parent_anchor_dir(Path.cwd())
         if parent_anchor:
@@ -2302,69 +2793,65 @@ def cmd_up(args):
             )
             print(f"   cwd:         {Path.cwd()}", file=sys.stderr)
             print(f"   project_root:{project_root}", file=sys.stderr)
-            print("💡 Fix: cd to the project root and run `ccb up` there.", file=sys.stderr)
+            print("💡 Fix: cd to the project root and run `ccb` there.", file=sys.stderr)
             print(f"   cd {project_root}", file=sys.stderr)
             return 2
 
-        if not sys.stdin.isatty():
-            print("❌ Missing required project config directory: .ccb_config", file=sys.stderr)
-            print(f"   cwd: {Path.cwd()}", file=sys.stderr)
-            print("💡 Fix:", file=sys.stderr)
-            print(f"   mkdir -p {cfg}", file=sys.stderr)
-            print("   (Tip: you may be in the wrong directory; run this in your project root.)", file=sys.stderr)
-            if not init_requested:
-                print("   (Non-interactive: pass --init or set CCB_INIT_PROJECT=1 to auto-create.)", file=sys.stderr)
-                return 2
-            if is_dangerous and not _env_truthy("CCB_INIT_PROJECT_DANGEROUS"):
-                print(f"❌ Refusing to auto-create .ccb_config in {danger_reason} in non-interactive mode.", file=sys.stderr)
-                print("💡 If you really intend to do this, set CCB_INIT_PROJECT_DANGEROUS=1 and retry.", file=sys.stderr)
-                return 2
-            try:
-                cfg.mkdir(parents=False, exist_ok=True)
-                print(f"✅ Created: {cfg}", file=sys.stderr)
-            except Exception as exc:
-                print(f"❌ Failed to create {cfg}: {exc}", file=sys.stderr)
-                return 2
-        else:
-            print("⚠️ .ccb_config not found in current directory.", file=sys.stderr)
-            print(f"   cwd: {Path.cwd()}", file=sys.stderr)
-            print("   This usually means you are not in your project root.", file=sys.stderr)
+        if is_dangerous and not _env_truthy("CCB_INIT_PROJECT_DANGEROUS"):
+            print(f"❌ Refusing to auto-create .ccb_config in {danger_reason}.", file=sys.stderr)
+            print("💡 If you really intend to do this, set CCB_INIT_PROJECT_DANGEROUS=1 and retry.", file=sys.stderr)
+            return 2
+        try:
+            cfg.mkdir(parents=False, exist_ok=True)
+            print(f"✅ Created: {cfg}", file=sys.stderr)
+        except Exception as exc:
+            print(f"❌ Failed to create {cfg}: {exc}", file=sys.stderr)
+            return 2
 
-            if is_dangerous:
-                print(f"⚠️ Dangerous directory detected ({danger_reason}).", file=sys.stderr)
+    providers = _parse_providers(args.providers or [])
+    config = load_start_config(work_dir)
+    config_data = config.data if isinstance(config.data, dict) else {}
 
-            # Always require an explicit confirmation when creating.
-            if not _prompt_yes_no("Create .ccb_config in THIS directory? (y/N) "):
-                print("Cancelled.", file=sys.stderr)
-                print(f"💡 If this is your project root: mkdir -p {cfg}", file=sys.stderr)
-                return 2
-            if is_dangerous:
-                if not _prompt_yes_no(f"Confirm again: create .ccb_config in {danger_reason}? (y/N) "):
-                    print("Cancelled.", file=sys.stderr)
-                    return 2
-            try:
-                cfg.mkdir(parents=False, exist_ok=True)
-                print(f"✅ Created: {cfg}", file=sys.stderr)
-            except Exception as exc:
-                print(f"❌ Failed to create {cfg}: {exc}", file=sys.stderr)
-                return 2
+    if not providers:
+        raw_providers = config_data.get("providers")
+        if isinstance(raw_providers, str):
+            raw_providers = [raw_providers]
+        if not isinstance(raw_providers, list):
+            raw_providers = []
+        if not raw_providers:
+            raw_providers = list(DEFAULT_PROVIDERS)
+            if not config.path:
+                created_path, created = ensure_default_start_config(work_dir)
+                if created and created_path:
+                    print(f"✅ Created default config: {created_path}", file=sys.stderr)
+        providers = _parse_providers([str(p) for p in raw_providers])
+
+    if not providers:
+        print("❌ No providers configured. Define providers in ccb.config or pass them on the command line.", file=sys.stderr)
+        return 2
+
+    flags = config_data.get("flags") if isinstance(config_data.get("flags"), dict) else {}
+    resume = bool(args.resume or flags.get("resume") or flags.get("restore") or flags.get("auto_resume"))
+    auto = bool(args.auto or flags.get("auto") or flags.get("auto_mode"))
+    cmd_config = config_data.get("cmd") if isinstance(config_data, dict) else None
 
     launcher = AILauncher(
         providers=providers,
-        resume=args.resume,
-        auto=args.auto,
+        resume=resume,
+        auto=auto,
+        cmd_config=cmd_config,
     )
     return launcher.run_up()
 
 
 def cmd_kill(args):
-    providers = _parse_providers(args.providers or ["codex", "gemini", "opencode"], allow_unknown=True)
+    providers = _parse_providers(args.providers or ["codex", "gemini", "opencode", "claude"], allow_unknown=True)
     if not providers:
         return 2
 
     for provider in providers:
-        session_file = Path.cwd() / f".{provider}-session"
-        if not session_file.exists():
+        session_file = find_project_session_file(Path.cwd(), f".{provider}-session")
+        if not session_file or not session_file.exists():
             print(f"⚠️ {provider}: Session file not found")
             continue
 
@@ -2404,12 +2891,12 @@ def _parse_providers(values: list[str], *, allow_unknown: bool = False) -> list[
     Parse providers from argv.
 
     Accept both:
-      - space-separated: `ccb up codex gemini opencode`
-      - comma-separated: `ccb up codex,gemini,opencode`
+      - space-separated: `ccb codex gemini opencode claude`
+      - comma-separated: `ccb codex,gemini,opencode,claude`
 
     Returns a de-duplicated list preserving order.
     """
-    allowed = {"codex", "gemini", "opencode"}
+    allowed = {"codex", "gemini", "opencode", "claude"}
     raw_parts: list[str] = []
     for item in (values or []):
         if item is None:
@@ -2436,8 +2923,8 @@ def _parse_providers(values: list[str], *, allow_unknown: bool = False) -> list[
 
     if unknown and not allow_unknown:
         print(f"❌ invalid provider(s): {', '.join(unknown)}", file=sys.stderr)
-        print("💡 use: ccb up codex gemini opencode  (spaces)  or  ccb up codex,gemini,opencode  (commas)", file=sys.stderr)
-        print("💡 allowed: codex, gemini, opencode", file=sys.stderr)
+        print("💡 use: ccb codex gemini opencode claude  (spaces)  or  ccb codex,gemini,opencode,claude  (commas)", file=sys.stderr)
+        print("💡 allowed: codex, gemini, opencode, claude", file=sys.stderr)
         return []
 
     return parsed
@@ -2973,64 +3460,52 @@ def cmd_update(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Claude AI unified launcher", add_help=True)
-    parser.add_argument("--print-version", action="store_true", help="Print local version (fast) and exit")
-    subparsers = parser.add_subparsers(dest="command", help="Subcommands")
-
-    # up subcommand
-    up_parser = subparsers.add_parser("up", help="Start AI backends")
-    up_parser.add_argument(
-        "providers",
-        nargs="*",
-        help="Backends to start (space or comma separated): codex, gemini, opencode",
-    )
-    up_parser.add_argument(
-        "--init",
-        action="store_true",
-        help="Initialize project by creating .ccb_config if missing (still asks for confirmation when interactive)",
-    )
-    up_parser.add_argument("-r", "--resume", "--restore", action="store_true", help="Resume context")
-    up_parser.add_argument("-a", "--auto", action="store_true", help="Full auto permission mode")
-
-    # kill subcommand
-    kill_parser = subparsers.add_parser("kill", help="Terminate session")
-    kill_parser.add_argument("providers", nargs="*", default=[], help="Backends to terminate (codex/gemini/opencode)")
-
-    # update subcommand
-    update_parser = subparsers.add_parser("update", help="Update to latest version")
-    update_parser.add_argument("target", nargs="?", choices=["cca"],
-                               help="Optional: 'cca' to install/update CCA only")
-
-    # version subcommand
-    subparsers.add_parser("version", help="Show version and check for updates")
-
     argv = sys.argv[1:]
-    # Backward/shortcut compatibility
-    if argv and argv[0] in {"-r", "--resume", "--restore"}:
-        argv = ["up"] + argv
-    elif argv and argv[0] in {"-v", "--version"}:
-        argv = ["--print-version"]
-    args = parser.parse_args(argv)
-
-    if getattr(args, "print_version", False):
+    if "--print-version" in argv:
         print(f"v{VERSION}")
         return 0
 
-    if not args.command:
-        parser.print_help()
-        return 0
+    if argv and argv[0] in {"-v", "--version"}:
+        argv = ["version"]
 
-    if args.command == "up":
-        return cmd_up(args)
-    elif args.command == "kill":
-        return cmd_kill(args)
-    elif args.command == "update":
-        return cmd_update(args)
-    elif args.command == "version":
-        return cmd_version(args)
-    else:
+    if argv and argv[0] == "up":
+        print("❌ `ccb up` is no longer supported.", file=sys.stderr)
+        print("💡 Use: ccb [providers...]  (or configure ccb.config)", file=sys.stderr)
+        return 2
+
+    if argv and argv[0] in {"kill", "update", "version"}:
+        parser = argparse.ArgumentParser(description="Claude AI unified launcher", add_help=True)
+        subparsers = parser.add_subparsers(dest="command", help="Subcommands")
+
+        kill_parser = subparsers.add_parser("kill", help="Terminate session")
+        kill_parser.add_argument("providers", nargs="*", default=[], help="Backends to terminate (codex/gemini/opencode/claude)")
+
+        update_parser = subparsers.add_parser("update", help="Update to latest version")
+        update_parser.add_argument("target", nargs="?", choices=["cca"],
+                                   help="Optional: 'cca' to install/update CCA only")
+
+        subparsers.add_parser("version", help="Show version and check for updates")
+
+        args = parser.parse_args(argv)
+        if args.command == "kill":
+            return cmd_kill(args)
+        if args.command == "update":
+            return cmd_update(args)
+        if args.command == "version":
+            return cmd_version(args)
         parser.print_help()
         return 1
+
+    start_parser = argparse.ArgumentParser(description="Claude AI unified launcher", add_help=True)
+    start_parser.add_argument(
+        "providers",
+        nargs="*",
+        help="Backends to start (space or comma separated): codex, gemini, opencode, claude",
+    )
+    start_parser.add_argument("-r", "--resume", "--restore", action="store_true", help="Resume context")
+    start_parser.add_argument("-a", "--auto", action="store_true", help="Full auto permission mode")
+    args = start_parser.parse_args(argv)
+    return cmd_start(args)
 
 
 if __name__ == "__main__":

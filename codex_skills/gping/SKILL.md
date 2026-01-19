@@ -12,4 +12,4 @@ description: "Test connectivity with Gemini (shorthand: g/gm) via the `gping` CL
 
 ## Notes
 
-- If `gping` fails, suggest starting Gemini with `ccb up gemini` and ensure `gping` runs in the same environment as `ccb` (WSL vs native Windows).
+- If `gping` fails, ensure it runs in the same environment as `ccb` (WSL vs native Windows).

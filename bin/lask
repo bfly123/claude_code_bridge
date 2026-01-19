@@ -1,22 +1,17 @@
 #!/usr/bin/env python3
 """
-lask - Send a message to the active Claude pane (best-effort).
+lask - Send message to Claude and wait for reply (sync).
 
-This is intended for use *from inside* another AI CLI (e.g. Codex) so you can
-dispatch a prompt back to Claude quickly.
-
-Notes:
-- It uses CCB's pane registry (written by `ccb up ...`) to locate the Claude pane.
-- It only sends text; it does not wait for/parse Claude replies.
+Designed to be used with Codex/OpenCode in background mode.
+If --output is provided, the reply is written atomically to that file and stdout stays empty.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 script_dir = Path(__file__).resolve().parent
 lib_dir = script_dir.parent / "lib"
@@ -26,86 +21,152 @@ from compat import read_stdin_text, setup_windows_encoding
 
 setup_windows_encoding()
 
-from pane_registry import load_registry_by_session_id
-from session_utils import find_project_session_file
-from terminal import TmuxBackend, WeztermBackend
+from cli_output import EXIT_ERROR, atomic_write_text
+from env_utils import env_bool
+from askd_client import (
+    state_file_from_env,
+    find_project_session_file,
+    resolve_work_dir_with_registry,
+    try_daemon_request,
+    maybe_start_daemon,
+    wait_for_daemon_ready,
+)
+from providers import LASK_CLIENT_SPEC
+from claude_session_resolver import resolve_claude_session
+from terminal import get_backend_for_session, get_pane_id_from_session
+
+
+ASYNC_GUARDRAIL = """[CCB_ASYNC_SUBMITTED provider=claude]
+IMPORTANT: Task submitted to Claude. You MUST:
+1. Tell user "Claude processing..."
+2. END YOUR TURN IMMEDIATELY
+3. Do NOT wait, poll, check status, or use any more tools
+"""
 
 
 def _usage() -> None:
-    print("Usage: lask <message>", file=sys.stderr)
+    print("Usage: lask [--async] [--sync] [--session-file FILE] [--timeout SECONDS] [--output FILE] <message>", file=sys.stderr)
 
 
-def _read_json(path: Path) -> dict:
-    try:
-        raw = path.read_text(encoding="utf-8-sig")
-        obj = json.loads(raw)
-        return obj if isinstance(obj, dict) else {}
-    except Exception:
-        return {}
+def _parse_args(argv: list[str]) -> Tuple[Optional[Path], float, str, bool, Optional[str], bool, bool]:
+    output: Optional[Path] = None
+    timeout: Optional[float] = None
+    quiet = False
+    async_mode = False
+    sync_mode = False
+    session_file: Optional[str] = None
+    parts: list[str] = []
 
-
-def _detect_ccb_session_id() -> Optional[str]:
-    # Prefer any explicit env (useful in nested tools).
-    for key in ("CCB_SESSION_ID", "CODEX_SESSION_ID", "GEMINI_SESSION_ID", "OPENCODE_SESSION_ID"):
-        v = (os.environ.get(key) or "").strip()
-        if v:
-            return v
-
-    # Fallback to project session file (Codex is most likely present).
-    for filename in (".codex-session", ".gemini-session", ".opencode-session"):
-        path = find_project_session_file(Path.cwd(), filename)
-        if not path:
+    it = iter(argv[1:])
+    for token in it:
+        if token in ("-h", "--help"):
+            _usage()
+            raise SystemExit(0)
+        if token in ("-q", "--quiet"):
+            quiet = True
             continue
-        data = _read_json(path)
-        sid = data.get("session_id")
-        if isinstance(sid, str) and sid.strip():
-            return sid.strip()
-    return None
+        if token == "--async":
+            async_mode = True
+            continue
+        if token == "--sync":
+            sync_mode = True
+            continue
+        if token == "--session-file":
+            try:
+                session_file = next(it)
+            except StopIteration:
+                raise ValueError("--session-file requires a file path")
+            continue
+        if token in ("-o", "--output"):
+            try:
+                output = Path(next(it)).expanduser()
+            except StopIteration:
+                raise ValueError("--output requires a file path")
+            continue
+        if token in ("-t", "--timeout"):
+            try:
+                timeout = float(next(it))
+            except StopIteration:
+                raise ValueError("--timeout requires a number")
+            except ValueError as exc:
+                raise ValueError(f"Invalid --timeout: {exc}")
+            continue
+        parts.append(token)
 
-
-def _backend_for_claude_pane(claude_pane_id: str):
-    # tmux pane_id is `%xx`; WezTerm pane_id is a number-like string.
-    if claude_pane_id.startswith("%"):
-        return TmuxBackend()
-    return WeztermBackend()
+    message = " ".join(parts).strip()
+    if timeout is None:
+        try:
+            timeout = float(os.environ.get("CCB_SYNC_TIMEOUT", "-1"))
+        except Exception:
+            timeout = -1.0
+    if async_mode:
+        timeout = 0.0
+    return output, timeout, message, quiet, session_file, async_mode, sync_mode
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) > 1 and argv[1] in ("-h", "--help"):
-        _usage()
-        return 0
-
-    message = " ".join(argv[1:]).strip() if len(argv) > 1 else ""
-    if not message and not sys.stdin.isatty():
-        message = read_stdin_text().strip()
-    if not message:
-        _usage()
-        return 1
-
-    session_id = _detect_ccb_session_id()
-    if not session_id:
-        print("[ERROR] lask: cannot locate CCB session_id (no session file/env found)", file=sys.stderr)
-        return 1
-
-    record = load_registry_by_session_id(session_id)
-    if not record:
-        print(f"[ERROR] lask: no registry found for session_id={session_id}", file=sys.stderr)
-        return 1
-
-    claude_pane_id = str(record.get("claude_pane_id") or "").strip()
-    if not claude_pane_id:
-        print(f"[ERROR] lask: registry missing claude_pane_id for session_id={session_id}", file=sys.stderr)
-        print("Hint: run `ccb up ...` from inside WezTerm/tmux so Claude has a pane id to target.", file=sys.stderr)
-        return 1
-
-    backend = _backend_for_claude_pane(claude_pane_id)
     try:
-        backend.send_text(claude_pane_id, message)
-    except Exception as exc:
-        print(f"[ERROR] lask: send failed: {exc}", file=sys.stderr)
-        return 1
+        output_path, timeout, message, quiet, session_file, async_mode, sync_mode = _parse_args(argv)
+        if not message and not sys.stdin.isatty():
+            message = read_stdin_text().strip()
+        if not message:
+            _usage()
+            return EXIT_ERROR
+        if async_mode:
+            sync_mode = False
 
-    return 0
+        work_dir, _ = resolve_work_dir_with_registry(
+            LASK_CLIENT_SPEC,
+            provider="claude",
+            cli_session_file=session_file,
+            env_session_file=os.environ.get("CCB_SESSION_FILE"),
+        )
+
+        state_file = state_file_from_env(LASK_CLIENT_SPEC.state_file_env)
+        daemon_result = try_daemon_request(LASK_CLIENT_SPEC, work_dir, message, timeout, quiet, state_file)
+        if daemon_result is None and maybe_start_daemon(LASK_CLIENT_SPEC, work_dir):
+            wait_for_daemon_ready(LASK_CLIENT_SPEC, timeout_s=min(2.0, max(0.2, float(timeout))), state_file=state_file)
+            daemon_result = try_daemon_request(LASK_CLIENT_SPEC, work_dir, message, timeout, quiet, state_file)
+
+        if daemon_result is not None:
+            reply, exit_code = daemon_result
+            if not sync_mode:
+                print(ASYNC_GUARDRAIL, file=sys.stderr, flush=True)
+            if output_path:
+                atomic_write_text(output_path, reply + "\n")
+                return exit_code
+            sys.stdout.write(reply)
+            if not reply.endswith("\n"):
+                sys.stdout.write("\n")
+            return exit_code
+
+        if not sync_mode:
+            resolution = resolve_claude_session(work_dir)
+            if resolution and resolution.data:
+                data = dict(resolution.data)
+                if data.get("claude_pane_id") and not data.get("pane_id"):
+                    data["pane_id"] = data.get("claude_pane_id")
+                backend = get_backend_for_session(data) if data else None
+                pane_id = get_pane_id_from_session(data) if data else ""
+                if backend and pane_id:
+                    backend.send_text(pane_id, message)
+                    return 0
+
+        if not env_bool(LASK_CLIENT_SPEC.enabled_env, True):
+            print(f"[ERROR] {LASK_CLIENT_SPEC.enabled_env}=0: lask daemon mode disabled.", file=sys.stderr)
+            return EXIT_ERROR
+        if not find_project_session_file(work_dir, LASK_CLIENT_SPEC.session_filename):
+            print("[ERROR] No active Claude session found for this directory.", file=sys.stderr)
+            print("Run `ccb claude` (or add claude to ccb.config) in this project first.", file=sys.stderr)
+            return EXIT_ERROR
+        print("[ERROR] lask daemon required but not available.", file=sys.stderr)
+        print("Start it with `laskd` (or enable autostart via CCB_LASKD_AUTOSTART=1).", file=sys.stderr)
+        return EXIT_ERROR
+    except KeyboardInterrupt:
+        return 130
+    except Exception as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return EXIT_ERROR
 
 
 if __name__ == "__main__":
