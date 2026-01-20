@@ -114,7 +114,7 @@ def _normalize(val):
         items = [v for v in (_normalize(v) for v in val) if v]
         return ",".join(items)
     if isinstance(val, dict):
-        for key in ("role","role_type","roleType","roleset","type","profile","group","team","mode","name"):
+        for key in ("plan","scheme","role","role_type","roleType","roleset","type","profile","group","team","mode","name"):
             if key in val:
                 out = _normalize(val.get(key))
                 if out:
@@ -126,13 +126,13 @@ def _first_value(keys):
         if out:
             return out
     return ""
-out = _first_value(("role","role_type","roleType","roleset","type","profile","group","team","mode","roles"))
+out = _first_value(("plan","scheme","role","role_type","roleType","roleset","type","profile","group","team","mode","roles"))
 if out:
     print(out)
 PY
 )"
             else
-                role="$(grep -Eo '"(role_type|roleType|roleset|role|type|profile|group|team|mode|roles)"\\s*:\\s*"[^"]+"' "$cfg" 2>/dev/null | head -n1 | sed -E 's/.*:"([^"]+)"/\\1/' || true)"
+                role="$(grep -Eo '"(plan|scheme|role_type|roleType|roleset|role|type|profile|group|team|mode|roles)"\\s*:\\s*"[^"]+"' "$cfg" 2>/dev/null | head -n1 | sed -E 's/.*:"([^"]+)"/\\1/' || true)"
                 if [[ -n "$role" ]]; then
                     local role_lc
                     role_lc="$(printf '%s' "$role" | tr '[:upper:]' '[:lower:]')"
