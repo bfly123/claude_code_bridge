@@ -1,6 +1,6 @@
 <div align="center">
 
-# Claude Code Bridge (ccb) v4.1.3
+# Claude Code Bridge (ccb) v5.0.0
 
 **Silky Smooth Claude & Codex & Gemini Collaboration via Split-Pane Terminal**
 
@@ -15,7 +15,7 @@
   <img src="https://img.shields.io/badge/Every_Model_Controllable-CF1322?style=for-the-badge" alt="Every Model Controllable">
 </p>
 
-[![Version](https://img.shields.io/badge/version-4.1.3-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-5.0.0-orange.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![CI](https://github.com/bfly123/claude_code_bridge/actions/workflows/test.yml/badge.svg)](https://github.com/bfly123/claude_code_bridge/actions/workflows/test.yml)
@@ -250,6 +250,10 @@ Cmd pane participates in the layout as the first extra pane and does not change 
 ### Update
 ```bash
 ccb update              # Update ccb to the latest version
+ccb update 4            # Update to the highest v4.x.x version
+ccb update 4.1          # Update to the highest v4.1.x version
+ccb update 4.1.2        # Update to specific version v4.1.2
+ccb update cca          # Update CCA (Claude Code Autoflow) only
 ```
 
 ---
@@ -429,6 +433,11 @@ Once started, collaborate naturally. Claude will detect when to delegate tasks.
 
 <details>
 <summary><b>Version History</b></summary>
+
+### v5.0.0
+- **Version Selection**: `ccb update` now supports version targeting (`ccb update 4`, `ccb update 4.1.2`)
+- **Version Rollback**: Downgrade to any previous release with `ccb update <version>`
+- **Independent CCA Updates**: `ccb update` no longer auto-updates CCA; use `ccb update cca` explicitly
 
 ### v4.1.3
 - **Codex Config**: Automatically migrate deprecated `sandbox_mode = "full-auto"` to `"danger-full-access"` to fix Codex startup

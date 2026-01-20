@@ -1,6 +1,6 @@
 <div align="center">
 
-# Claude Code Bridge (ccb) v4.1.3
+# Claude Code Bridge (ccb) v5.0.0
 
 **基于终端分屏的全新多模型交互协作工具**
 **Claude & Codex & Gemini &opencode**
@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/模型皆可控-CF1322?style=for-the-badge" alt="模型皆可控">
 </p>
 
-[![Version](https://img.shields.io/badge/version-4.1.3-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-5.0.0-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 [English](README.md) | **中文**
@@ -231,6 +231,10 @@ cmd pane 作为第一个额外 pane 参与布局，不会改变当前 pane 对�
 ### 后续更新
 ```bash
 ccb update              # 更新 ccb 到最新版本
+ccb update 4            # 更新到 v4.x.x 最高版本
+ccb update 4.1          # 更新到 v4.1.x 最高版本
+ccb update 4.1.2        # 更新到指定版本 v4.1.2
+ccb update cca          # 仅更新 CCA (Claude Code Autoflow)
 ```
 
 ---
@@ -450,6 +454,11 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile
 
 <details>
 <summary><b>更新历史</b></summary>
+
+### v5.0.0
+- **版本选择**: `ccb update` 支持指定版本更新 (`ccb update 4`, `ccb update 4.1.2`)
+- **版本回退**: 支持回退到任意历史版本 `ccb update <version>`
+- **CCA 独立更新**: `ccb update` 不再自动更新 CCA；需使用 `ccb update cca` 单独更新
 
 ### v4.1.3
 - **Codex 配置修复**: 自动迁移过期的 `sandbox_mode = "full-auto"` 为 `"danger-full-access"`，修复 Codex 无法启动的问题
