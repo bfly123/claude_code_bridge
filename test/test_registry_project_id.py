@@ -33,6 +33,7 @@ def _write_registry_file(home: Path, session_id: str, payload: dict) -> Path:
 
 def test_upsert_registry_merges_providers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setattr(pane_registry, "get_backend_for_session", lambda _rec: _FakeBackend(alive={"%1"}))
 
     work_dir = tmp_path / "proj"
@@ -71,6 +72,7 @@ def test_upsert_registry_merges_providers(tmp_path: Path, monkeypatch: pytest.Mo
 
 def test_load_registry_by_project_id_filters_dead_panes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
 
     work_dir = tmp_path / "proj"
     work_dir.mkdir()
@@ -111,6 +113,7 @@ def test_load_registry_by_project_id_filters_dead_panes(tmp_path: Path, monkeypa
 
 def test_load_registry_by_project_id_infers_missing_project_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setattr(pane_registry, "get_backend_for_session", lambda _rec: _FakeBackend(alive={"%1"}))
 
     work_dir = tmp_path / "proj"
@@ -133,4 +136,3 @@ def test_load_registry_by_project_id_infers_missing_project_id(tmp_path: Path, m
     rec = load_registry_by_project_id(pid, "codex")
     assert rec is not None
     assert rec.get("ccb_session_id") == "legacy"
-
