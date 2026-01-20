@@ -49,11 +49,40 @@
 
 ---
 
-<h2 align="center">🚀 What's New in v5.0</h2>
+<h2 align="center">🚀 What's New</h2>
 
-> **Total Freedom: Any AI as Your Primary Driver**
+<details open>
+<summary><b>v5.0.1</b> - Superpowers /all-plan + role-aware CCA status</summary>
 
-v5.0 removes the dependency on Claude as the sole orchestrator. Now, **Codex** (or any other agent) can be your main driver, controlling Claude, OpenCode, and Gemini with equal power.
+- **/all-plan**: Multi-AI planning with Superpowers brainstorming and availability-aware dispatch.
+- **CCA Status Bar**: Reads role name from `.autoflow/roles.json` (supports `_meta.name`) with per-path caching.
+- **Installer**: Copies skill subdirectories (e.g., `references/`) for Claude/Codex installs.
+- **CLI**: Adds `ccb uninstall` / `ccb reinstall` with Claude config cleanup.
+- **Routing**: Tighter project/session resolution to avoid cross-project Claude sessions.
+
+<details>
+<summary><b>Details & usage</b></summary>
+
+Usage:
+```
+/all-plan <requirement>
+```
+
+Example:
+```
+/all-plan Design a caching layer for the API with Redis
+```
+
+Highlights:
+- Socratic Ladder + Superpowers Lenses + Anti-pattern analysis.
+- Availability-gated dispatch (use only mounted CLIs).
+- Two-round reviewer refinement with merged design.
+
+</details>
+</details>
+
+<details>
+<summary><b>v5.0.0</b> - Any AI as primary driver</summary>
 
 - **Claude Independence**: No need to start Claude first; Codex can act as the primary CLI.
 - **Unified Control**: Single entry point controls Claude/OpenCode/Gemini.
@@ -63,28 +92,29 @@ v5.0 removes the dependency on Claude as the sole orchestrator. Now, **Codex** (
 - **Daemon Autostart**: `caskd`/`laskd` auto-start in WezTerm/tmux when needed.
 - **Session Robustness**: PID liveness checks prevent stale sessions.
 
----
+</details>
 
-<h2 align="center">🚀 What's New in v4.0</h2>
-
-People keep asking how this differs from other workflow tools. My one-sentence answer: this project is a visible & controllable multi-model communication layer built out of dissatisfaction with API-style agent interactions; it is not a workflow project, but it makes it much easier to build the workflow you want on top.
-
-> **New way to play: pair it with VS Code (see video above) for an integrated CLI experience**
-
-> **Rebuilt for tmux-first, any terminal, and remote workflows**
+<details>
+<summary><b>v4.0</b> - tmux-first refactor</summary>
 
 - **Full Refactor**: Cleaner structure, better stability, and easier extension.
 - **Terminal Backend Abstraction**: Unified terminal layer (`TmuxBackend` / `WeztermBackend`) with auto-detection and WSL path handling.
-- **Perfect tmux Experience**: Stable layouts + pane titles/borders + session-scoped theming that restores on exit.
+- **Perfect tmux Experience**: Stable layouts + pane titles/borders + session-scoped theming.
 - **Works in Any Terminal**: If your terminal can run tmux, CCB can provide the full multi-model split experience (except native Windows; WezTerm recommended; otherwise just use tmux).
 
----
+</details>
 
-<h2 align="center">🚀 What's New in v3.0</h2>
+<details>
+<summary><b>v3.0</b> - Smart daemons</summary>
 
-> **The Ultimate Bridge for Cross-AI Collaboration**
+- **True Parallelism**: Submit multiple tasks to Codex, Gemini, or OpenCode simultaneously.
+- **Cross-AI Orchestration**: Claude and Codex can now drive OpenCode agents together.
+- **Bulletproof Stability**: Daemons auto-start on first request and stop after idle.
+- **Chained Execution**: Codex can delegate to OpenCode for multi-step workflows.
+- **Smart Interruption**: Gemini tasks handle interruption safely.
 
-v3.0 brings a revolutionary architecture change with **Smart Daemons**, enabling parallel execution, cross-agent coordination, and enterprise-grade stability.
+<details>
+<summary><b>Details</b></summary>
 
 <div align="center">
 
@@ -136,6 +166,8 @@ v3.0 brings a revolutionary architecture change with **Smart Daemons**, enabling
 | **FOUR** | `0` | `CODEX-FOUR` |
 | **FIVE** | `0` | `CODEX-FIVE` |
 
+</details>
+</details>
 </details>
 
 ---
@@ -280,7 +312,8 @@ ccb reinstall           # Clean then reinstall ccb
 
 ---
 
-## 🪟 Windows Installation Guide (WSL vs Native)
+<details>
+<summary><b>🪟 Windows Installation Guide (WSL vs Native)</b></summary>
 
 > **Key Point:** `ccb/cask/cping/cpend` must run in the **same environment** as `codex/gemini`. The most common issue is environment mismatch causing `cping` to fail.
 
@@ -327,9 +360,10 @@ Check distro name with `wsl -l -v` in PowerShell.
 - **Terminal not refreshed:** Restart WezTerm after installation
 - **Text sent but not submitted (no Enter) on Windows WezTerm:** Set `CCB_WEZTERM_ENTER_METHOD=key` and ensure your WezTerm supports `wezterm cli send-key`
 
----
+</details>
 
-## 🍎 macOS Installation Guide
+<details>
+<summary><b>🍎 macOS Installation Guide</b></summary>
 
 ### Command Not Found After Installation
 
@@ -368,6 +402,8 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile
 ```
 
 Then restart WezTerm completely (Cmd+Q, reopen).
+
+</details>
 
 ---
 
@@ -415,28 +451,39 @@ Once started, collaborate naturally. Claude will detect when to delegate tasks.
 
 ## 🧩 Skills
 
-### /all-plan - Collaborative Multi-AI Design
+- **/all-plan**: Collaborative multi-AI design with Superpowers brainstorming.
 
-**Usage:** `/all-plan <requirement>`
+<details>
+<summary><b>/all-plan details & usage</b></summary>
 
-A 5-phase collaborative planning skill that leverages all mounted CLIs (Claude, Codex, Gemini, OpenCode) for comprehensive solution design.
+Usage:
+```
+/all-plan <requirement>
+```
 
-**How It Works:**
+Example:
+```
+/all-plan Design a caching layer for the API with Redis
+```
+
+How it works:
 1. **Requirement Refinement** - Socratic questioning to uncover hidden needs
 2. **Parallel Independent Design** - Each AI designs independently (no groupthink)
 3. **Comparative Analysis** - Merge insights, detect anti-patterns
 4. **Iterative Refinement** - Cross-AI review and critique
 5. **Final Output** - Actionable implementation plan
 
-**Key Features:**
+Key features:
 - **Socratic Ladder**: 7 structured questions for deep requirement mining
 - **Superpowers Lenses**: Systematic alternative exploration (10x scale, remove dependency, invert flow)
 - **Anti-pattern Detection**: Proactive risk identification across all designs
 
-**When to Use:**
+When to use:
 - Complex features requiring diverse perspectives
 - Architectural decisions with multiple valid approaches
 - High-stakes implementations needing thorough validation
+
+</details>
 
 ---
 

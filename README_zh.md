@@ -50,11 +50,40 @@
 
 有人问我，和其他工作流软件的区别是什么，我用一句话回答：该项目只是不满api调用的agent交互方式而打造的**可见可控的多模型通讯方案**，该项目并不是工作流项目，但是基于它可以更容易发展出你所理想的工作流。
 
-<h2 align="center">🚀 v5.0 新版本特性</h2>
+<h2 align="center">🚀 新版本速览</h2>
 
-> **彻底解放：任何 AI 都可作为主控**
+<details open>
+<summary><b>v5.0.1</b> - Superpowers /all-plan + 角色感知 CCA 状态</summary>
 
-v5.0 不再依赖 Claude 先启动，Codex（或任意 AI）都能作为主 CLI，统一控制 Claude/OpenCode/Gemini。
+- **/all-plan**：多模型协同规划，带 Superpowers 头脑风暴与可用性分发。
+- **CCA 状态栏**：读取 `.autoflow/roles.json` 角色名（支持 `_meta.name`），按路径缓存。
+- **安装器**：复制技能子目录（如 `references/`）。
+- **CLI**：新增 `ccb uninstall` / `ccb reinstall`，并清理 Claude 配置。
+- **路由**：项目/会话解析更严格，避免跨项目 Claude 会话。
+
+<details>
+<summary><b>详情与用法</b></summary>
+
+用法：
+```
+/all-plan <需求>
+```
+
+示例：
+```
+/all-plan 设计一个基于 Redis 的 API 缓存层
+```
+
+亮点：
+- Socratic Ladder + Superpowers Lenses + Anti-pattern 分析
+- 只分发给已挂载的 CLI
+- 两轮 reviewer 反馈合并设计
+
+</details>
+</details>
+
+<details>
+<summary><b>v5.0.0</b> - 任意 AI 可主控</summary>
 
 - **解除依赖**：无需先启动 Claude，Codex 可成为主控入口
 - **统一控制**：单一入口控制 CC/OC/GE
@@ -64,28 +93,29 @@ v5.0 不再依赖 Claude 先启动，Codex（或任意 AI）都能作为主 CLI�
 - **守护进程自启**：`caskd`/`laskd` 在 WezTerm/tmux 按需启动
 - **会话更稳**：PID 存活校验避免旧会话干扰
 
----
+</details>
 
-<h2 align="center">🚀 v4.0 新版本特性</h2>
-
-> **全新玩法：结合vscode使用（见上视频），打造一体化cli方案**
-
-> **为 tmux 优先、任意终端、远程使用而重构**
+<details>
+<summary><b>v4.0</b> - tmux 优先重构</summary>
 
 - **全部重构**：结构更清晰，稳定性更强，也更易扩展。
 - **终端后端抽象层**：统一终端层（`TmuxBackend` / `WeztermBackend`），支持自动检测与 WSL 路径处理。
 - **tmux 完美体验**：稳定布局 + 窗格标题/边框 + 会话级主题（CCB 运行期间启用，退出自动恢复）。
 - **支持任何终端**：只要能运行 tmux 就能获得完整多模型分屏体验（Windows 原生「建议wezterm」除外；其他都建议使用tmux）。
 
----
+</details>
 
-<h2 align="center">🚀 v3.0 新版本特性</h2>
+<details>
+<summary><b>v3.0</b> - 智能守护进程</summary>
 
-> **跨 AI 协作的终极桥梁**
+- **真·并行**：Codex/Gemini/OpenCode 多任务安全排队执行。
+- **跨 AI 编排**：Claude 与 Codex 可同时驱动 OpenCode。
+- **坚如磐石**：守护进程自动启动，空闲自动退出。
+- **链式调用**：Codex 可委派 OpenCode 做多步流程。
+- **智能打断**：Gemini 任务支持中断处理。
 
-v3.0 带来了革命性的 **智能守护进程 (Smart Daemons)** 架构，实现了并行执行、跨 Agent 协调和企业级稳定性。
-
-
+<details>
+<summary><b>详情</b></summary>
 
 <h3 align="center">✨ 核心特性</h3>
 
@@ -129,6 +159,8 @@ v3.0 带来了革命性的 **智能守护进程 (Smart Daemons)** 架构，实�
 | **FOUR** | `0` | `CODEX-FOUR` |
 | **FIVE** | `0` | `CODEX-FIVE` |
 
+</details>
+</details>
 </details>
 
 ---
@@ -262,7 +294,8 @@ ccb reinstall           # 清理后重新安装
 
 ---
 
-## 🪟 Windows 安装指南（WSL vs 原生）
+<details>
+<summary><b>🪟 Windows 安装指南（WSL vs 原生）</b></summary>
 
 > 结论先说：`ccb/cask/cping/cpend` 必须和 `codex/gemini` 跑在**同一个环境**（WSL 就都在 WSL，原生 Windows 就都在原生 Windows）。最常见问题就是装错环境导致 `cping` 不通。
 
@@ -366,9 +399,12 @@ cping
 - **原生 Windows 的 WezTerm：能把文字发到 Codex，但没有“回车提交”**
   - 设置环境变量 `CCB_WEZTERM_ENTER_METHOD=key`（用 `wezterm cli send-key` 发送真实按键事件；如果你的 WezTerm 版本太旧请升级）。
 
+</details>
+
 ---
 
-## 🍎 macOS 安装指南
+<details>
+<summary><b>🍎 macOS 安装指南</b></summary>
 
 ### 安装后找不到命令
 
@@ -407,6 +443,8 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile
 ```
 
 然后完全重启 WezTerm（Cmd+Q 退出后重新打开）。
+
+</details>
 
 ---
 
