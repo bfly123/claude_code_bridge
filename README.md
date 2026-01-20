@@ -19,8 +19,6 @@
 
 **English** | [Chinese](README_zh.md)
 
-[GitHub README](https://github.com/bfly123/claude_code_bridge#readme)
-
 ![Showcase](assets/show.png)
 
 <details>
