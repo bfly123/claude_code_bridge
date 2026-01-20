@@ -47,3 +47,4 @@ If you find yourself wanting to do something while waiting, STOP. Just wait.
 
 - Always use `--sync` flag when calling from Codex.
 - `gask` is synchronous; the `--sync` flag disables guardrail prompts intended for Claude.
+- If the user requires a `CCB_DONE` sentinel, still include a brief execution summary in the reply (do not return only the sentinel).
