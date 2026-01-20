@@ -40,7 +40,7 @@ backend_env = get_backend_env()
 if backend_env and not os.environ.get("CCB_BACKEND_ENV"):
     os.environ["CCB_BACKEND_ENV"] = backend_env
 
-VERSION = "4.1.3"
+VERSION = "5.0.0"
 GIT_COMMIT = ""
 GIT_DATE = ""
 
@@ -3011,6 +3011,92 @@ def _get_remote_version_info() -> dict | None:
     return None
 
 
+def _get_available_versions() -> list[str]:
+    """Get available version tags from GitHub API or git ls-remote"""
+    import urllib.request
+    import ssl
+
+    repo_url = "https://github.com/bfly123/claude_code_bridge"
+    api_url = "https://api.github.com/repos/bfly123/claude_code_bridge/tags"
+    versions = []
+
+    def parse_api_response(data):
+        result = []
+        for tag in data:
+            name = tag.get("name", "")
+            if name.startswith("v"):
+                name = name[1:]
+            if re.match(r"^\d+(\.\d+)*$", name):
+                result.append(name)
+        return result
+
+    def parse_git_refs(output):
+        result = []
+        for line in output.strip().split('\n'):
+            if not line:
+                continue
+            parts = line.split('\t')
+            if len(parts) >= 2:
+                ref = parts[1]
+                if ref.startswith('refs/tags/v'):
+                    name = ref.replace('refs/tags/v', '').rstrip('^{}')
+                    if re.match(r"^\d+(\.\d+)*$", name):
+                        result.append(name)
+        return list(set(result))
+
+    try:
+        ctx = ssl.create_default_context()
+        req = urllib.request.Request(api_url, headers={"User-Agent": "ccb"})
+        with urllib.request.urlopen(req, context=ctx, timeout=10) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            versions = parse_api_response(data)
+    except Exception:
+        pass
+
+    if not versions and shutil.which("curl"):
+        result = subprocess.run(
+            ["curl", "-fsSL", api_url],
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=15
+        )
+        if result.returncode == 0:
+            try:
+                data = json.loads(result.stdout)
+                versions = parse_api_response(data)
+            except Exception:
+                pass
+
+    if not versions and shutil.which("git"):
+        result = subprocess.run(
+            ["git", "ls-remote", "--tags", repo_url],
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30
+        )
+        if result.returncode == 0:
+            versions = parse_git_refs(result.stdout)
+
+    return versions
+
+
+def _find_matching_version(target: str, versions: list[str]) -> str | None:
+    """Find the highest matching version for target prefix"""
+    target_parts = target.split(".")
+
+    def version_key(v: str):
+        parts = v.split(".")
+        return tuple(int(p) for p in parts if p.isdigit())
+
+    matching = []
+    for v in versions:
+        v_parts = v.split(".")
+        if len(v_parts) >= len(target_parts):
+            if v_parts[:len(target_parts)] == target_parts:
+                matching.append(v)
+
+    if not matching:
+        return None
+    matching.sort(key=version_key, reverse=True)
+    return matching[0]
+
+
 def _detect_cca() -> tuple[str | None, str | None]:
     """Detect CCA installation. Returns (cca_path, install_dir)"""
     def _is_executable(p: Path) -> bool:
@@ -3264,7 +3350,7 @@ def _update_cca(silent: bool = False) -> int:
 
 
 def cmd_update(args):
-    """Update ccb to latest version"""
+    """Update ccb to latest or specified version"""
     # Handle "ccb update cca" subcommand
     if hasattr(args, 'target') and args.target == 'cca':
         return _update_cca()
@@ -3281,18 +3367,53 @@ def cmd_update(args):
         install_dir = script_root
     repo_url = "https://github.com/bfly123/claude_code_bridge"
 
+    # Parse version target
+    target_version = None
+    if hasattr(args, 'target') and args.target and args.target != 'cca':
+        target_spec = args.target.lstrip('v')
+        if re.match(r"^\d+(\.\d+)*$", target_spec):
+            print(f"🔍 Looking for version matching: {target_spec}")
+            versions = _get_available_versions()
+            if not versions:
+                print("❌ Could not fetch available versions")
+                return 1
+            target_version = _find_matching_version(target_spec, versions)
+            if not target_version:
+                print(f"❌ No version found matching '{target_spec}'")
+                print(f"   Available: {', '.join(sorted(versions, key=lambda v: [int(x) for x in v.split('.')], reverse=True)[:10])}")
+                return 1
+            print(f"📌 Target version: v{target_version}")
+        else:
+            print(f"❌ Invalid version format: {args.target}")
+            print("   Examples: ccb update 4, ccb update 4.1, ccb update 4.1.3")
+            return 1
+
     # Get current version info before update
     old_info = _get_version_info(install_dir)
 
-    print("🔄 Checking for updates...")
+    if target_version:
+        print(f"🔄 Updating to v{target_version}...")
+    else:
+        print("🔄 Checking for updates...")
 
     # Method 1: Prefer git if available
     if shutil.which("git") and (install_dir / ".git").exists():
-        print("📦 Updating via git pull...")
-        result = subprocess.run(
-            ["git", "-C", str(install_dir), "pull", "--ff-only"],
-            capture_output=True, text=True, encoding='utf-8', errors='replace'
-        )
+        if target_version:
+            print(f"📦 Switching to v{target_version} via git...")
+            subprocess.run(
+                ["git", "-C", str(install_dir), "fetch", "--tags", "--force"],
+                capture_output=True, text=True, encoding='utf-8', errors='replace'
+            )
+            result = subprocess.run(
+                ["git", "-C", str(install_dir), "checkout", f"v{target_version}"],
+                capture_output=True, text=True, encoding='utf-8', errors='replace'
+            )
+        else:
+            print("📦 Updating via git pull...")
+            result = subprocess.run(
+                ["git", "-C", str(install_dir), "pull", "--ff-only"],
+                capture_output=True, text=True, encoding='utf-8', errors='replace'
+            )
         if result.returncode == 0:
             print(result.stdout.strip() if result.stdout.strip() else "Already up to date.")
             print("🔧 Reinstalling...")
@@ -3305,18 +3426,10 @@ def cmd_update(args):
                 print(f"✅ Updated: {old_str} → {new_str}")
             else:
                 print(f"✅ Already up to date: {new_str}")
-            # CCA update/suggest
-            cca_path, _ = _detect_cca()
-            if cca_path:
-                print("\n🔄 Updating CCA...")
-                _update_cca(silent=False)
-            else:
-                print("\n💡 CCA (Claude Code Autoflow) not installed")
-                print("   Install: ccb update cca")
-                print("   Tip: Significantly enhances workflow automation")
             return 0
         else:
-            print(f"⚠️ Git pull failed: {result.stderr.strip()}")
+            err_msg = "Git checkout failed" if target_version else "Git pull failed"
+            print(f"⚠️ {err_msg}: {result.stderr.strip()}")
             print("Falling back to tarball download...")
 
     def _pick_temp_base_dir() -> Path:
@@ -3358,7 +3471,12 @@ def cmd_update(args):
         )
 
     # Method 2: Download tarball
-    tarball_url = f"{repo_url}/archive/refs/heads/main.tar.gz"
+    if target_version:
+        tarball_url = f"{repo_url}/archive/refs/tags/v{target_version}.tar.gz"
+        extracted_name = f"claude_code_bridge-{target_version}"
+    else:
+        tarball_url = f"{repo_url}/archive/refs/heads/main.tar.gz"
+        extracted_name = "claude_code_bridge-main"
     try:
         tmp_base = _pick_temp_base_dir()
     except Exception as exc:
@@ -3367,7 +3485,10 @@ def cmd_update(args):
     tmp_dir = tmp_base / "ccb_update"
 
     try:
-        print(f"📥 Downloading latest version...")
+        if target_version:
+            print(f"📥 Downloading v{target_version}...")
+        else:
+            print(f"📥 Downloading latest version...")
         if tmp_dir.exists():
             shutil.rmtree(tmp_dir)
         tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -3416,7 +3537,7 @@ def cmd_update(args):
         with tarfile.open(tarball_path, "r:gz") as tar:
             _safe_extract(tar, tmp_dir)
 
-        extracted_dir = tmp_dir / "claude_code_bridge-main"
+        extracted_dir = tmp_dir / extracted_name
 
         print("🔧 Installing...")
         env = os.environ.copy()
@@ -3439,15 +3560,6 @@ def cmd_update(args):
             print(f"✅ Updated: {old_str} → {new_str}")
         else:
             print(f"✅ Already up to date: {new_str}")
-        # CCA update/suggest
-        cca_path, _ = _detect_cca()
-        if cca_path:
-            print("\n🔄 Updating CCA...")
-            _update_cca(silent=False)
-        else:
-            print("\n💡 CCA (Claude Code Autoflow) not installed")
-            print("   Install: ccb update cca")
-            print("   Tip: Significantly enhances workflow automation")
         return 0
 
     except Exception as e:
@@ -3480,9 +3592,9 @@ def main():
         kill_parser = subparsers.add_parser("kill", help="Terminate session")
         kill_parser.add_argument("providers", nargs="*", default=[], help="Backends to terminate (codex/gemini/opencode/claude)")
 
-        update_parser = subparsers.add_parser("update", help="Update to latest version")
-        update_parser.add_argument("target", nargs="?", choices=["cca"],
-                                   help="Optional: 'cca' to install/update CCA only")
+        update_parser = subparsers.add_parser("update", help="Update to latest or specified version")
+        update_parser.add_argument("target", nargs="?",
+                                   help="'cca' for CCA, or version like '4', '4.1', '4.1.3'")
 
         subparsers.add_parser("version", help="Show version and check for updates")
 
