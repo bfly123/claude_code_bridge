@@ -42,7 +42,7 @@ backend_env = get_backend_env()
 if backend_env and not os.environ.get("CCB_BACKEND_ENV"):
     os.environ["CCB_BACKEND_ENV"] = backend_env
 
-VERSION = "5.0.3"
+VERSION = "5.0.4"
 GIT_COMMIT = ""
 GIT_DATE = ""
 
@@ -1586,16 +1586,20 @@ class AILauncher:
             return self._build_opencode_start_cmd()
         return ""
 
-    def _latest_opencode_session_dir(self) -> str | None:
+    def _opencode_resume_allowed(self) -> bool:
         try:
             from opencode_comm import OPENCODE_STORAGE_ROOT
         except Exception:
-            return None
+            return False
 
         root = Path(OPENCODE_STORAGE_ROOT)
         sessions_root = root / "session"
         if not sessions_root.exists():
-            return None
+            return False
+
+        target_dir = _normalize_path_for_match(str(self.project_root))
+        if not target_dir:
+            return False
 
         def _load_json(path: Path) -> dict:
             try:
@@ -1605,20 +1609,11 @@ class AILauncher:
             except Exception:
                 return {}
 
-        best_dir: str | None = None
-        best_updated = -1
-        best_mtime = -1.0
-
-        try:
-            project_dirs = list(sessions_root.iterdir())
-        except Exception:
-            project_dirs = []
-
-        for project_dir in project_dirs:
-            if not project_dir.is_dir():
-                continue
+        def _session_dir_has_match(dir_path: Path) -> bool:
+            if not dir_path.exists():
+                return False
             try:
-                session_files = list(project_dir.glob("ses_*.json"))
+                session_files = list(dir_path.glob("ses_*.json"))
             except Exception:
                 session_files = []
             for path in session_files:
@@ -1628,27 +1623,51 @@ class AILauncher:
                 directory = payload.get("directory")
                 if not isinstance(directory, str) or not directory.strip():
                     continue
-                updated = (payload.get("time") or {}).get("updated")
-                try:
-                    updated_i = int(updated)
-                except Exception:
-                    updated_i = -1
-                try:
-                    mtime = path.stat().st_mtime
-                except Exception:
-                    mtime = 0.0
-                if updated_i > best_updated or (updated_i == best_updated and mtime >= best_mtime):
-                    best_dir = directory
-                    best_updated = updated_i
-                    best_mtime = mtime
-
-        return best_dir
-
-    def _opencode_resume_allowed(self) -> bool:
-        latest_dir = self._latest_opencode_session_dir()
-        if not latest_dir:
+                if _normalize_path_for_match(directory) == target_dir:
+                    return True
             return False
-        return _normalize_path_for_match(latest_dir) == _normalize_path_for_match(str(self.project_root))
+
+        # Prefer project metadata to limit the search scope.
+        projects_root = root / "project"
+        candidate_ids: list[str] = []
+        if projects_root.exists():
+            try:
+                project_files = list(projects_root.glob("*.json"))
+            except Exception:
+                project_files = []
+            for path in project_files:
+                if not path.is_file():
+                    continue
+                payload = _load_json(path)
+                worktree = payload.get("worktree")
+                if not isinstance(worktree, str) or not worktree.strip():
+                    continue
+                if _normalize_path_for_match(worktree) != target_dir:
+                    continue
+                pid = payload.get("id") if isinstance(payload.get("id"), str) and payload.get("id") else path.stem
+                if pid:
+                    candidate_ids.append(pid)
+
+        for pid in candidate_ids:
+            if _session_dir_has_match(sessions_root / pid):
+                return True
+
+        # Non-git workdirs often land under "global"; check it explicitly.
+        if _session_dir_has_match(sessions_root / "global"):
+            return True
+
+        # Fallback: scan all session dirs (best-effort).
+        try:
+            project_dirs = list(sessions_root.iterdir())
+        except Exception:
+            project_dirs = []
+        for project_dir in project_dirs:
+            if not project_dir.is_dir():
+                continue
+            if _session_dir_has_match(project_dir):
+                return True
+
+        return False
 
     def _build_opencode_start_cmd(self) -> str:
         # OpenCode CLI (TUI). Allow override via env for custom wrappers.

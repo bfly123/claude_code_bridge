@@ -1,6 +1,6 @@
 <div align="center">
 
-# Claude Code Bridge (ccb) v5.0.3
+# Claude Code Bridge (ccb) v5.0.4
 
 **New Multi-Model Collaboration Tool via Split-Pane Terminal**
 **Claude & Codex & Gemini & OpenCode**
@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Every_Model_Controllable-CF1322?style=for-the-badge" alt="Every Model Controllable">
 </p>
 
-[![Version](https://img.shields.io/badge/version-5.0.3-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-5.0.4-orange.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![CI](https://github.com/bfly123/claude_code_bridge/actions/workflows/test.yml/badge.svg)](https://github.com/bfly123/claude_code_bridge/actions/workflows/test.yml)
@@ -50,8 +50,9 @@
 <h2 align="center">🚀 What's New</h2>
 
 <details open>
-<summary><b>v5.0.3</b> - 全新的稳定守护进程设计</summary>
+<summary><b>v5.0.4</b> - OpenCode -r 恢复判定修复</summary>
 
+- **OpenCode**: Fixes `-r` resume failing after switching projects.
 - **/all-plan**: Multi-AI planning with Superpowers brainstorming and availability-aware dispatch.
 - **CCA Status Bar**: Reads role name from `.autoflow/roles.json` (supports `_meta.name`) with per-path caching.
 - **Installer**: Copies skill subdirectories (e.g., `references/`) for Claude/Codex installs.
@@ -531,6 +532,9 @@ ccb reinstall
 
 <details>
 <summary><b>Version History</b></summary>
+
+### v5.0.4
+- **OpenCode**: 修复 `-r` 恢复在多项目切换后失效的问题
 
 ### v5.0.3
 - **Daemons**: 全新的稳定守护进程设计
