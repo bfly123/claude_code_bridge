@@ -248,6 +248,8 @@ def resolve_claude_session(work_dir: Path) -> Optional[ClaudeSessionResolution]:
         current_pid = ""
     strict_project = (Path(work_dir) / ".ccb_config").is_dir()
     allow_cross = os.environ.get("CCB_ALLOW_CROSS_PROJECT_SESSION") in ("1", "true", "yes")
+    if not strict_project and not allow_cross:
+        return None
 
     def _record_project_id(record: dict) -> str:
         if not isinstance(record, dict):

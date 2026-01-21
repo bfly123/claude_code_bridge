@@ -79,21 +79,20 @@ def normalize_work_dir(value: str | Path) -> str:
 
 def _find_ccb_config_root(start_dir: Path) -> Path | None:
     """
-    Find the nearest ancestor directory that contains a `.ccb_config/` directory.
+    Find a `.ccb_config/` directory in the current working directory only.
 
-    This is CCB's project root anchor and is used to make project_id stable across subdirectories.
+    This enforces per-directory isolation (no ancestor traversal).
     """
     try:
         current = Path(start_dir).expanduser().absolute()
     except Exception:
         current = Path.cwd()
-    for candidate in [current, *current.parents]:
-        try:
-            cfg = candidate / ".ccb_config"
-            if cfg.is_dir():
-                return candidate
-        except Exception:
-            continue
+    try:
+        cfg = current / ".ccb_config"
+        if cfg.is_dir():
+            return current
+    except Exception:
+        return None
     return None
 
 
@@ -102,8 +101,7 @@ def compute_ccb_project_id(work_dir: Path) -> str:
     Compute CCB's routing project id (ccb_project_id).
 
     Priority:
-    - Nearest ancestor directory containing `.ccb_config/` (project anchor).
-    - `CCB_PROJECT_ROOT` env var (explicit project root) if no anchor exists.
+    - Current directory containing `.ccb_config/` (project anchor).
     - Current work_dir (fallback).
     """
     try:
@@ -111,21 +109,8 @@ def compute_ccb_project_id(work_dir: Path) -> str:
     except Exception:
         wd = Path.cwd()
 
-    # Priority 1: Nearest `.ccb_config/` ancestor
+    # Priority 1: Current directory `.ccb_config/` only
     base = _find_ccb_config_root(wd)
-
-    # Priority 2: Explicit env var only when no anchor exists
-    if base is None:
-        env_root = (os.environ.get("CCB_PROJECT_ROOT") or "").strip()
-        if env_root:
-            try:
-                root = Path(os.path.expanduser(env_root))
-                if root.exists() and root.is_dir():
-                    base = root.absolute()
-                else:
-                    base = None
-            except Exception:
-                base = None
 
     if base is None:
         base = wd

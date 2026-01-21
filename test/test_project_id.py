@@ -45,20 +45,20 @@ def test_compute_ccb_project_id_uses_anchor_root(tmp_path: Path) -> None:
     pid_sub = compute_ccb_project_id(subdir)
     assert pid_root
     assert pid_sub
-    assert pid_root == pid_sub
+    assert pid_root != pid_sub
 
 
-def test_compute_ccb_project_id_respects_env_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_compute_ccb_project_id_ignores_env_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = tmp_path / "root"
     child = root / "sub"
     child.mkdir(parents=True, exist_ok=True)
 
-    # No anchor: env var should still force a stable root id.
+    # No anchor: env var should not override current-dir isolation.
     monkeypatch.setenv("CCB_PROJECT_ROOT", str(root))
     pid_root = compute_ccb_project_id(root)
     pid_child = compute_ccb_project_id(child)
     assert pid_root
-    assert pid_root == pid_child
+    assert pid_root != pid_child
 
     # Invalid env root should not crash.
     monkeypatch.setenv("CCB_PROJECT_ROOT", str(tmp_path / "does-not-exist"))

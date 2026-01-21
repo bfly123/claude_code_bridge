@@ -1,6 +1,6 @@
 <div align="center">
 
-# Claude Code Bridge (ccb) v5.0.1
+# Claude Code Bridge (ccb) v5.0.3
 
 **基于终端分屏的全新多模型交互协作工具**
 **Claude & Codex & Gemini &opencode**
@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/模型皆可控-CF1322?style=for-the-badge" alt="模型皆可控">
 </p>
 
-[![Version](https://img.shields.io/badge/version-5.0.1-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-5.0.3-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 [English](README.md) | **中文**
@@ -51,7 +51,7 @@
 <h2 align="center">🚀 新版本速览</h2>
 
 <details open>
-<summary><b>v5.0.1</b> - Superpowers /all-plan + 角色感知 CCA 状态</summary>
+<summary><b>v5.0.3</b> - 全新的稳定守护进程设计</summary>
 
 - **/all-plan**：多模型协同规划，带 Superpowers 头脑风暴与可用性分发。
 - **CCA 状态栏**：读取 `.autoflow/roles.json` 角色名（支持 `_meta.name`），按路径缓存。
@@ -517,6 +517,9 @@ ccb reinstall
 
 <details>
 <summary><b>更新历史</b></summary>
+
+### v5.0.3
+- **守护进程**：全新的稳定守护进程设计
 
 ### v5.0.1
 - **技能更新**：新增 `/all-plan`（Superpowers 头脑风暴 + 可用性分发）；Codex 侧新增 `lping/lpend`；`gask` 在 `CCB_DONE` 场景保留简要执行摘要。

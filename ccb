@@ -32,6 +32,8 @@ from ccb_start_config import DEFAULT_PROVIDERS, ensure_default_start_config, loa
 from session_utils import safe_write_session, check_session_writable, find_project_session_file
 from pane_registry import upsert_registry
 from project_id import compute_ccb_project_id
+from providers import CASK_CLIENT_SPEC, GASK_CLIENT_SPEC, OASK_CLIENT_SPEC, LASK_CLIENT_SPEC
+from process_lock import ProviderLock
 from i18n import t
 
 setup_windows_encoding()
@@ -40,7 +42,7 @@ backend_env = get_backend_env()
 if backend_env and not os.environ.get("CCB_BACKEND_ENV"):
     os.environ["CCB_BACKEND_ENV"] = backend_env
 
-VERSION = "5.0.1"
+VERSION = "5.0.3"
 GIT_COMMIT = ""
 GIT_DATE = ""
 
@@ -545,6 +547,10 @@ class AILauncher:
         except Exception:
             self.project_root = self.invocation_dir.absolute()
         self.session_id = f"ai-{int(time.time())}-{os.getpid()}"
+        self.ccb_pid = os.getpid()
+        self.project_id = compute_ccb_project_id(self.project_root)
+        project_hash = (self.project_id or "")[:16] or "unknown"
+        self.project_run_dir = (Path.home() / ".cache" / "ccb" / "projects" / project_hash)
         self.temp_base = Path(tempfile.gettempdir())
         self.runtime_dir = self.temp_base / f"claude-ai-{getpass.getuser()}" / self.session_id
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -558,6 +564,18 @@ class AILauncher:
         self.anchor_provider = None
         self.anchor_pane_id = None
         self._migrate_legacy_project_files()
+        os.environ["CCB_MANAGED"] = "1"
+        os.environ["CCB_PARENT_PID"] = str(self.ccb_pid)
+        os.environ.setdefault("CCB_RUN_DIR", str(self.project_run_dir))
+
+    def _managed_env_overrides(self) -> dict:
+        env = {
+            "CCB_MANAGED": "1",
+            "CCB_PARENT_PID": str(self.ccb_pid),
+        }
+        if os.environ.get("CCB_RUN_DIR"):
+            env["CCB_RUN_DIR"] = os.environ["CCB_RUN_DIR"]
+        return env
 
     def _project_config_dir(self) -> Path:
         return self.project_root / ".ccb_config"
@@ -701,6 +719,9 @@ class AILauncher:
         return subprocess.run([shell, "-lc", cmd], env=env, cwd=cwd).returncode
 
     def _maybe_start_caskd(self) -> None:
+        self._maybe_start_provider_daemon("codex")
+
+    def _maybe_start_provider_daemon(self, provider: str) -> None:
         def _bool_from_env(name: str):
             raw = os.environ.get(name)
             if raw is None or raw == "":
@@ -712,26 +733,38 @@ class AILauncher:
                 return True
             return None
 
-        # Prefer the new name; keep CCB_AUTO_CASKD for backwards compatibility.
-        autostart = _bool_from_env("CCB_CASKD_AUTOSTART")
+        provider = (provider or "").strip().lower()
+        specs = {
+            "codex": CASK_CLIENT_SPEC,
+            "gemini": GASK_CLIENT_SPEC,
+            "opencode": OASK_CLIENT_SPEC,
+            "claude": LASK_CLIENT_SPEC,
+        }
+        spec = specs.get(provider)
+        if not spec:
+            return
+        if provider not in [p.lower() for p in self.providers]:
+            return
+
+        autostart = _bool_from_env(spec.autostart_env_primary)
         if autostart is None:
-            autostart = _bool_from_env("CCB_AUTO_CASKD")
+            autostart = _bool_from_env(spec.autostart_env_legacy)
         if autostart is False:
             return
-        if _bool_from_env("CCB_CASKD") is False:
+        if _bool_from_env(spec.enabled_env) is False:
             return
-        if "codex" not in self.providers:
-            return
-        if self.terminal_type != "wezterm":
-            return
+
         try:
-            from caskd_daemon import ping_daemon, read_state
+            from importlib import import_module
+            daemon_module = import_module(spec.daemon_module)
+            ping_daemon = getattr(daemon_module, "ping_daemon")
+            read_state = getattr(daemon_module, "read_state", None)
         except Exception as exc:
-            print(f"⚠️ Failed to import caskd modules: {exc}")
+            print(f"⚠️ Failed to import {spec.daemon_module}: {exc}")
             return
 
         state_file = None
-        raw_state_file = (os.environ.get("CCB_CASKD_STATE_FILE") or "").strip()
+        raw_state_file = (os.environ.get(spec.state_file_env) or "").strip()
         if raw_state_file:
             try:
                 state_file = Path(raw_state_file).expanduser()
@@ -739,18 +772,18 @@ class AILauncher:
                 state_file = None
 
         if ping_daemon(state_file=state_file):
-            st = read_state(state_file=state_file) or {}
-            host = st.get("host")
-            port = st.get("port")
+            st = read_state(state_file=state_file) or {} if callable(read_state) else {}
+            host = st.get("host") if isinstance(st, dict) else None
+            port = st.get("port") if isinstance(st, dict) else None
             if host and port:
-                print(f"✅ caskd already running at {host}:{port}")
+                print(f"✅ {spec.daemon_bin_name} already running at {host}:{port}")
             else:
-                print("✅ caskd already running")
+                print(f"✅ {spec.daemon_bin_name} already running")
             return
 
-        caskd_script = self.script_dir / "bin" / "caskd"
-        if not caskd_script.exists():
-            print("⚠️ caskd not found (bin/caskd). Reinstall or update your checkout.")
+        daemon_script = self.script_dir / "bin" / spec.daemon_bin_name
+        if not daemon_script.exists():
+            print(f"⚠️ {spec.daemon_bin_name} not found (bin/{spec.daemon_bin_name}). Reinstall or update your checkout.")
             return
 
         kwargs = {
@@ -760,32 +793,29 @@ class AILauncher:
             "close_fds": True,
         }
         if os.name == "nt":
-            # 使用 CREATE_NO_WINDOW 而非 DETACHED_PROCESS
-            # CREATE_NO_WINDOW: 隐藏窗口但保留控制台附着，子进程可继承
-            # DETACHED_PROCESS: 完全脱离控制台，子进程必须创建新窗口
             kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
         else:
             kwargs["start_new_session"] = True
 
         try:
-            subprocess.Popen([sys.executable, str(caskd_script)], **kwargs)
+            subprocess.Popen([sys.executable, str(daemon_script)], **kwargs)
         except Exception as exc:
-            print(f"⚠️ Failed to start caskd: {exc}")
+            print(f"⚠️ Failed to start {spec.daemon_bin_name}: {exc}")
             return
 
         deadline = time.time() + 2.0
         while time.time() < deadline:
             if ping_daemon(timeout_s=0.2, state_file=state_file):
-                st = read_state(state_file=state_file) or {}
-                host = st.get("host")
-                port = st.get("port")
+                st = read_state(state_file=state_file) or {} if callable(read_state) else {}
+                host = st.get("host") if isinstance(st, dict) else None
+                port = st.get("port") if isinstance(st, dict) else None
                 if host and port:
-                    print(f"✅ caskd started at {host}:{port}")
+                    print(f"✅ {spec.daemon_bin_name} started at {host}:{port}")
                 else:
-                    print("✅ caskd started")
+                    print(f"✅ {spec.daemon_bin_name} started")
                 return
             time.sleep(0.1)
-        print("⚠️ caskd start requested, but daemon not reachable yet")
+        print(f"⚠️ {spec.daemon_bin_name} start requested, but daemon not reachable yet")
 
     def _detect_terminal_type(self):
         # Forced by environment variable
@@ -937,7 +967,8 @@ class AILauncher:
 
         pane_title_marker = f"CCB-{provider.capitalize()}"
         title_cmd = _build_pane_title_cmd(pane_title_marker)
-        full_cmd = title_cmd + _build_export_path_cmd(self.script_dir / "bin") + start_cmd
+        env_overrides = self._managed_env_overrides()
+        full_cmd = title_cmd + self._build_env_prefix(env_overrides) + _build_export_path_cmd(self.script_dir / "bin") + start_cmd
         backend = WeztermBackend()
         pane_id = backend.create_pane(full_cmd, str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent)
         self.wezterm_panes[provider] = pane_id
@@ -1117,6 +1148,7 @@ class AILauncher:
                 )
             except Exception:
                 pass
+        self._maybe_start_provider_daemon("claude")
 
     def _get_latest_codex_session_id(self) -> tuple[str | None, bool]:
         """
@@ -1554,6 +1586,70 @@ class AILauncher:
             return self._build_opencode_start_cmd()
         return ""
 
+    def _latest_opencode_session_dir(self) -> str | None:
+        try:
+            from opencode_comm import OPENCODE_STORAGE_ROOT
+        except Exception:
+            return None
+
+        root = Path(OPENCODE_STORAGE_ROOT)
+        sessions_root = root / "session"
+        if not sessions_root.exists():
+            return None
+
+        def _load_json(path: Path) -> dict:
+            try:
+                raw = path.read_text(encoding="utf-8")
+                data = json.loads(raw)
+                return data if isinstance(data, dict) else {}
+            except Exception:
+                return {}
+
+        best_dir: str | None = None
+        best_updated = -1
+        best_mtime = -1.0
+
+        try:
+            project_dirs = list(sessions_root.iterdir())
+        except Exception:
+            project_dirs = []
+
+        for project_dir in project_dirs:
+            if not project_dir.is_dir():
+                continue
+            try:
+                session_files = list(project_dir.glob("ses_*.json"))
+            except Exception:
+                session_files = []
+            for path in session_files:
+                if not path.is_file():
+                    continue
+                payload = _load_json(path)
+                directory = payload.get("directory")
+                if not isinstance(directory, str) or not directory.strip():
+                    continue
+                updated = (payload.get("time") or {}).get("updated")
+                try:
+                    updated_i = int(updated)
+                except Exception:
+                    updated_i = -1
+                try:
+                    mtime = path.stat().st_mtime
+                except Exception:
+                    mtime = 0.0
+                if updated_i > best_updated or (updated_i == best_updated and mtime >= best_mtime):
+                    best_dir = directory
+                    best_updated = updated_i
+                    best_mtime = mtime
+
+        return best_dir
+
+    def _opencode_resume_allowed(self) -> bool:
+        latest_dir = self._latest_opencode_session_dir()
+        if not latest_dir:
+            return False
+        return _normalize_path_for_match(latest_dir) == _normalize_path_for_match(str(self.project_root))
+
     def _build_opencode_start_cmd(self) -> str:
         # OpenCode CLI (TUI). Allow override via env for custom wrappers.
         cmd = (os.environ.get("OPENCODE_START_CMD") or "opencode").strip() or "opencode"
@@ -1564,7 +1660,11 @@ class AILauncher:
 
         # Resume mode: continue last session
         if self.resume:
-            cmd = f"{cmd} --continue"
+            if self._opencode_resume_allowed():
+                cmd = f"{cmd} --continue"
+                print(f"🔁 {t('resuming_session', provider='OpenCode', session_id='')}")
+            else:
+                print(f"ℹ️ {t('no_history_fresh', provider='OpenCode')}")
 
         return cmd
 
@@ -1623,7 +1723,8 @@ class AILauncher:
         if not output_fifo.exists():
             os.mkfifo(output_fifo, 0o644)
 
-        start_cmd = _build_export_path_cmd(self.script_dir / "bin") + self._build_codex_start_cmd()
+        env_overrides = self._managed_env_overrides()
+        start_cmd = self._build_env_prefix(env_overrides) + _build_export_path_cmd(self.script_dir / "bin") + self._build_codex_start_cmd()
         pane_title_marker = "CCB-Codex"
 
         backend = TmuxBackend()
@@ -1713,7 +1814,8 @@ class AILauncher:
         runtime = self.runtime_dir / "gemini"
         runtime.mkdir(parents=True, exist_ok=True)
 
-        start_cmd = _build_export_path_cmd(self.script_dir / "bin") + self._build_gemini_start_cmd()
+        env_overrides = self._managed_env_overrides()
+        start_cmd = self._build_env_prefix(env_overrides) + _build_export_path_cmd(self.script_dir / "bin") + self._build_gemini_start_cmd()
         pane_title_marker = "CCB-Gemini"
 
         backend = TmuxBackend()
@@ -1763,7 +1865,8 @@ class AILauncher:
         runtime = self.runtime_dir / "opencode"
         runtime.mkdir(parents=True, exist_ok=True)
 
-        start_cmd = _build_export_path_cmd(self.script_dir / "bin") + self._build_opencode_start_cmd()
+        env_overrides = self._managed_env_overrides()
+        start_cmd = self._build_env_prefix(env_overrides) + _build_export_path_cmd(self.script_dir / "bin") + self._build_opencode_start_cmd()
         pane_title_marker = "CCB-OpenCode"
 
         backend = TmuxBackend()
@@ -1820,6 +1923,7 @@ class AILauncher:
         start_cmd = (cmd_settings.get("start_cmd") or "").strip() or self._default_cmd_start_cmd()
         full_cmd = (
             _build_pane_title_cmd(title)
+            + self._build_env_prefix(self._managed_env_overrides())
             + _build_export_path_cmd(self.script_dir / "bin")
             + _build_cd_cmd(Path.cwd())
             + start_cmd
@@ -1870,7 +1974,7 @@ class AILauncher:
             if not output_fifo.exists():
                 os.mkfifo(output_fifo, 0o644)
 
-        start_cmd = _build_export_path_cmd(self.script_dir / "bin") + self._build_codex_start_cmd()
+        start_cmd = self._build_env_prefix(self._managed_env_overrides()) + _build_export_path_cmd(self.script_dir / "bin") + self._build_codex_start_cmd()
 
         self._write_codex_session(
             runtime,
@@ -1911,6 +2015,7 @@ class AILauncher:
 
         cmd_parts = shlex.split(self._build_codex_start_cmd())
         env = self._with_bin_path_env()
+        env.update(self._managed_env_overrides())
         env["CODEX_SESSION_ID"] = self.session_id
         env["CODEX_RUNTIME_DIR"] = str(runtime)
         env["CODEX_INPUT_FIFO"] = str(input_fifo)
@@ -1953,7 +2058,7 @@ class AILauncher:
             except Exception:
                 pass
 
-        start_cmd = _build_export_path_cmd(self.script_dir / "bin") + self._build_gemini_start_cmd()
+        start_cmd = self._build_env_prefix(self._managed_env_overrides()) + _build_export_path_cmd(self.script_dir / "bin") + self._build_gemini_start_cmd()
         self._write_gemini_session(
             runtime,
             None,
@@ -1982,7 +2087,7 @@ class AILauncher:
             except Exception:
                 pass
 
-        start_cmd = _build_export_path_cmd(self.script_dir / "bin") + self._build_opencode_start_cmd()
+        start_cmd = self._build_env_prefix(self._managed_env_overrides()) + _build_export_path_cmd(self.script_dir / "bin") + self._build_opencode_start_cmd()
         self._write_opencode_session(
             runtime,
             None,
@@ -2064,6 +2169,7 @@ class AILauncher:
             })
         except Exception:
             pass
+        self._maybe_start_provider_daemon("codex")
         return True
 
     def _write_cend_registry(self, claude_pane_id: str, codex_pane_id: str | None) -> bool:
@@ -2140,6 +2246,7 @@ class AILauncher:
             })
         except Exception:
             pass
+        self._maybe_start_provider_daemon("gemini")
         return True
 
     def _write_opencode_session(self, runtime, tmux_session, pane_id=None, pane_title_marker=None, start_cmd=None):
@@ -2188,6 +2295,7 @@ class AILauncher:
             })
         except Exception:
             pass
+        self._maybe_start_provider_daemon("opencode")
         return True
 
     def _claude_project_dir(self, work_dir: Path) -> Path:
@@ -2310,6 +2418,7 @@ class AILauncher:
 
     def _claude_env_overrides(self) -> dict:
         env: dict[str, str] = {}
+        env.update(self._managed_env_overrides())
         if "codex" in self.providers:
             runtime = self.runtime_dir / "codex"
             env["CODEX_SESSION_ID"] = self.session_id
@@ -2755,8 +2864,8 @@ def cmd_start(args):
         """
         Find the nearest ancestor `.ccb_config/` (project anchor) directory.
 
-        Used only to warn when `ccb` is invoked from a subdirectory of an existing project root,
-        to avoid accidentally creating a nested anchor. Session/config lookup remains local-only.
+        Used only to block auto-creation when a parent anchor exists. Users can still
+        create a local `.ccb_config/` manually to treat this directory as a new project.
         """
         try:
             start = cwd.resolve()
@@ -2793,8 +2902,9 @@ def cmd_start(args):
             )
             print(f"   cwd:         {Path.cwd()}", file=sys.stderr)
             print(f"   project_root:{project_root}", file=sys.stderr)
-            print("💡 Fix: cd to the project root and run `ccb` there.", file=sys.stderr)
-            print(f"   cd {project_root}", file=sys.stderr)
+            print("💡 Auto-create blocked to avoid accidental nesting.", file=sys.stderr)
+            print("💡 If you want this directory to be a separate project, create .ccb_config here:", file=sys.stderr)
+            print("   mkdir .ccb_config", file=sys.stderr)
             return 2
 
         if is_dangerous and not _env_truthy("CCB_INIT_PROJECT_DANGEROUS"):
@@ -2807,6 +2917,21 @@ def cmd_start(args):
         except Exception as exc:
             print(f"❌ Failed to create {cfg}: {exc}", file=sys.stderr)
             return 2
+
+    # Enforce single ccb instance per directory.
+    lock_cwd = str(Path.cwd().resolve())
+    ccb_lock = ProviderLock("ccb", timeout=0.1, cwd=lock_cwd)
+    if not ccb_lock.try_acquire():
+        pid = ""
+        try:
+            pid = ccb_lock.lock_file.read_text(encoding="utf-8").strip()
+        except Exception:
+            pid = ""
+        pid_msg = f" (pid {pid})" if pid else ""
+        print(f"❌ Another ccb instance is already running for this directory{pid_msg}.", file=sys.stderr)
+        print("💡 Only one ccb instance is allowed per directory.", file=sys.stderr)
+        return 2
+    atexit.register(ccb_lock.release)
 
     providers = _parse_providers(args.providers or [])
     config = load_start_config(work_dir)

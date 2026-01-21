@@ -17,6 +17,45 @@ from session_utils import safe_write_session
 RequestHandler = Callable[[dict], dict]
 
 
+def _env_truthy(name: str) -> bool:
+    raw = (os.environ.get(name) or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _env_parent_pid() -> Optional[int]:
+    raw = (os.environ.get("CCB_PARENT_PID") or "").strip()
+    if not raw:
+        return None
+    try:
+        pid = int(raw)
+    except Exception:
+        return None
+    return pid if pid > 0 else None
+
+
+def _is_pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32
+            SYNCHRONIZE = 0x00100000
+            handle = kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+            if handle:
+                kernel32.CloseHandle(handle)
+                return True
+            return False
+        except Exception:
+            return True
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
 class AskDaemonServer:
     def __init__(
         self,
@@ -29,6 +68,8 @@ class AskDaemonServer:
         request_handler: RequestHandler,
         request_queue_size: Optional[int] = None,
         on_stop: Optional[Callable[[], None]] = None,
+        parent_pid: Optional[int] = None,
+        managed: Optional[bool] = None,
     ):
         self.spec = spec
         self.host = host
@@ -38,11 +79,16 @@ class AskDaemonServer:
         self.request_handler = request_handler
         self.request_queue_size = request_queue_size
         self.on_stop = on_stop
+        self.parent_pid = parent_pid if parent_pid is not None else _env_parent_pid()
+        env_managed = _env_truthy("CCB_MANAGED")
+        self.managed = env_managed if managed is None else bool(managed)
+        if self.parent_pid:
+            self.managed = True
 
     def serve_forever(self) -> int:
         run_dir().mkdir(parents=True, exist_ok=True)
 
-        lock = ProviderLock(self.spec.lock_name, cwd="global", timeout=0.1)
+        lock = ProviderLock(self.spec.lock_name, cwd=str(self.state_file.parent), timeout=0.1)
         if not lock.try_acquire():
             return 2
 
@@ -142,6 +188,10 @@ class AskDaemonServer:
                     httpd.idle_timeout_s = float(os.environ.get(self.spec.idle_timeout_env, "60") or "60")
                 except Exception:
                     httpd.idle_timeout_s = 60.0
+                httpd.managed = bool(self.managed)
+                httpd.parent_pid = int(self.parent_pid or 0)
+                if httpd.managed:
+                    httpd.idle_timeout_s = 0.0
 
                 def _idle_monitor() -> None:
                     timeout_s = float(getattr(httpd, "idle_timeout_s", 60.0) or 0.0)
@@ -165,6 +215,22 @@ class AskDaemonServer:
                             return
 
                 threading.Thread(target=_idle_monitor, daemon=True).start()
+
+                if getattr(httpd, "parent_pid", 0):
+                    parent_pid = int(httpd.parent_pid or 0)
+
+                    def _parent_monitor() -> None:
+                        while True:
+                            time.sleep(0.5)
+                            if not _is_pid_alive(parent_pid):
+                                write_log(
+                                    log_path(self.spec.log_file_name),
+                                    f"[INFO] {self.spec.daemon_key} parent pid {parent_pid} exited; shutting down",
+                                )
+                                threading.Thread(target=httpd.shutdown, daemon=True).start()
+                                return
+
+                    threading.Thread(target=_parent_monitor, daemon=True).start()
 
                 actual_host, actual_port = httpd.server_address
                 self._write_state(str(actual_host), int(actual_port))
@@ -197,6 +263,8 @@ class AskDaemonServer:
             "token": self.token,
             "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "python": sys.executable,
+            "parent_pid": int(self.parent_pid or 0) or None,
+            "managed": bool(self.managed),
         }
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         ok, _err = safe_write_session(self.state_file, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")

@@ -337,7 +337,8 @@ class ClaudeLogReader:
         if scanned:
             self._preferred_session = scanned
             return scanned
-        if os.environ.get("CLAUDE_DISABLE_ANY_PROJECT_SCAN") not in ("1", "true", "yes"):
+        # Strict by default: only scan within this project's directory. Opt-in to any-project scan if needed.
+        if os.environ.get("CLAUDE_ALLOW_ANY_PROJECT_SCAN") in ("1", "true", "yes"):
             any_latest = self._scan_latest_session_any_project()
             if any_latest:
                 self._preferred_session = any_latest

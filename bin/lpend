@@ -51,10 +51,27 @@ def _load_session_log_path(work_dir: Path, explicit_session_file: Path | None) -
     return None, None
 
 
-def _load_registry_log_path() -> tuple[Path | None, dict | None]:
+def _record_project_id(record: dict) -> str:
+    pid = str(record.get("ccb_project_id") or "").strip()
+    if pid:
+        return pid
+    wd = record.get("work_dir")
+    if isinstance(wd, str) and wd.strip():
+        try:
+            return compute_ccb_project_id(Path(wd.strip()))
+        except Exception:
+            return ""
+    return ""
+
+
+def _load_registry_log_path(current_pid: str | None) -> tuple[Path | None, dict | None]:
     session_id = (os.environ.get("CCB_SESSION_ID") or "").strip()
     if session_id:
         record = load_registry_by_session_id(session_id)
+        if record and current_pid:
+            record_pid = _record_project_id(record)
+            if record_pid != current_pid:
+                record = None
         if record:
             providers = record.get("providers") if isinstance(record.get("providers"), dict) else {}
             claude = providers.get("claude") if isinstance(providers, dict) else None
@@ -67,6 +84,10 @@ def _load_registry_log_path() -> tuple[Path | None, dict | None]:
     pane_id = (os.environ.get("WEZTERM_PANE") or os.environ.get("TMUX_PANE") or "").strip()
     if pane_id:
         record = load_registry_by_claude_pane(pane_id)
+        if record and current_pid:
+            record_pid = _record_project_id(record)
+            if record_pid != current_pid:
+                record = None
         if record:
             providers = record.get("providers") if isinstance(record.get("providers"), dict) else {}
             claude = providers.get("claude") if isinstance(providers, dict) else None
@@ -105,14 +126,16 @@ def main(argv: list[str]) -> int:
             env_session_file=os.environ.get("CCB_SESSION_FILE"),
         )
 
-        registry_log_path, registry_record = _load_registry_log_path()
+        current_pid = ""
+        try:
+            current_pid = compute_ccb_project_id(work_dir)
+        except Exception:
+            current_pid = ""
+
+        registry_log_path, registry_record = _load_registry_log_path(current_pid)
         if not registry_log_path:
-            try:
-                pid = compute_ccb_project_id(work_dir)
-            except Exception:
-                pid = ""
-            if pid:
-                rec = load_registry_by_project_id(pid, "claude")
+            if current_pid:
+                rec = load_registry_by_project_id(current_pid, "claude")
                 if rec:
                     providers = rec.get("providers") if isinstance(rec.get("providers"), dict) else {}
                     claude = providers.get("claude") if isinstance(providers, dict) else None

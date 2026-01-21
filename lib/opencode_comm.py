@@ -156,6 +156,17 @@ def _path_is_same_or_parent(parent: str, child: str) -> bool:
     return child == parent or child[len(parent) :].startswith("/")
 
 
+def _env_truthy(name: str) -> bool:
+    raw = (os.environ.get(name) or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _path_matches(expected: str, actual: str, *, allow_parent: bool) -> bool:
+    if allow_parent:
+        return _path_is_same_or_parent(expected, actual)
+    return _normalize_path_for_match(expected) == _normalize_path_for_match(actual)
+
+
 def _is_wsl() -> bool:
     if os.environ.get("WSL_INTEROP") or os.environ.get("WSL_DISTRO_NAME"):
         return True
@@ -326,13 +337,16 @@ class OpenCodeLogReader:
         self.work_dir = work_dir or Path.cwd()
         env_project_id = (os.environ.get("OPENCODE_PROJECT_ID") or "").strip()
         explicit_project_id = bool(env_project_id) or ((project_id or "").strip() not in ("", "global"))
+        self._allow_parent_match = _env_truthy("OPENCODE_ALLOW_PARENT_WORKDIR_MATCH")
+        self._allow_any_session = _env_truthy("OPENCODE_ALLOW_ANY_SESSION")
+        allow_git_root_fallback = _env_truthy("OPENCODE_ALLOW_GIT_ROOT_FALLBACK")
         self.project_id = (env_project_id or project_id or "global").strip() or "global"
         self._session_id_filter = (session_id_filter or "").strip() or None
         if not explicit_project_id:
             detected = self._detect_project_id_for_workdir()
             if detected:
                 self.project_id = detected
-            else:
+            elif allow_git_root_fallback:
                 # Fallback for older storage layouts or path-matching issues.
                 self.project_id = compute_opencode_project_id(self.work_dir)
 
@@ -429,7 +443,7 @@ class OpenCodeLogReader:
 
             # Require the project worktree to contain our cwd (avoid picking an arbitrary child project
             # when running from a higher-level directory).
-            if not any(_path_is_same_or_parent(worktree_norm, c) for c in work_candidates):
+            if not any(_path_matches(worktree_norm, c, allow_parent=self._allow_parent_match) for c in work_candidates):
                 continue
 
             updated = (payload.get("time") or {}).get("updated")
@@ -516,9 +530,14 @@ class OpenCodeLogReader:
             session_dir_norm = _normalize_path_for_match(directory)
             matched = False
             for cwd in candidates:
-                if _path_is_same_or_parent(session_dir_norm, cwd) or _path_is_same_or_parent(cwd, session_dir_norm):
-                    matched = True
-                    break
+                if self._allow_parent_match:
+                    if _path_is_same_or_parent(session_dir_norm, cwd) or _path_is_same_or_parent(cwd, session_dir_norm):
+                        matched = True
+                        break
+                else:
+                    if session_dir_norm == cwd:
+                        matched = True
+                        break
             if not matched:
                 continue
 
@@ -535,7 +554,11 @@ class OpenCodeLogReader:
                 return best_match
             return filtered_match
 
-        return best_match or best_any
+        if best_match:
+            return best_match
+        if self._allow_any_session:
+            return best_any
+        return None
 
     def _read_messages(self, session_id: str) -> List[dict]:
         message_dir = self._message_dir(session_id)
