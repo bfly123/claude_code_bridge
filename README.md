@@ -1,6 +1,6 @@
 <div align="center">
 
-# Claude Code Bridge (ccb) v5.0.4
+# Claude Code Bridge (ccb) v5.0.5
 
 **New Multi-Model Collaboration Tool via Split-Pane Terminal**
 **Claude & Codex & Gemini & OpenCode & Droid**
@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Every_Model_Controllable-CF1322?style=for-the-badge" alt="Every Model Controllable">
 </p>
 
-[![Version](https://img.shields.io/badge/version-5.0.4-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-5.0.5-orange.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![CI](https://github.com/bfly123/claude_code_bridge/actions/workflows/test.yml/badge.svg)](https://github.com/bfly123/claude_code_bridge/actions/workflows/test.yml)
@@ -50,14 +50,11 @@
 <h2 align="center">🚀 What's New</h2>
 
 <details open>
-<summary><b>v5.0.4</b> - OpenCode -r 恢复判定修复</summary>
+<summary><b>v5.0.5</b> - Droid delegation tools + setup</summary>
 
-- **OpenCode**: Fixes `-r` resume failing after switching projects.
-- **/all-plan**: Multi-AI planning with Superpowers brainstorming and availability-aware dispatch.
-- **CCA Status Bar**: Reads role name from `.autoflow/roles.json` (supports `_meta.name`) with per-path caching.
-- **Installer**: Copies skill subdirectories (e.g., `references/`) for Claude/Codex installs.
-- **CLI**: Adds `ccb uninstall` / `ccb reinstall` with Claude config cleanup.
-- **Routing**: Tighter project/session resolution to avoid cross-project Claude sessions.
+- **Droid**: Adds delegation tools (`ccb_ask_*` plus `cask/gask/lask/oask` aliases).
+- **Setup**: New `ccb droid setup-delegation` command for MCP registration.
+- **Installer**: Auto-registers Droid delegation when `droid` is detected (opt-out via env).
 
 <details>
 <summary><b>Details & usage</b></summary>

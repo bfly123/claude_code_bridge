@@ -1,6 +1,6 @@
 <div align="center">
 
-# Claude Code Bridge (ccb) v5.0.4
+# Claude Code Bridge (ccb) v5.0.5
 
 **基于终端分屏的全新多模型交互协作工具**
 **Claude & Codex & Gemini & OpenCode & Droid**
@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/模型皆可控-CF1322?style=for-the-badge" alt="模型皆可控">
 </p>
 
-[![Version](https://img.shields.io/badge/version-5.0.4-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-5.0.5-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 [English](README.md) | **中文**
@@ -51,14 +51,11 @@
 <h2 align="center">🚀 新版本速览</h2>
 
 <details open>
-<summary><b>v5.0.4</b> - OpenCode -r 恢复判定修复</summary>
+<summary><b>v5.0.5</b> - Droid 调度工具与安装</summary>
 
-- **OpenCode**：修复 `-r` 恢复在多项目切换后失效的问题。
-- **/all-plan**：多模型协同规划，带 Superpowers 头脑风暴与可用性分发。
-- **CCA 状态栏**：读取 `.autoflow/roles.json` 角色名（支持 `_meta.name`），按路径缓存。
-- **安装器**：复制技能子目录（如 `references/`）。
-- **CLI**：新增 `ccb uninstall` / `ccb reinstall`，并清理 Claude 配置。
-- **路由**：项目/会话解析更严格，避免跨项目 Claude 会话。
+- **Droid**：新增调度工具（`ccb_ask_*` 以及 `cask/gask/lask/oask` 别名）。
+- **安装**：新增 `ccb droid setup-delegation` 用于 MCP 注册。
+- **安装器**：检测到 `droid` 时自动注册（可通过环境变量关闭）。
 
 <details>
 <summary><b>详情与用法</b></summary>
