@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -43,11 +44,12 @@ IMPORTANT: Task submitted to Cursor. You MUST:
 
 def _usage() -> None:
     print(
-        "Usage: curask [--resume <chatId>] [--no-force] [--output FILE] [--model MODEL] [--timeout SEC] [--sync] <message>",
+        "Usage: curask [--name NAME] [--resume <chatId>] [--no-force] [--output FILE] [--model MODEL] [--timeout SEC] [--sync] <message>",
         file=sys.stderr,
     )
     print("", file=sys.stderr)
     print("Options:", file=sys.stderr)
+    print("  --name NAME        Assign a name to this task (for parallel tracking)", file=sys.stderr)
     print("  --resume <chatId>  Resume a previous session by chat ID", file=sys.stderr)
     print("  --no-force         Disable file editing (default: editing enabled)", file=sys.stderr)
     print("  --output FILE      Write output to FILE (for background mode)", file=sys.stderr)
@@ -66,6 +68,7 @@ def _parse_args(argv: list[str]) -> Tuple[
     bool,            # force (allow file editing)
     Optional[str],   # resume (chat_id)
     Optional[str],   # model
+    Optional[str],   # name (task name for parallel tracking)
 ]:
     output: Optional[Path] = None
     timeout: Optional[float] = None
@@ -74,6 +77,7 @@ def _parse_args(argv: list[str]) -> Tuple[
     force = True  # Default: force enabled
     resume: Optional[str] = None
     model: Optional[str] = None
+    name: Optional[str] = None
     parts: list[str] = []
 
     it = iter(argv[1:])
@@ -102,6 +106,18 @@ def _parse_args(argv: list[str]) -> Tuple[
             except StopIteration:
                 raise ValueError("--model requires a model name")
             continue
+        if token == "--name":
+            try:
+                name = next(it)
+            except StopIteration:
+                raise ValueError("--name requires a value")
+            # Validate name: only allow alphanumeric, underscore, hyphen
+            if not re.match(r'^[a-zA-Z0-9_-]+$', name):
+                raise ValueError("--name must contain only alphanumeric characters, underscores, and hyphens")
+            # Limit length to avoid filesystem issues (255 - "cursor-" - "-" - timestamp)
+            if len(name) > 200:
+                raise ValueError("--name must be 200 characters or fewer")
+            continue
         if token in ("-o", "--output"):
             try:
                 output = Path(next(it)).expanduser()
@@ -124,11 +140,13 @@ def _parse_args(argv: list[str]) -> Tuple[
             timeout = float(os.environ.get("CCB_CURSOR_TIMEOUT", "300"))
         except Exception:
             timeout = 300.0
-    return output, timeout, message, quiet, sync_mode, force, resume, model
+    return output, timeout, message, quiet, sync_mode, force, resume, model, name
 
 
-def _make_task_id() -> str:
+def _make_task_id(name: Optional[str] = None) -> str:
     ts = int(time.time())
+    if name:
+        return f"cursor-{name}-{ts}"
     rand = secrets.token_hex(2)
     return f"cursor-{ts}-{rand}"
 
@@ -144,7 +162,7 @@ def _write_meta(task_id: str, meta: dict) -> None:
 
 def main(argv: list[str]) -> int:
     try:
-        output_path, timeout, message, quiet, sync_mode, force, resume, model = _parse_args(argv)
+        output_path, timeout, message, quiet, sync_mode, force, resume, model, name = _parse_args(argv)
         if not message and not sys.stdin.isatty():
             message = read_stdin_text().strip()
         if not message:
@@ -166,7 +184,7 @@ def main(argv: list[str]) -> int:
         # Add the message
         cmd.append(message)
 
-        task_id = _make_task_id()
+        task_id = _make_task_id(name)
         out_path = output_path or (CACHE_DIR / f"{task_id}.out")
 
         # Write initial metadata
@@ -179,6 +197,7 @@ def main(argv: list[str]) -> int:
             "force": force,
             "resume": resume,
             "model": model,
+            "name": name,
         }
         _write_meta(task_id, meta)
 

@@ -460,6 +460,24 @@ Once started, collaborate naturally. Claude will detect when to delegate tasks.
 | `dping` | Test Droid connectivity |
 
 **🚀 Delegation Power:** Droid can now orchestrate other AIs (Codex, Gemini, OpenCode, Claude).
+
+### Cursor Commands
+
+| Command | Description |
+| :--- | :--- |
+| `/curask [--name NAME] <msg>` | Background mode: Submit task to Cursor Agent. Use `--name` for parallel task tracking |
+| `curpend [--list] [--name NAME]` | View Cursor task results. `--list` shows all tasks, `--name` queries by name |
+| `curping` | Test Cursor Agent connectivity |
+
+**Parallel Task Tracking:**
+```bash
+curask --name task-a "Question A" &   # Named task for parallel tracking
+curask --name task-b "Question B" &   # Another named task
+wait
+curpend --list                        # List all tasks with status
+curpend --name task-a                 # Get specific task result
+curpend --name task-b --chat-id       # Get only the chat_id for scripting
+```
 Run `ccb droid setup-delegation` to install the necessary skills and tools into Droid.
 Once setup, Droid can use CCB delegation tools (e.g. `cask/gask/lask/oask` or `ccb_ask_*`) to delegate tasks in the background.
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 script_dir = Path(__file__).resolve().parent
@@ -71,30 +72,127 @@ def _load_latest_cursor_meta() -> dict | None:
         return None
 
 
+def _list_all_cursor_tasks() -> list[dict]:
+    """Load all cursor task metadata, sorted by started_at desc."""
+    metas = []
+    for path in CACHE_DIR.glob("cursor-*.json"):
+        data = _read_json(path)
+        if not data or data.get("provider") != "cursor":
+            continue
+        metas.append(data)
+    # Use started_at for reliable sorting (immutable, from metadata)
+    metas.sort(key=lambda x: x.get("started_at", 0), reverse=True)
+    return metas
+
+
+def _load_cursor_meta_by_name(name: str) -> dict | None:
+    """Load the latest cursor task with the given name."""
+    metas = []
+    # Optimized: use specific glob pattern since name is in filename
+    for path in CACHE_DIR.glob(f"cursor-{name}-*.json"):
+        data = _read_json(path)
+        if not data or data.get("provider") != "cursor":
+            continue
+        # Double-check name matches (in case of partial matches)
+        if data.get("name") != name:
+            continue
+        # Use started_at from metadata for reliable sorting
+        started_at = data.get("started_at", 0)
+        metas.append((started_at, data))
+    if not metas:
+        return None
+    metas.sort(key=lambda item: item[0], reverse=True)
+    return metas[0][1]
+
+
+def _format_age(timestamp: int | float | None) -> str:
+    """Format a timestamp as a human-readable age string."""
+    if not timestamp:
+        return "-"
+    age_sec = int(time.time() - timestamp)
+    if age_sec < 0:
+        return "-"
+    if age_sec < 60:
+        return f"{age_sec}s"
+    if age_sec < 3600:
+        return f"{age_sec // 60}m"
+    if age_sec < 86400:
+        return f"{age_sec // 3600}h"
+    return f"{age_sec // 86400}d"
+
+
+def _print_task_list(tasks: list[dict]) -> None:
+    """Print task list in a formatted table."""
+    if not tasks:
+        print("No cursor tasks found.")
+        return
+
+    # Header
+    print(f"{'NAME':<12} {'TASK_ID':<30} {'CHAT_ID':<14} {'STATUS':<10} {'AGE':<5}")
+    print("-" * 75)
+
+    for task in tasks:
+        name = task.get("name") or "(unnamed)"
+        task_id = task.get("task_id", "-")
+        chat_id = task.get("chat_id", "-")
+        if chat_id and len(chat_id) > 12:
+            chat_id = chat_id[:10] + ".."
+        status = task.get("status", "-")
+        started_at = task.get("started_at")
+        age = _format_age(started_at)
+
+        # Truncate long values
+        if len(name) > 12:
+            name = name[:10] + ".."
+        if len(task_id) > 30:
+            task_id = task_id[:28] + ".."
+
+        print(f"{name:<12} {task_id:<30} {chat_id:<14} {status:<10} {age:<5}")
+
+
 def _usage() -> None:
-    print("Usage: curpend [--task-id <id>] [--raw]", file=sys.stderr)
+    print("Usage: curpend [--list] [--name NAME] [--task-id <id>] [--chat-id] [--raw]", file=sys.stderr)
     print("", file=sys.stderr)
     print("Options:", file=sys.stderr)
+    print("  --list          List all cursor tasks", file=sys.stderr)
+    print("  --name NAME     Retrieve task by name (assigned via curask --name)", file=sys.stderr)
     print("  --task-id <id>  Retrieve specific task by ID", file=sys.stderr)
+    print("  --chat-id       Output only the chat_id (for scripting)", file=sys.stderr)
     print("  --raw           Output raw JSON metadata", file=sys.stderr)
 
 
 def main(argv: list[str]) -> int:
     try:
         task_id: str | None = None
+        query_name: str | None = None
         raw = False
+        list_mode = False
+        chat_id_only = False
 
         it = iter(argv[1:])
         for token in it:
             if token in ("-h", "--help"):
                 _usage()
                 return EXIT_OK
+            if token == "--list":
+                list_mode = True
+                continue
+            if token == "--name":
+                try:
+                    query_name = next(it)
+                except StopIteration:
+                    print("[ERROR] --name requires a value", file=sys.stderr)
+                    return EXIT_ERROR
+                continue
             if token == "--task-id":
                 try:
                     task_id = next(it)
                 except StopIteration:
                     print("[ERROR] --task-id requires a value", file=sys.stderr)
                     return EXIT_ERROR
+                continue
+            if token == "--chat-id":
+                chat_id_only = True
                 continue
             if token == "--raw":
                 raw = True
@@ -103,9 +201,20 @@ def main(argv: list[str]) -> int:
             if not task_id:
                 task_id = token
 
+        # Handle --list mode
+        if list_mode:
+            tasks = _list_all_cursor_tasks()
+            _print_task_list(tasks)
+            return EXIT_OK
+
         meta: dict | None = None
 
-        if task_id:
+        if query_name:
+            meta = _load_cursor_meta_by_name(query_name)
+            if not meta:
+                print(f"[ERROR] No task found with name: {query_name}", file=sys.stderr)
+                return EXIT_ERROR
+        elif task_id:
             meta_path = CACHE_DIR / f"{task_id}.json"
             meta = _read_json(meta_path)
             if not meta:
@@ -118,6 +227,14 @@ def main(argv: list[str]) -> int:
                 print("Run `curask <message>` first to submit a task.", file=sys.stderr)
                 return EXIT_NO_REPLY
 
+        # Handle --chat-id mode: output only chat_id
+        if chat_id_only:
+            chat_id = meta.get("chat_id") if meta else None
+            if chat_id:
+                print(chat_id)
+                return EXIT_OK
+            return EXIT_ERROR
+
         if raw:
             print(json.dumps(meta, indent=2))
             return EXIT_OK
@@ -127,8 +244,11 @@ def main(argv: list[str]) -> int:
         status = meta.get("status", "unknown")
         chat_id = meta.get("chat_id")
         output_file = meta.get("output_file")
+        name = meta.get("name")
 
         print(f"Task ID: {task_id}")
+        if name:
+            print(f"Name: {name}")
         print(f"Status: {status}")
         if chat_id:
             print(f"Chat ID: {chat_id} (use --resume {chat_id} to continue)")

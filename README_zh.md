@@ -501,6 +501,24 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile
 | `dping` | 测试 Droid 连接状态 |
 
 **🚀 调度能力：** Droid 现在可以像 Codex/Claude 一样调度其他 AI（Codex/Gemini/OpenCode/Claude）。
+
+### Cursor 命令
+
+| 命令 | 说明 |
+| :--- | :--- |
+| `/curask [--name NAME] <msg>` | 后台模式：向 Cursor Agent 提交任务。使用 `--name` 进行并行任务追踪 |
+| `curpend [--list] [--name NAME]` | 查看 Cursor 任务结果。`--list` 列出所有任务，`--name` 按名称查询 |
+| `curping` | 测试 Cursor Agent 连接状态 |
+
+**并行任务追踪：**
+```bash
+curask --name task-a "问题 A" &   # 命名任务，用于并行追踪
+curask --name task-b "问题 B" &   # 另一个命名任务
+wait
+curpend --list                    # 列出所有任务及状态
+curpend --name task-a             # 获取指定任务结果
+curpend --name task-b --chat-id   # 仅输出 chat_id（用于脚本）
+```
 运行 `ccb droid setup-delegation` 即可将必要的技能和工具安装到 Droid 中。
 配置完成后，Droid 即可使用 CCB 的调度工具（如 `cask/gask/lask/oask` 或 `ccb_ask_*`）在后台委派任务。
 
