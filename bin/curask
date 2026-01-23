@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -143,9 +144,6 @@ def _write_meta(task_id: str, meta: dict) -> None:
 
 def _extract_chat_id(output: str) -> Optional[str]:
     """Extract chat_id from cursor-agent output if present."""
-    # cursor-agent may output chatId in various formats
-    # Try to find it in the output
-    import re
     # Look for UUID pattern that might be a chatId
     patterns = [
         r'"chatId":\s*"([a-f0-9-]{36})"',
@@ -229,15 +227,14 @@ def main(argv: list[str]) -> int:
                 print(ASYNC_GUARDRAIL, file=sys.stderr, flush=True)
 
             # Always write to cache for curpend retrieval
+            # (out_path == output_path when user specified --output, otherwise it's the cache path)
             atomic_write_text(out_path, reply + "\n")
 
-            if output_path:
-                # Also write to user-specified output path
-                return exit_code
-
-            sys.stdout.write(reply)
-            if not reply.endswith("\n"):
-                sys.stdout.write("\n")
+            # Only output to stdout if no --output was specified
+            if not output_path:
+                sys.stdout.write(reply)
+                if not reply.endswith("\n"):
+                    sys.stdout.write("\n")
 
             if stderr_out and not quiet:
                 print(f"[stderr] {stderr_out}", file=sys.stderr)

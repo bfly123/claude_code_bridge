@@ -27,7 +27,7 @@ def main() -> int:
     cursor_path = shutil.which("cursor-agent")
     if not cursor_path:
         print("[ERROR] cursor-agent not found in PATH")
-        print("Install cursor-agent: https://github.com/cursorless-dev/cursor-agent")
+        print("Install: curl https://cursor.com/install -fsS | bash")
         return EXIT_ERROR
 
     # Verify cursor-agent is functional by checking version
