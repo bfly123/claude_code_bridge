@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import secrets
 import subprocess
 import sys
@@ -27,6 +26,7 @@ from compat import read_stdin_text, setup_windows_encoding
 setup_windows_encoding()
 
 from cli_output import EXIT_ERROR, EXIT_OK, atomic_write_text
+from cursor_utils import extract_chat_id_fallback, parse_json_output
 
 CACHE_DIR = Path(
     os.environ.get("CCB_DELEGATION_CACHE_DIR")
@@ -142,21 +142,6 @@ def _write_meta(task_id: str, meta: dict) -> None:
         pass
 
 
-def _extract_chat_id(output: str) -> Optional[str]:
-    """Extract chat_id from cursor-agent output if present."""
-    # Look for UUID pattern that might be a chatId
-    patterns = [
-        r'"chatId":\s*"([a-f0-9-]{36})"',
-        r'chatId:\s*([a-f0-9-]{36})',
-        r'chat[_-]?id[=:]\s*([a-f0-9-]{36})',
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, output, re.IGNORECASE)
-        if match:
-            return match.group(1)
-    return None
-
-
 def main(argv: list[str]) -> int:
     try:
         output_path, timeout, message, quiet, sync_mode, force, resume, model = _parse_args(argv)
@@ -166,8 +151,8 @@ def main(argv: list[str]) -> int:
             _usage()
             return EXIT_ERROR
 
-        # Build cursor-agent command
-        cmd = ["cursor-agent"]
+        # Build cursor-agent command with JSON output format
+        cmd = ["cursor-agent", "--print", "--output-format", "json"]
 
         if force:
             cmd.append("--force")
@@ -207,17 +192,29 @@ def main(argv: list[str]) -> int:
                 text=True,
                 timeout=timeout,
             )
-            reply = result.stdout.strip()
+            raw_output = result.stdout.strip()
             stderr_out = result.stderr.strip()
             exit_code = result.returncode
 
-            # Try to extract chat_id for resume capability
-            chat_id = _extract_chat_id(reply) or _extract_chat_id(stderr_out)
+            # Parse JSON output from cursor-agent
+            session_id, reply_text, is_error = parse_json_output(raw_output)
 
-            # Update metadata
+            if reply_text is not None:
+                # JSON parsing succeeded
+                reply = reply_text
+                chat_id = session_id
+                if is_error and exit_code == 0:
+                    exit_code = 1  # Ensure error state is reflected
+            else:
+                # Fallback to raw output if JSON parsing fails
+                reply = raw_output
+                chat_id = extract_chat_id_fallback(raw_output) or extract_chat_id_fallback(stderr_out)
+
+            # Update metadata with structured JSON response info
             meta["status"] = "completed" if exit_code == 0 else "error"
             meta["exit_code"] = exit_code
             meta["finished_at"] = int(time.time())
+            meta["json_parsed"] = reply_text is not None
             if chat_id:
                 meta["chat_id"] = chat_id
             _write_meta(task_id, meta)
