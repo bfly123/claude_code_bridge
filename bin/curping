@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""
+curping - Health check for cursor-agent
+Check if cursor-agent is available in PATH and functional.
+"""
+
+from __future__ import annotations
+
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+script_dir = Path(__file__).resolve().parent
+lib_dir = script_dir.parent / "lib"
+sys.path.insert(0, str(lib_dir))
+
+from compat import setup_windows_encoding
+
+setup_windows_encoding()
+
+from cli_output import EXIT_ERROR, EXIT_OK
+
+
+def main() -> int:
+    # Check if cursor-agent is in PATH
+    cursor_path = shutil.which("cursor-agent")
+    if not cursor_path:
+        print("[ERROR] cursor-agent not found in PATH")
+        print("Install cursor-agent: https://github.com/cursorless-dev/cursor-agent")
+        return EXIT_ERROR
+
+    # Verify cursor-agent is functional by checking version
+    try:
+        result = subprocess.run(
+            ["cursor-agent", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            version = result.stdout.strip() or result.stderr.strip()
+            print(f"[OK] cursor-agent available: {version}")
+            return EXIT_OK
+        else:
+            print(f"[ERROR] cursor-agent check failed: {result.stderr.strip()}")
+            return EXIT_ERROR
+    except subprocess.TimeoutExpired:
+        print("[ERROR] cursor-agent timed out")
+        return EXIT_ERROR
+    except Exception as exc:
+        print(f"[ERROR] cursor-agent check failed: {exc}")
+        return EXIT_ERROR
+
+
+if __name__ == "__main__":
+    sys.exit(main())

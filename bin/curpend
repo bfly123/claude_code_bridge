@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""
+curpend - View latest Cursor Agent task result
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from pathlib import Path
+
+script_dir = Path(__file__).resolve().parent
+lib_dir = script_dir.parent / "lib"
+sys.path.insert(0, str(lib_dir))
+
+from compat import setup_windows_encoding
+
+setup_windows_encoding()
+
+from cli_output import EXIT_ERROR, EXIT_NO_REPLY, EXIT_OK
+
+CACHE_DIR = Path(
+    os.environ.get("CCB_DELEGATION_CACHE_DIR")
+    or (Path.home() / ".cache" / "ccb" / "delegation")
+)
+
+
+def _debug_enabled() -> bool:
+    return os.environ.get("CCB_DEBUG") in ("1", "true", "yes") or os.environ.get(
+        "CURPEND_DEBUG"
+    ) in ("1", "true", "yes")
+
+
+def _debug(message: str) -> None:
+    if not _debug_enabled():
+        return
+    print(f"[DEBUG] {message}", file=sys.stderr)
+
+
+def _read_json(path: Path) -> dict | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        return None
+    return None
+
+
+def _load_latest_cursor_meta() -> dict | None:
+    """Load the latest cursor task metadata."""
+    try:
+        metas = []
+        for path in CACHE_DIR.glob("cursor-*.json"):
+            data = _read_json(path)
+            if not data:
+                continue
+            if data.get("provider") != "cursor":
+                continue
+            try:
+                mtime = path.stat().st_mtime
+            except Exception:
+                mtime = 0
+            metas.append((mtime, data))
+        if not metas:
+            return None
+        metas.sort(key=lambda item: item[0], reverse=True)
+        return metas[0][1]
+    except Exception:
+        return None
+
+
+def _usage() -> None:
+    print("Usage: curpend [--task-id <id>] [--raw]", file=sys.stderr)
+    print("", file=sys.stderr)
+    print("Options:", file=sys.stderr)
+    print("  --task-id <id>  Retrieve specific task by ID", file=sys.stderr)
+    print("  --raw           Output raw JSON metadata", file=sys.stderr)
+
+
+def main(argv: list[str]) -> int:
+    try:
+        task_id: str | None = None
+        raw = False
+
+        it = iter(argv[1:])
+        for token in it:
+            if token in ("-h", "--help"):
+                _usage()
+                return EXIT_OK
+            if token == "--task-id":
+                try:
+                    task_id = next(it)
+                except StopIteration:
+                    print("[ERROR] --task-id requires a value", file=sys.stderr)
+                    return EXIT_ERROR
+                continue
+            if token == "--raw":
+                raw = True
+                continue
+            # Positional argument as task_id
+            if not task_id:
+                task_id = token
+
+        meta: dict | None = None
+
+        if task_id:
+            meta_path = CACHE_DIR / f"{task_id}.json"
+            meta = _read_json(meta_path)
+            if not meta:
+                print(f"[ERROR] Task not found: {task_id}", file=sys.stderr)
+                return EXIT_ERROR
+        else:
+            meta = _load_latest_cursor_meta()
+            if not meta:
+                print("[ERROR] No cursor task found", file=sys.stderr)
+                print("Run `curask <message>` first to submit a task.", file=sys.stderr)
+                return EXIT_NO_REPLY
+
+        if raw:
+            print(json.dumps(meta, indent=2))
+            return EXIT_OK
+
+        # Display task info
+        task_id = meta.get("task_id", "unknown")
+        status = meta.get("status", "unknown")
+        chat_id = meta.get("chat_id")
+        output_file = meta.get("output_file")
+
+        print(f"Task ID: {task_id}")
+        print(f"Status: {status}")
+        if chat_id:
+            print(f"Chat ID: {chat_id} (use --resume {chat_id} to continue)")
+
+        # Read output if available
+        reply = ""
+        if output_file:
+            out_path = Path(output_file)
+            if out_path.exists():
+                try:
+                    reply = out_path.read_text(encoding="utf-8").strip()
+                except Exception as exc:
+                    _debug(f"Failed to read output file: {exc}")
+
+        if reply:
+            print("")
+            print("--- Reply ---")
+            print(reply)
+        elif status == "running":
+            print("")
+            print("[Task still running...]")
+        elif status == "error":
+            error = meta.get("error", "unknown error")
+            print("")
+            print(f"[Error: {error}]")
+
+        return EXIT_OK
+
+    except Exception as exc:
+        if _debug_enabled():
+            import traceback
+
+            traceback.print_exc()
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return EXIT_ERROR
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

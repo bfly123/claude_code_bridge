@@ -108,6 +108,9 @@ SCRIPTS_TO_LINK=(
   bin/daskd
   bin/dpend
   bin/dping
+  bin/curask
+  bin/curpend
+  bin/curping
   ccb
 )
 
@@ -120,6 +123,8 @@ CLAUDE_MARKDOWN=(
   oping.md
   dpend.md
   dping.md
+  curpend.md
+  curping.md
 )
 
 LEGACY_SCRIPTS=(
@@ -808,12 +813,12 @@ install_claude_md_config() {
   ccb_tmpfile="$(mktemp)" || { echo "Failed to create temp file"; return 1; }
   cat > "$ccb_tmpfile" << 'AI_RULES'
 <!-- CCB_CONFIG_START -->
-## Collaboration Rules (Codex / Gemini / OpenCode)
-Codex, Gemini, and OpenCode are other AI assistants running in separate terminal sessions (WezTerm or tmux).
+## Collaboration Rules (Codex / Gemini / OpenCode / Cursor)
+Codex, Gemini, OpenCode, and Cursor are other AI assistants. Codex/Gemini/OpenCode run in separate terminal sessions (WezTerm or tmux). Cursor runs as a one-shot CLI (cursor-agent).
 
 ### Common Rules (all assistants)
 Trigger (any match):
-- User explicitly asks to consult one of them (e.g. "ask codex ...", "let gemini ...")
+- User explicitly asks to consult one of them (e.g. "ask codex ...", "let cursor ...")
 - User uses an assistant prefix (see table)
 - User asks about that assistant's status (e.g. "is codex alive?")
 
@@ -822,7 +827,7 @@ Fast path (minimize latency):
 - If the user message is only the prefix (no question): ask a 1-line clarification for what to send.
 
 Actions:
-- Ask a question (default) -> `Bash(<cask|gask|oask> <<'EOF' ... EOF, run_in_background=true)`, tell user "`ASSISTANT` processing (task: xxx)", then END your turn
+- Ask a question (default) -> `Bash(<cask|gask|oask|curask> <<'EOF' ... EOF, run_in_background=true)`, tell user "`ASSISTANT` processing (task: xxx)", then END your turn
 - Check connectivity -> run `PING_CMD`
 - Use blocking/wait or "show previous reply" commands ONLY if the user explicitly requests them
 
@@ -836,6 +841,7 @@ Important restrictions:
   | Codex | `@codex`, `codex:`, `ask codex`, `let codex`, `/cask` | `cask <<'EOF' ... EOF` | `cping` | `cpend` |
   | Gemini | `@gemini`, `gemini:`, `ask gemini`, `let gemini`, `/gask` | `gask <<'EOF' ... EOF` | `gping` | `gpend` |
   | OpenCode | `@opencode`, `opencode:`, `ask opencode`, `let opencode`, `/oask` | `oask <<'EOF' ... EOF` | `oping` | `opend` |
+  | Cursor | `@cursor`, `cursor:`, `ask cursor`, `let cursor`, `/curask` | `curask <<'EOF' ... EOF` | `curping` | `curpend` |
 
 Examples:
 - `codex: review this code` -> `Bash(cask <<'EOF'
@@ -843,6 +849,10 @@ review this code
 EOF
 , run_in_background=true)`, END turn
 - `is gemini alive?` -> `gping`
+- `cursor: analyze this function` -> `Bash(curask <<'EOF'
+analyze this function
+EOF
+, run_in_background=true)`, END turn
 <!-- CCB_CONFIG_END -->
 AI_RULES
   local ccb_content
@@ -910,6 +920,9 @@ install_settings_permissions() {
     'Bash(oask:*)'
     'Bash(opend)'
     'Bash(oping)'
+    'Bash(curask:*)'
+    'Bash(curpend)'
+    'Bash(curping)'
   )
 
   if [[ ! -f "$settings_file" ]]; then
@@ -925,7 +938,10 @@ install_settings_permissions() {
 	      "Bash(gping)",
 	      "Bash(oask:*)",
 	      "Bash(opend)",
-	      "Bash(oping)"
+	      "Bash(oping)",
+	      "Bash(curask:*)",
+	      "Bash(curpend)",
+	      "Bash(curping)"
 	    ],
     "deny": []
   }
@@ -1269,6 +1285,9 @@ uninstall_settings_permissions() {
     'Bash(oask:*)'
     'Bash(opend)'
     'Bash(oping)'
+    'Bash(curask:*)'
+    'Bash(curpend)'
+    'Bash(curping)'
   )
 
   if pick_any_python_bin; then
@@ -1297,6 +1316,9 @@ perms_to_remove = [
     'Bash(oask:*)',
     'Bash(opend)',
     'Bash(oping)',
+    'Bash(curask:*)',
+    'Bash(curpend)',
+    'Bash(curping)',
 ]
 try:
     with open(path, 'r', encoding='utf-8') as f:

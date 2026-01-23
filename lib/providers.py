@@ -133,3 +133,17 @@ DASK_CLIENT_SPEC = ProviderClientSpec(
     daemon_bin_name="daskd",
     daemon_module="daskd_daemon",
 )
+
+
+# Cursor uses simplified architecture (no daemon needed)
+# cursor-agent is a one-shot CLI, not a TUI
+CURASK_CLIENT_SPEC = ProviderClientSpec(
+    protocol_prefix="curask",
+    enabled_env="CCB_CURASKD",
+    autostart_env_primary="CCB_CURASKD_AUTOSTART",
+    autostart_env_legacy="CCB_AUTO_CURASKD",
+    state_file_env="CCB_CURASKD_STATE_FILE",
+    session_filename=".cursor-session",
+    daemon_bin_name="curaskd",  # Not used - cursor doesn't need daemon
+    daemon_module="curaskd_daemon",  # Not used - cursor doesn't need daemon
+)

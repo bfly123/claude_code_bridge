@@ -30,6 +30,7 @@ PROVIDERS = {
     "gemini": {"ask": "gask", "pend": "gpend", "ping": "gping"},
     "claude": {"ask": "lask", "pend": "lpend", "ping": "lping"},
     "opencode": {"ask": "oask", "pend": "opend", "ping": "oping"},
+    "cursor": {"ask": "curask", "pend": "curpend", "ping": "curping"},
 }
 
 ALIAS_TOOLS = [
@@ -37,14 +38,17 @@ ALIAS_TOOLS = [
     ("gask", "gemini", "ask"),
     ("lask", "claude", "ask"),
     ("oask", "opencode", "ask"),
+    ("curask", "cursor", "ask"),
     ("cpend", "codex", "pend"),
     ("gpend", "gemini", "pend"),
     ("lpend", "claude", "pend"),
     ("opend", "opencode", "pend"),
+    ("curpend", "cursor", "pend"),
     ("cping", "codex", "ping"),
     ("gping", "gemini", "ping"),
     ("lping", "claude", "ping"),
     ("oping", "opencode", "ping"),
+    ("curping", "cursor", "ping"),
 ]
 ALIAS_MAP = {name: (provider, kind) for name, provider, kind in ALIAS_TOOLS}
 
@@ -101,20 +105,73 @@ def _ping_schema() -> dict[str, Any]:
     }
 
 
+def _cursor_ask_schema() -> dict[str, Any]:
+    """Cursor-specific ask schema with resume and force parameters."""
+    return {
+        "type": "object",
+        "properties": {
+            "message": {
+                "type": "string",
+                "description": "Request text to send to cursor-agent.",
+            },
+            "timeout_s": {
+                "type": "number",
+                "description": "Timeout in seconds for the cursor-agent request.",
+                "default": 300,
+            },
+            "resume": {
+                "type": "string",
+                "description": "Chat ID to resume a previous session.",
+            },
+            "force": {
+                "type": "boolean",
+                "description": "Allow file editing (default: true).",
+                "default": True,
+            },
+            "model": {
+                "type": "string",
+                "description": "Model to use for cursor-agent.",
+            },
+        },
+        "required": ["message"],
+    }
+
+
+def _cursor_pend_schema() -> dict[str, Any]:
+    """Cursor-specific pend schema."""
+    return {
+        "type": "object",
+        "properties": {
+            "task_id": {
+                "type": "string",
+                "description": "Task id returned by curask (optional: latest).",
+            },
+        },
+        "required": [],
+    }
+
+
 TOOL_DEFS = []
-for provider in ("codex", "gemini", "claude", "opencode"):
+for provider in ("codex", "gemini", "claude", "opencode", "cursor"):
+    if provider == "cursor":
+        ask_schema = _cursor_ask_schema()
+        pend_schema = _cursor_pend_schema()
+    else:
+        ask_schema = _ask_schema()
+        pend_schema = _pend_schema()
+
     TOOL_DEFS.append(
         {
             "name": f"ccb_ask_{provider}",
             "description": f"Submit a background request to {provider} (CCB).",
-            "inputSchema": _ask_schema(),
+            "inputSchema": ask_schema,
         }
     )
     TOOL_DEFS.append(
         {
             "name": f"ccb_pend_{provider}",
             "description": f"Fetch the result of a background {provider} request.",
-            "inputSchema": _pend_schema(),
+            "inputSchema": pend_schema,
         }
     )
     TOOL_DEFS.append(
@@ -126,12 +183,20 @@ for provider in ("codex", "gemini", "claude", "opencode"):
     )
 
 for alias, provider, kind in ALIAS_TOOLS:
-    if kind == "ask":
-        schema = _ask_schema()
-    elif kind == "pend":
-        schema = _pend_schema()
+    if provider == "cursor":
+        if kind == "ask":
+            schema = _cursor_ask_schema()
+        elif kind == "pend":
+            schema = _cursor_pend_schema()
+        else:
+            schema = _ping_schema()
     else:
-        schema = _ping_schema()
+        if kind == "ask":
+            schema = _ask_schema()
+        elif kind == "pend":
+            schema = _pend_schema()
+        else:
+            schema = _ping_schema()
     TOOL_DEFS.append(
         {
             "name": alias,
@@ -292,33 +357,54 @@ def _submit_task(provider: str, args: dict[str, Any]) -> dict[str, Any]:
     if not message:
         return _tool_error("message is required")
 
-    timeout_s = args.get("timeout_s", 120)
+    # Default timeout: 300s for cursor, 120s for others
+    default_timeout = 300.0 if provider == "cursor" else 120.0
+    timeout_s = args.get("timeout_s", default_timeout)
     try:
         timeout_s = float(timeout_s)
     except Exception:
-        timeout_s = 120.0
-
-    session_file = str(args.get("session_file") or "").strip() or None
-    if session_file and not Path(session_file).expanduser().exists():
-        return _tool_error(f"session_file not found: {session_file}")
+        timeout_s = default_timeout
 
     task_id = _make_task_id(provider)
     out_path = _output_path(task_id)
     meta_path = _meta_path(task_id)
 
-    cmd = [PROVIDERS[provider]["ask"], "--sync", "--output", str(out_path), "--timeout", str(timeout_s), "-q"]
-    if session_file:
-        cmd.extend(["--session-file", session_file])
-
     meta = {
         "task_id": task_id,
         "provider": provider,
         "output_file": str(out_path),
-        "session_file": session_file,
         "status": "running",
         "started_at": int(time.time()),
         "exit_code": None,
     }
+
+    if provider == "cursor":
+        # Cursor-specific command building
+        resume = str(args.get("resume") or "").strip() or None
+        force = args.get("force", True)
+        model = str(args.get("model") or "").strip() or None
+
+        cmd = [PROVIDERS[provider]["ask"], "--sync", "--output", str(out_path), "--timeout", str(timeout_s), "-q"]
+        if resume:
+            cmd.extend(["--resume", resume])
+            meta["resume"] = resume
+        if not force:
+            cmd.append("--no-force")
+        if model:
+            cmd.extend(["--model", model])
+            meta["model"] = model
+        meta["force"] = force
+    else:
+        # Standard provider command building
+        session_file = str(args.get("session_file") or "").strip() or None
+        if session_file and not Path(session_file).expanduser().exists():
+            return _tool_error(f"session_file not found: {session_file}")
+
+        cmd = [PROVIDERS[provider]["ask"], "--sync", "--output", str(out_path), "--timeout", str(timeout_s), "-q"]
+        if session_file:
+            cmd.extend(["--session-file", session_file])
+            meta["session_file"] = session_file
+
     _write_json(meta_path, meta)
 
     pid = _spawn_background(cmd, message, meta_path)
