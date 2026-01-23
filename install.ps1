@@ -32,13 +32,15 @@ $script:SCRIPTS_TO_LINK = @(
   "cask", "caskd", "cpend", "cping",
   "gask", "gaskd", "gpend", "gping",
   "oask", "oaskd", "opend", "oping",
-  "lask", "laskd", "lpend", "lping"
+  "lask", "laskd", "lpend", "lping",
+  "curask", "curpend", "curping"
 )
 
 $script:CLAUDE_MARKDOWN = @(
   "cpend.md", "cping.md",
   "gpend.md", "gping.md",
-  "opend.md", "oping.md"
+  "opend.md", "oping.md",
+  "curpend.md", "curping.md"
 )
 
 $script:LEGACY_SCRIPTS = @(
@@ -236,7 +238,8 @@ function Install-Native {
     "gask", "gaskd", "gping", "gpend",
     "oask", "oaskd", "oping", "opend",
     "lask", "laskd", "lping", "lpend",
-    "dask", "daskd", "dping", "dpend"
+    "dask", "daskd", "dping", "dpend",
+    "curask", "curpend", "curping"
   )
 
   # In MSYS/Git-Bash, invoking the script file directly will honor the shebang.
@@ -496,12 +499,12 @@ function Install-ClaudeConfig {
 
   $codexRules = @"
 <!-- CCB_CONFIG_START -->
-## Collaboration Rules (Codex / Gemini / OpenCode)
-Codex, Gemini, and OpenCode are other AI assistants running in separate terminal sessions (WezTerm or tmux).
+## Collaboration Rules (Codex / Gemini / OpenCode / Cursor)
+Codex, Gemini, OpenCode, and Cursor are other AI assistants. Codex/Gemini/OpenCode run in separate terminal sessions (WezTerm or tmux). Cursor runs as a one-shot CLI (cursor-agent).
 
 ### Common Rules (all assistants)
 Trigger (any match):
-- User explicitly asks to consult one of them (e.g. "ask codex ...", "let gemini ...")
+- User explicitly asks to consult one of them (e.g. "ask codex ...", "let cursor ...")
 - User uses an assistant prefix (see table)
 - User asks about that assistant's status (e.g. "is codex alive?")
 
@@ -510,7 +513,7 @@ Fast path (minimize latency):
 - If the user message is only the prefix (no question): ask a 1-line clarification for what to send.
 
 Actions:
-- Ask a question (default) -> ``Bash(@"`n<question>`n"@ | <cask|gask|oask>, run_in_background=true)``, tell user "ASSISTANT processing (task: xxx)", then END your turn
+- Ask a question (default) -> ``Bash(@"`n<question>`n"@ | <cask|gask|oask|curask>, run_in_background=true)``, tell user "ASSISTANT processing (task: xxx)", then END your turn
 - Check connectivity -> run ``PING_CMD``
 - Use blocking/wait or "show previous reply" commands ONLY if the user explicitly requests them
 
@@ -524,10 +527,12 @@ Important restrictions:
 | Codex | ``@codex``, ``codex:``, ``ask codex``, ``let codex``, ``/cask`` | ``@"`n<question>`n"@ | cask`` | ``cping`` | ``cpend`` |
 | Gemini | ``@gemini``, ``gemini:``, ``ask gemini``, ``let gemini``, ``/gask`` | ``@"`n<question>`n"@ | gask`` | ``gping`` | ``gpend`` |
 | OpenCode | ``@opencode``, ``opencode:``, ``ask opencode``, ``let opencode``, ``/oask`` | ``@"`n<question>`n"@ | oask`` | ``oping`` | ``opend`` |
+| Cursor | ``@cursor``, ``cursor:``, ``ask cursor``, ``let cursor``, ``/curask`` | ``@"`n<question>`n"@ | curask`` | ``curping`` | ``curpend`` |
 
 Examples:
 - ``codex: review this code`` -> ``Bash(@"`nreview this code`n"@ | cask, run_in_background=true)``, END turn
 - ``is gemini alive?`` -> ``gping``
+- ``cursor: analyze this function`` -> ``Bash(@"`nanalyze this function`n"@ | curask, run_in_background=true)``, END turn
 <!-- CCB_CONFIG_END -->
 "@
 
@@ -568,7 +573,8 @@ Examples:
   $allowList = @(
     "Bash(cask:*)", "Bash(cpend)", "Bash(cping)",
     "Bash(gask:*)", "Bash(gpend)", "Bash(gping)",
-    "Bash(oask:*)", "Bash(opend)", "Bash(oping)"
+    "Bash(oask:*)", "Bash(opend)", "Bash(oping)",
+    "Bash(curask:*)", "Bash(curpend)", "Bash(curping)"
   )
 
   if (Test-Path $settingsJson) {
