@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""
+askd - Unified Ask Daemon for all AI providers.
+
+Single daemon process handling codex, gemini, opencode, droid, and claude.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+script_dir = Path(__file__).resolve().parent
+lib_dir = script_dir.parent / "lib"
+sys.path.insert(0, str(lib_dir))
+
+from compat import setup_windows_encoding
+
+setup_windows_encoding()
+
+from askd.daemon import UnifiedAskDaemon, shutdown_daemon
+from askd.registry import ProviderRegistry
+from askd.adapters.codex import CodexAdapter
+from askd.adapters.gemini import GeminiAdapter
+from askd.adapters.opencode import OpenCodeAdapter
+from askd.adapters.droid import DroidAdapter
+from askd.adapters.claude import ClaudeAdapter
+
+
+def _parse_listen(value: str) -> tuple[str, int]:
+    value = (value or "").strip()
+    if not value:
+        return "127.0.0.1", 0
+    if ":" not in value:
+        return value, 0
+    host, port_s = value.rsplit(":", 1)
+    return host or "127.0.0.1", int(port_s or "0")
+
+
+ALL_PROVIDERS = ["codex", "gemini", "opencode", "droid", "claude"]
+
+ADAPTER_CLASSES = {
+    "codex": CodexAdapter,
+    "gemini": GeminiAdapter,
+    "opencode": OpenCodeAdapter,
+    "droid": DroidAdapter,
+    "claude": ClaudeAdapter,
+}
+
+
+def _create_registry(providers: list[str]) -> ProviderRegistry:
+    """Create and populate the provider registry with specified providers."""
+    registry = ProviderRegistry()
+    for name in providers:
+        if name in ADAPTER_CLASSES:
+            registry.register(ADAPTER_CLASSES[name]())
+    return registry
+
+
+def main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(description="Unified ask daemon (all providers)")
+    ap.add_argument(
+        "--listen",
+        default=os.environ.get("CCB_ASKD_LISTEN", "127.0.0.1:0"),
+        help="host:port (default 127.0.0.1:0)",
+    )
+    ap.add_argument(
+        "--state-file",
+        default=os.environ.get("CCB_ASKD_STATE_FILE", ""),
+        help="Override state file path",
+    )
+    ap.add_argument(
+        "--shutdown",
+        action="store_true",
+        help="Shutdown running daemon",
+    )
+    ap.add_argument(
+        "--providers",
+        default=os.environ.get("CCB_ASKD_PROVIDERS", ""),
+        help="Comma-separated list of providers to enable (default: all)",
+    )
+    args = ap.parse_args(argv[1:])
+
+    state_file = Path(args.state_file).expanduser() if args.state_file else None
+
+    if args.shutdown:
+        ok = shutdown_daemon(state_file=state_file)
+        return 0 if ok else 1
+
+    host, port = _parse_listen(args.listen)
+
+    # Parse providers list
+    if args.providers:
+        providers = [p.strip().lower() for p in args.providers.split(",") if p.strip()]
+        invalid = [p for p in providers if p not in ALL_PROVIDERS]
+        if invalid:
+            print(f"Unknown providers: {', '.join(invalid)}", file=sys.stderr)
+            print(f"Available: {', '.join(ALL_PROVIDERS)}", file=sys.stderr)
+            return 1
+    else:
+        providers = ALL_PROVIDERS
+
+    registry = _create_registry(providers)
+    print(f"Enabled providers: {', '.join(registry.keys())}", file=sys.stderr)
+    daemon = UnifiedAskDaemon(host=host, port=port, state_file=state_file, registry=registry)
+    return daemon.serve_forever()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

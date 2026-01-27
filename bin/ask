@@ -48,6 +48,80 @@ PROVIDER_DAEMONS = {
 }
 
 
+def _use_unified_daemon() -> bool:
+    """Check if unified askd daemon should be used."""
+    val = (os.environ.get("CCB_UNIFIED_ASKD") or "").strip().lower()
+    return val in ("1", "true", "yes", "on")
+
+
+def _send_via_unified_daemon(
+    provider: str,
+    message: str,
+    timeout: float,
+    no_wrap: bool,
+    caller: str,
+) -> int:
+    """Send request via unified askd daemon."""
+    import json
+    import socket
+
+    from askd_runtime import state_file_path
+    import askd_rpc
+
+    state_file = state_file_path("askd.json")
+    state = askd_rpc.read_state(state_file)
+    if not state:
+        print("[ERROR] Unified askd daemon not running", file=sys.stderr)
+        return EXIT_ERROR
+
+    host = state.get("connect_host") or state.get("host") or "127.0.0.1"
+    port = int(state.get("port") or 0)
+    token = state.get("token") or ""
+
+    if not port:
+        print("[ERROR] Invalid askd state", file=sys.stderr)
+        return EXIT_ERROR
+
+    req = {
+        "type": "ask.request",
+        "v": 1,
+        "id": make_task_id(),
+        "token": token,
+        "provider": provider,
+        "work_dir": os.getcwd(),
+        "timeout_s": timeout,
+        "message": message,
+        "no_wrap": no_wrap,
+        "caller": caller,
+    }
+
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout + 10 if timeout > 0 else 3610)
+        sock.connect((host, port))
+        sock.sendall((json.dumps(req) + "\n").encode("utf-8"))
+
+        data = b""
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+            if b"\n" in data:
+                break
+
+        sock.close()
+        resp = json.loads(data.decode("utf-8").strip())
+        exit_code = int(resp.get("exit_code") or 0)
+        reply = resp.get("reply") or ""
+        if reply:
+            print(reply)
+        return exit_code
+    except Exception as e:
+        print(f"[ERROR] {e}", file=sys.stderr)
+        return EXIT_ERROR
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
     val = (os.environ.get(name) or "").strip().lower()
     if not val:
@@ -164,6 +238,11 @@ def main(argv: list[str]) -> int:
     if not message:
         print("[ERROR] Message cannot be empty", file=sys.stderr)
         return EXIT_ERROR
+
+    # Use unified daemon if enabled (CCB_UNIFIED_ASKD=1)
+    if _use_unified_daemon() and foreground_mode:
+        caller = _default_caller()
+        return _send_via_unified_daemon(provider, message, timeout, no_wrap, caller)
 
     # Notify mode: sync send, no wait for reply (used for hook notifications)
     if notify_mode:
