@@ -19,6 +19,7 @@ import argparse
 import json
 import os
 import subprocess
+import shutil
 import sys
 from pathlib import Path
 
@@ -181,11 +182,28 @@ def send_via_tmux(pane_id: str, message: str) -> bool:
 
 def find_ask_command() -> str | None:
     """Find the ask command in common locations."""
+    found = shutil.which("ask")
+    if found:
+        return found
+
     ask_paths = [
+        # Prefer the sibling command in the same installed bin folder.
         Path(__file__).resolve().parent / "ask",
+    ]
+
+    bin_dir = (os.environ.get("CODEX_BIN_DIR") or "").strip()
+    if bin_dir:
+        ask_paths.append(Path(bin_dir).expanduser() / "ask")
+
+    install_prefix = (os.environ.get("CODEX_INSTALL_PREFIX") or "").strip()
+    if install_prefix:
+        ask_paths.append(Path(install_prefix).expanduser() / "bin" / "ask")
+
+    # Legacy/default locations
+    ask_paths.extend([
         Path.home() / ".local" / "share" / "codex-dual" / "bin" / "ask",
         Path.home() / ".local" / "bin" / "ask",
-    ]
+    ])
     # On Windows, also check LOCALAPPDATA
     if os.name == "nt":
         localappdata = os.environ.get("LOCALAPPDATA", "")
@@ -259,10 +277,14 @@ Result: {reply_content}
 
     # Search for session file in common locations
     work_dir = os.environ.get("CCB_WORK_DIR", os.getcwd())
-    search_paths = [
-        Path(work_dir) / ".ccb_config" / session_filename,
-        Path.home() / ".local" / "share" / "codex-dual" / ".ccb_config" / session_filename,
-    ]
+    search_paths = [Path(work_dir) / ".ccb_config" / session_filename]
+
+    install_prefix = (os.environ.get("CODEX_INSTALL_PREFIX") or "").strip()
+    if install_prefix:
+        search_paths.append(Path(install_prefix).expanduser() / ".ccb_config" / session_filename)
+
+    # Legacy/default install location
+    search_paths.append(Path.home() / ".local" / "share" / "codex-dual" / ".ccb_config" / session_filename)
     # On Windows, also check LOCALAPPDATA
     if os.name == "nt":
         localappdata = os.environ.get("LOCALAPPDATA", "")
