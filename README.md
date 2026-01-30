@@ -453,13 +453,13 @@ Check distro name with `wsl -l -v` in PowerShell.
 
 If `ccb`, `cask`, `cping` commands are not found after running `./install.sh install`:
 
-**Cause:** The install directory (`~/.local/bin`) is not in your PATH.
+**Cause:** The install directory (`$CODEX_BIN_DIR` or default `~/.local/bin`) is not in your PATH.
 
 **Solution:**
 
 ```bash
 # 1. Check if install directory exists
-ls -la ~/.local/bin/
+ls -la "${CODEX_BIN_DIR:-$HOME/.local/bin}/"
 
 # 2. Check if PATH includes the directory
 echo $PATH | tr ':' '\n' | grep local
@@ -468,7 +468,7 @@ echo $PATH | tr ':' '\n' | grep local
 cat ~/.zshrc | grep local
 
 # 4. If not configured, add manually
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+echo 'export PATH="${CODEX_BIN_DIR:-$HOME/.local/bin}:$PATH"' >> ~/.zshrc
 
 # 5. Reload config
 source ~/.zshrc
@@ -482,7 +482,7 @@ If WezTerm cannot find ccb commands but regular Terminal can:
 - Add PATH to `~/.zprofile` as well:
 
 ```bash
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile
+echo 'export PATH="${CODEX_BIN_DIR:-$HOME/.local/bin}:$PATH"' >> ~/.zprofile
 ```
 
 Then restart WezTerm completely (Cmd+Q, reopen).
