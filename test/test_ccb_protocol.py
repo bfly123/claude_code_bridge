@@ -11,8 +11,8 @@ def test_make_req_id_format_and_uniqueness() -> None:
     assert len(set(ids)) == len(ids)
     for rid in ids:
         assert isinstance(rid, str)
-        assert len(rid) == 32
-        assert re.fullmatch(r"[0-9a-f]{32}", rid) is not None
+        # Format: YYYYMMDD-HHMMSS-mmm-PID-counter
+        assert re.fullmatch(r"\d{8}-\d{6}-\d{3}-\d+-\d+", rid) is not None
 
 
 def test_wrap_codex_prompt_structure() -> None:
