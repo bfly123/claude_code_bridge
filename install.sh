@@ -67,6 +67,18 @@ msg() {
     wezterm_recommended)
       en_msg="Recommend installing WezTerm as terminal frontend"
       zh_msg="推荐安装 WezTerm 作为终端前端" ;;
+    watchdog_installing)
+      en_msg="Installing Python dependency: watchdog"
+      zh_msg="正在安装 Python 依赖: watchdog" ;;
+    watchdog_installed)
+      en_msg="OK: watchdog installed"
+      zh_msg="OK: watchdog 已安装" ;;
+    watchdog_failed)
+      en_msg="WARN: watchdog install failed (will fall back to polling)"
+      zh_msg="警告：watchdog 安装失败（将退回轮询）" ;;
+    pip_missing)
+      en_msg="WARN: pip not available; please install watchdog manually"
+      zh_msg="警告：未找到 pip，请手动安装 watchdog" ;;
     root_error)
       en_msg="ERROR: Do not run as root/sudo. Please run as normal user."
       zh_msg="错误：请勿以 root/sudo 身份运行。请使用普通用户执行。" ;;
@@ -109,6 +121,7 @@ SCRIPTS_TO_LINK=(
   bin/autonew
   bin/ccb-completion-hook
   bin/maild
+  bin/ctx-transfer
   ccb
 )
 
@@ -231,6 +244,38 @@ require_python_version() {
     exit 1
   fi
   echo "OK: Python $version ($PYTHON_BIN)"
+}
+
+python_has_module() {
+  local module="$1"
+  if ! pick_any_python_bin; then
+    return 1
+  fi
+  "$PYTHON_BIN" - <<PY >/dev/null 2>&1
+import importlib.util
+import sys
+sys.exit(0 if importlib.util.find_spec("${module}") else 1)
+PY
+}
+
+install_watchdog() {
+  if python_has_module "watchdog"; then
+    msg watchdog_installed
+    return 0
+  fi
+  msg watchdog_installing
+  if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
+    msg pip_missing
+    return 1
+  fi
+  if "$PYTHON_BIN" -m pip install --user "watchdog>=2.1.0" >/dev/null 2>&1; then
+    if python_has_module "watchdog"; then
+      msg watchdog_installed
+      return 0
+    fi
+  fi
+  msg watchdog_failed
+  return 1
 }
 
 # Return linux / macos / unknown based on uname
@@ -1210,6 +1255,7 @@ install_requirements() {
   check_wsl_compatibility
   confirm_backend_env_wsl
   require_python_version
+  install_watchdog || true
   require_terminal_backend
   if ! has_wezterm; then
     echo

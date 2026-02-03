@@ -16,9 +16,11 @@ from askd_runtime import log_path, write_log
 from ccb_protocol import BEGIN_PREFIX, REQ_ID_PREFIX
 from claude_comm import ClaudeLogReader
 from completion_hook import notify_completion
+from laskd_registry import get_session_registry
 from laskd_protocol import extract_reply_for_req, is_done_text, wrap_claude_prompt
 from laskd_session import compute_session_key, load_project_session
 from providers import LASKD_SPEC
+from session_file_watcher import HAS_WATCHDOG
 from terminal import get_backend_for_session
 
 
@@ -718,6 +720,19 @@ class ClaudeAdapter(BaseProviderAdapter):
     @property
     def session_filename(self) -> str:
         return ".claude-session"
+
+    def on_start(self) -> None:
+        try:
+            get_session_registry()
+            _write_log(f"[INFO] claude log watcher enabled watchdog={HAS_WATCHDOG}")
+        except Exception as exc:
+            _write_log(f"[WARN] claude log watcher init failed: {exc}")
+
+    def on_stop(self) -> None:
+        try:
+            get_session_registry().stop_monitor()
+        except Exception:
+            pass
 
     def load_session(self, work_dir: Path) -> Optional[Any]:
         return load_project_session(work_dir)

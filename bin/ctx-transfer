@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""
+ctx-transfer - Transfer conversation context from Claude to other providers.
+
+Usage:
+    ctx-transfer [OPTIONS]
+
+Examples:
+    ctx-transfer --last 5 --to codex    # Transfer last 5 conversations
+    ctx-transfer --dry-run              # Preview without sending
+    ctx-transfer --output context.md    # Write to file
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+script_dir = Path(__file__).resolve().parent
+lib_dir = script_dir.parent / "lib"
+sys.path.insert(0, str(lib_dir))
+
+from memory import (
+    ContextTransfer,
+    SessionNotFoundError,
+    SessionParseError,
+)
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        prog="ctx-transfer",
+        description="Transfer conversation context from Claude to other providers.",
+    )
+    parser.add_argument(
+        "-n", "--last",
+        type=int,
+        default=3,
+        help="Number of conversation pairs to transfer (default: 3)",
+    )
+    parser.add_argument(
+        "-t", "--to",
+        dest="provider",
+        default="codex",
+        choices=["codex", "gemini", "opencode", "droid"],
+        help="Target provider (default: codex)",
+    )
+    parser.add_argument(
+        "-d", "--dry-run",
+        action="store_true",
+        help="Preview output without sending",
+    )
+    parser.add_argument(
+        "-o", "--output",
+        type=Path,
+        help="Write output to file instead of sending",
+    )
+    parser.add_argument(
+        "--session-path",
+        type=Path,
+        help="Explicit session JSONL path",
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=8000,
+        help="Maximum tokens to transfer (default: 8000)",
+    )
+    parser.add_argument(
+        "-f", "--format",
+        dest="fmt",
+        default="markdown",
+        choices=["markdown", "plain", "json"],
+        help="Output format (default: markdown)",
+    )
+    parser.add_argument(
+        "-q", "--quiet",
+        action="store_true",
+        help="Suppress informational output",
+    )
+    parser.add_argument(
+        "-s", "--save",
+        action="store_true",
+        help="Save transfer to ~/.ccb/transfers/ (auto-enabled when sending)",
+    )
+    parser.add_argument(
+        "--no-save",
+        action="store_true",
+        help="Disable auto-save when sending to provider",
+    )
+    parser.add_argument(
+        "--detailed",
+        action="store_true",
+        help="Output detailed tool executions with full results",
+    )
+    return parser.parse_args(argv[1:])
+
+
+def main(argv: list[str]) -> int:
+    """Main entry point."""
+    args = parse_args(argv)
+
+    try:
+        transfer = ContextTransfer(
+            max_tokens=args.max_tokens,
+            work_dir=Path.cwd(),
+        )
+
+        # Extract conversations
+        context = transfer.extract_conversations(
+            session_path=args.session_path,
+            last_n=args.last,
+        )
+
+        if not context.conversations:
+            print("No conversations found in session.", file=sys.stderr)
+            return 1
+
+        if not args.quiet:
+            print(
+                f"Extracted {len(context.conversations)} conversation(s) "
+                f"(~{context.token_estimate} tokens)",
+                file=sys.stderr,
+            )
+
+        # Format output
+        formatted = transfer.format_output(context, args.fmt, detailed=args.detailed)
+
+        # Handle output modes
+        if args.dry_run:
+            print(formatted)
+            return 0
+
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(formatted, encoding="utf-8")
+            if not args.quiet:
+                print(f"Written to {args.output}", file=sys.stderr)
+            return 0
+
+        # Save if requested or sending to provider (unless --no-save)
+        should_save = args.save or (not args.no_save)
+        saved_path = None
+        if should_save:
+            saved_path = transfer.save_transfer(context, args.fmt, args.provider)
+            if not args.quiet:
+                print(f"Saved to {saved_path}", file=sys.stderr)
+
+        # Send to provider
+        success, result = transfer.send_to_provider(
+            context, args.provider, args.fmt
+        )
+        if success:
+            if not args.quiet:
+                print(f"Sent to {args.provider}", file=sys.stderr)
+            if result:
+                print(result)
+            return 0
+        else:
+            print(f"Failed to send: {result}", file=sys.stderr)
+            return 1
+
+    except SessionNotFoundError as e:
+        print(f"Session not found: {e}", file=sys.stderr)
+        print("Hints:", file=sys.stderr)
+        print("  - Ensure Claude Code is running in this directory", file=sys.stderr)
+        print("  - Use --session-path to specify a session file", file=sys.stderr)
+        return 1
+    except SessionParseError as e:
+        print(f"Session parse error: {e}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 130
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

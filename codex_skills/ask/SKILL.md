@@ -1,6 +1,5 @@
 ---
 name: ask
-description: Send via ask, end turn immediately; use when user explicitly delegates to any AI provider (gemini/codex/opencode/droid); NOT for questions about the providers themselves.
 metadata:
   short-description: Ask AI provider asynchronously
 ---
@@ -17,9 +16,6 @@ The first argument must be the provider name. The message MUST be provided via s
 - `claude` - Send to Claude
 - `opencode` - Send to OpenCode
 - `droid` - Send to Droid
-Optional flags after the provider:
-- `--foreground` / `--background`
-- Env overrides: `CCB_ASK_FOREGROUND=1` / `CCB_ASK_BACKGROUND=1`
 
 ## Execution (MANDATORY)
 

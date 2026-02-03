@@ -137,6 +137,16 @@ class UnifiedAskDaemon:
                 "reply": f"Unknown provider: {provider}",
             }
 
+        caller = str(msg.get("caller") or "").strip()
+        if not caller:
+            return {
+                "type": "ask.response",
+                "v": 1,
+                "id": msg.get("id"),
+                "exit_code": 1,
+                "reply": "Missing 'caller' field (required).",
+            }
+
         try:
             request = ProviderRequest(
                 client_id=str(msg.get("id") or ""),
@@ -144,9 +154,9 @@ class UnifiedAskDaemon:
                 timeout_s=float(msg.get("timeout_s") or 300.0),
                 quiet=bool(msg.get("quiet") or False),
                 message=str(msg.get("message") or ""),
+                caller=caller,
                 output_path=str(msg.get("output_path")) if msg.get("output_path") else None,
                 req_id=str(msg.get("req_id")) if msg.get("req_id") else None,
-                caller=str(msg.get("caller") or "claude"),
                 no_wrap=bool(msg.get("no_wrap") or False),
                 email_req_id=str(msg.get("email_req_id") or ""),
                 email_msg_id=str(msg.get("email_msg_id") or ""),

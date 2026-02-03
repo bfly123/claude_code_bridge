@@ -20,9 +20,9 @@ class ProviderRequest:
     timeout_s: float
     quiet: bool
     message: str
+    caller: str
     output_path: Optional[str] = None
     req_id: Optional[str] = None
-    caller: str = "claude"
     no_wrap: bool = False
     # Email-related fields for email caller
     email_req_id: str = ""

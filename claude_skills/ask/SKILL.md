@@ -1,11 +1,12 @@
 ---
 name: ask
-description: Async via ask, end turn immediately; use when user explicitly delegates to any AI provider (gemini/codex/opencode/droid); NOT for questions about the providers themselves.
+description: Send a request to a specified AI provider via the unified ask command.
+
 metadata:
   short-description: Ask AI provider asynchronously
 ---
 
-# Ask AI Provider (Async)
+# Ask AI Provider
 
 Send the user's request to specified AI provider asynchronously.
 
@@ -19,20 +20,12 @@ The first argument must be the provider name, followed by the message:
 
 ## Execution (MANDATORY)
 
-**Windows Native (PowerShell/WezTerm) - USE THIS:**
-```
-Bash(ask $PROVIDER "$MESSAGE")
-```
-
-**Linux/macOS/WSL only:**
-```
-Bash(nohup sh -c 'CCB_CALLER=claude ask $PROVIDER <<EOF
+```bash
+Bash(CCB_CALLER=claude ask $PROVIDER <<'EOF'
 $MESSAGE
 EOF
-' > /dev/null 2>&1 &)
+)
 ```
-
-IMPORTANT: On Windows, just use `ask` directly. Do NOT use nohup/sh - they don't exist on native Windows!
 
 ## Rules
 
@@ -49,4 +42,5 @@ IMPORTANT: On Windows, just use `ask` directly. Do NOT use nohup/sh - they don't
 
 ## Notes
 
+- `ask` already runs in background by default; no manual `nohup` is needed.
 - If it fails, check backend health with the corresponding ping command (`ping <provider>` (e.g., `ping gemini`)).
