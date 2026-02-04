@@ -4111,14 +4111,17 @@ def cmd_update(args):
         if result.returncode == 0:
             print(result.stdout.strip() if result.stdout.strip() else "Already up to date.")
             print("🔧 Reinstalling...")
+            env = os.environ.copy()
+            env["CCB_CLEAN_INSTALL"] = "1"
             # Windows: use install.ps1, Unix: use install.sh
             if platform.system() == "Windows":
                 subprocess.run(
                     ["powershell", "-ExecutionPolicy", "Bypass", "-File",
-                     str(install_dir / "install.ps1"), "install"]
+                     str(install_dir / "install.ps1"), "install"],
+                    env=env
                 )
             else:
-                subprocess.run([str(install_dir / "install.sh"), "install"])
+                subprocess.run([str(install_dir / "install.sh"), "install"], env=env)
             # Show upgrade info
             new_info = _get_version_info(install_dir)
             old_str = _format_version_info(old_info)
@@ -4243,6 +4246,7 @@ def cmd_update(args):
         print("🔧 Installing...")
         env = os.environ.copy()
         env["CODEX_INSTALL_PREFIX"] = str(install_dir)
+        env["CCB_CLEAN_INSTALL"] = "1"
         # Windows: use install.ps1, Unix: use install.sh
         if platform.system() == "Windows":
             ps1_script = extracted_dir / "install.ps1"

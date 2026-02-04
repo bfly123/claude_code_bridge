@@ -199,6 +199,21 @@ function Install-Native {
   Write-Host "Installing ccb to $InstallPrefix ..."
   Write-Host "Using Python: $pythonCmd"
 
+  $cleanInstall = $false
+  $cleanEnv = ($env:CCB_CLEAN_INSTALL -as [string])
+  if ($cleanEnv -and $cleanEnv.Trim() -notin @("0", "false", "no", "off")) {
+    $cleanInstall = $true
+  }
+  if ($cleanInstall -and (Test-Path $InstallPrefix)) {
+    $repoRootResolved = $repoRoot
+    $installResolved = $InstallPrefix
+    try { $repoRootResolved = (Resolve-Path $repoRoot).Path } catch {}
+    try { $installResolved = (Resolve-Path $InstallPrefix).Path } catch {}
+    if ($repoRootResolved -ne $installResolved) {
+      Remove-Item -Recurse -Force $InstallPrefix
+    }
+  }
+
   if (-not (Test-Path $InstallPrefix)) {
     New-Item -ItemType Directory -Path $InstallPrefix -Force | Out-Null
   }
