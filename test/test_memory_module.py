@@ -216,17 +216,18 @@ class TestClaudeSessionParser:
                 "parentUuid": "1",
             }) + "\n")
             f.flush()
+            temp_path = f.name
 
-            parser = ClaudeSessionParser()
-            entries = parser.parse_session(Path(f.name))
+        parser = ClaudeSessionParser()
+        entries = parser.parse_session(Path(temp_path))
 
-            assert len(entries) == 2
-            assert entries[0].role == "user"
-            assert entries[0].content == "Hello"
-            assert entries[1].role == "assistant"
-            assert entries[1].content == "Hi there"
+        assert len(entries) == 2
+        assert entries[0].role == "user"
+        assert entries[0].content == "Hello"
+        assert entries[1].role == "assistant"
+        assert entries[1].content == "Hi there"
 
-            Path(f.name).unlink()
+        Path(temp_path).unlink()
 
     def test_parse_session_with_content_blocks(self):
         with tempfile.NamedTemporaryFile(
@@ -243,15 +244,16 @@ class TestClaudeSessionParser:
                 "uuid": "1",
             }) + "\n")
             f.flush()
+            temp_path = f.name
 
-            parser = ClaudeSessionParser()
-            entries = parser.parse_session(Path(f.name))
+        parser = ClaudeSessionParser()
+        entries = parser.parse_session(Path(temp_path))
 
-            assert len(entries) == 1
-            assert "Part 1" in entries[0].content
-            assert "Part 2" in entries[0].content
+        assert len(entries) == 1
+        assert "Part 1" in entries[0].content
+        assert "Part 2" in entries[0].content
 
-            Path(f.name).unlink()
+        Path(temp_path).unlink()
 
     def test_parse_session_corrupted_tolerant(self):
         with tempfile.NamedTemporaryFile(
@@ -268,14 +270,15 @@ class TestClaudeSessionParser:
                 "message": {"content": "Hi"},
             }) + "\n")
             f.flush()
+            temp_path = f.name
 
-            parser = ClaudeSessionParser()
-            entries = parser.parse_session(Path(f.name))
+        parser = ClaudeSessionParser()
+        entries = parser.parse_session(Path(temp_path))
 
-            # Should still parse valid entries
-            assert len(entries) == 2
+        # Should still parse valid entries
+        assert len(entries) == 2
 
-            Path(f.name).unlink()
+        Path(temp_path).unlink()
 
     def test_get_session_info(self):
         with tempfile.NamedTemporaryFile(
@@ -283,14 +286,15 @@ class TestClaudeSessionParser:
         ) as f:
             f.write("{}\n")
             f.flush()
+            temp_path = f.name
 
-            parser = ClaudeSessionParser()
-            info = parser.get_session_info(Path(f.name))
+        parser = ClaudeSessionParser()
+        info = parser.get_session_info(Path(temp_path))
 
-            assert info.session_id == Path(f.name).stem
-            assert info.session_path == f.name
+        assert info.session_id == Path(temp_path).stem
+        assert info.session_path == temp_path
 
-            Path(f.name).unlink()
+        Path(temp_path).unlink()
 
 
 class TestIntegration:
