@@ -69,9 +69,7 @@ def _daemon_request_with_retries(
     # Stale state files can block daemon mode (e.g. daemon exited/crashed but the json remains).
     if state_file and state_file.exists():
         try:
-            from oaskd_daemon import ping_daemon
-
-            if not ping_daemon(timeout_s=0.2, state_file=state_file):
+            if not wait_for_daemon_ready(OASK_CLIENT_SPEC, 0.2, state_file):
                 try:
                     state_file.unlink()
                 except Exception:
