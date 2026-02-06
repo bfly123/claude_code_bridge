@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import shutil
 import sys
 import threading
 from pathlib import Path
@@ -40,17 +41,34 @@ def _run_hook_async(
     def _run():
         try:
             # Find ccb-completion-hook script (Python script only, not .cmd wrapper)
-            script_paths = [
-                Path(__file__).parent.parent / "bin" / "ccb-completion-hook",
-                Path.home() / ".local" / "bin" / "ccb-completion-hook",
-                Path("/usr/local/bin/ccb-completion-hook"),
-            ]
+            script_paths: list[Path] = []
+
+            for name in ("CODEX_BIN_DIR", "CCB_BIN_DIR"):
+                bin_dir = (os.environ.get(name) or "").strip()
+                if bin_dir:
+                    script_paths.append(Path(bin_dir).expanduser() / "ccb-completion-hook")
+
+            install_prefix = (os.environ.get("CODEX_INSTALL_PREFIX") or "").strip()
+            if install_prefix:
+                script_paths.append(Path(install_prefix).expanduser() / "bin" / "ccb-completion-hook")
+
+            script_paths.append(Path(__file__).parent.parent / "bin" / "ccb-completion-hook")
+
             # On Windows, check installed location (Python script, not .cmd)
             if os.name == "nt":
                 localappdata = os.environ.get("LOCALAPPDATA", "")
                 if localappdata:
                     # The actual Python script is in the bin folder without extension
-                    script_paths.insert(0, Path(localappdata) / "codex-dual" / "bin" / "ccb-completion-hook")
+                    script_paths.append(Path(localappdata) / "codex-dual" / "bin" / "ccb-completion-hook")
+
+            script_paths.extend([
+                Path.home() / ".local" / "bin" / "ccb-completion-hook",
+                Path("/usr/local/bin/ccb-completion-hook"),
+            ])
+
+            found = shutil.which("ccb-completion-hook")
+            if found:
+                script_paths.append(Path(found))
 
             script = None
             for p in script_paths:

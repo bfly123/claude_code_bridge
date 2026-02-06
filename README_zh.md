@@ -486,13 +486,15 @@ cping
 
 如果运行 `./install.sh install` 后找不到 `ccb`、`cask`、`cping` 等命令：
 
-**原因：** 安装目录 (`~/.local/bin`) 不在 PATH 中。
+**原因：** 安装目录（`$CODEX_BIN_DIR` 或 `$CCB_BIN_DIR`，默认 `~/.local/bin`）不在 PATH 中。
+
+**提示：** 运行时会将 `CCB_BIN_DIR` 视为 `CODEX_BIN_DIR` 的别名。
 
 **解决方法：**
 
 ```bash
 # 1. 检查安装目录是否存在
-ls -la ~/.local/bin/
+ls -la "${CODEX_BIN_DIR:-${CCB_BIN_DIR:-$HOME/.local/bin}}/"
 
 # 2. 检查 PATH 是否包含该目录
 echo $PATH | tr ':' '\n' | grep local
@@ -501,7 +503,7 @@ echo $PATH | tr ':' '\n' | grep local
 cat ~/.zshrc | grep local
 
 # 4. 如果没有配置，手动添加
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+echo 'export PATH="${CODEX_BIN_DIR:-${CCB_BIN_DIR:-$HOME/.local/bin}}:$PATH"' >> ~/.zshrc
 
 # 5. 重新加载配置
 source ~/.zshrc
@@ -515,7 +517,7 @@ source ~/.zshrc
 - 同时添加 PATH 到 `~/.zprofile`：
 
 ```bash
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile
+echo 'export PATH="${CODEX_BIN_DIR:-${CCB_BIN_DIR:-$HOME/.local/bin}}:$PATH"' >> ~/.zprofile
 ```
 
 然后完全重启 WezTerm（Cmd+Q 退出后重新打开）。

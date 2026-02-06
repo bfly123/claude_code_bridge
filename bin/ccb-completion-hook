@@ -24,6 +24,7 @@ import argparse
 import json
 import os
 import subprocess
+import shutil
 import sys
 from pathlib import Path
 
@@ -52,6 +53,43 @@ def env_float(name: str, default: float) -> float:
         return float(val)
     except ValueError:
         return default
+
+
+def _iter_env_bin_dirs() -> list[Path]:
+    bin_dirs: list[Path] = []
+    for name in ("CODEX_BIN_DIR", "CCB_BIN_DIR"):
+        value = (os.environ.get(name) or "").strip()
+        if value:
+            bin_dirs.append(Path(value).expanduser())
+    return bin_dirs
+
+
+def _build_ask_notify_cmd(ask_cmd: str, caller: str, message: str) -> list[str]:
+    args = [caller, "--notify", "--no-wrap", message]
+    if os.name != "nt":
+        return [ask_cmd, *args]
+
+    suffix = Path(ask_cmd).suffix.lower()
+    if suffix in (".cmd", ".bat"):
+        return ["cmd.exe", "/c", ask_cmd, *args]
+    if suffix == ".ps1":
+        return ["powershell", "-ExecutionPolicy", "Bypass", "-File", ask_cmd, *args]
+    if suffix in ("", ".py"):
+        return [sys.executable, ask_cmd, *args]
+    return [ask_cmd, *args]
+
+
+def _run_ask_notify(ask_cmd: str, caller: str, message: str, timeout: float) -> int:
+    try:
+        result = subprocess.run(
+            _build_ask_notify_cmd(ask_cmd, caller, message),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return result.returncode
+    except Exception:
+        return 0
 
 
 def load_session_file(session_path: Path) -> dict:
@@ -187,15 +225,32 @@ def send_via_tmux(pane_id: str, message: str) -> bool:
 def find_ask_command() -> str | None:
     """Find the ask command in common locations."""
     ask_paths = [
+        # Prefer the sibling command in the same installed bin folder.
         Path(__file__).resolve().parent / "ask",
-        Path.home() / ".local" / "share" / "codex-dual" / "bin" / "ask",
-        Path.home() / ".local" / "bin" / "ask",
     ]
-    # On Windows, also check LOCALAPPDATA
+
+    for bin_dir in _iter_env_bin_dirs():
+        ask_paths.append(bin_dir / "ask")
+
+    install_prefix = (os.environ.get("CODEX_INSTALL_PREFIX") or "").strip()
+    if install_prefix:
+        ask_paths.append(Path(install_prefix).expanduser() / "bin" / "ask")
+
+    # Windows default install location
     if os.name == "nt":
         localappdata = os.environ.get("LOCALAPPDATA", "")
         if localappdata:
-            ask_paths.insert(0, Path(localappdata) / "codex-dual" / "bin" / "ask")
+            ask_paths.append(Path(localappdata) / "codex-dual" / "bin" / "ask")
+
+    # Legacy/default locations
+    ask_paths.extend([
+        Path.home() / ".local" / "share" / "codex-dual" / "bin" / "ask",
+        Path.home() / ".local" / "bin" / "ask",
+    ])
+
+    found = shutil.which("ask")
+    if found:
+        ask_paths.append(Path(found))
 
     for p in ask_paths:
         if p.exists():
@@ -365,7 +420,10 @@ Result: {reply_content}
     session_filename = session_files.get(caller, ".claude-session")
 
     # Search for session file in multiple locations (order matters - most specific first)
-    work_dir = os.environ.get("CCB_WORK_DIR", "")
+    work_dir = os.environ.get("CCB_WORK_DIR", "").strip()
+    if not work_dir:
+        work_dir = os.getcwd()
+
     search_paths = []
 
     # 1. Request's work_dir (most specific)
@@ -374,13 +432,18 @@ Result: {reply_content}
 
     # 2. Current working directory (fallback)
     cwd = os.getcwd()
-    if cwd != work_dir:
+    if cwd and cwd != work_dir:
         search_paths.append(Path(cwd) / ".ccb_config" / session_filename)
 
-    # 3. User's home-based locations
+    # 3. Explicit install prefix (optional)
+    install_prefix = (os.environ.get("CODEX_INSTALL_PREFIX") or "").strip()
+    if install_prefix:
+        search_paths.append(Path(install_prefix).expanduser() / ".ccb_config" / session_filename)
+
+    # 4. Legacy/default install location
     search_paths.append(Path.home() / ".local" / "share" / "codex-dual" / ".ccb_config" / session_filename)
 
-    # 4. On Windows, also check LOCALAPPDATA
+    # 5. On Windows, also check LOCALAPPDATA
     if os.name == "nt":
         localappdata = os.environ.get("LOCALAPPDATA", "")
         if localappdata:
@@ -412,25 +475,7 @@ Result: {reply_content}
         ask_cmd = find_ask_command()
         if not ask_cmd:
             return 0
-        try:
-            # Use sys.executable to run ask command on Windows
-            if os.name == "nt":
-                result = subprocess.run(
-                    [sys.executable, ask_cmd, caller, "--notify", "--no-wrap", message],
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout
-                )
-            else:
-                result = subprocess.run(
-                    [ask_cmd, caller, "--notify", "--no-wrap", message],
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout
-                )
-            return result.returncode
-        except Exception:
-            return 0
+        return _run_ask_notify(ask_cmd, caller, message, timeout)
 
     # Send directly via terminal backend
     if send_via_terminal(pane_id, message, terminal, session_data):
@@ -441,23 +486,7 @@ Result: {reply_content}
     ask_cmd = find_ask_command()
     if not ask_cmd:
         return 0
-    try:
-        if os.name == "nt":
-            subprocess.run(
-                [sys.executable, ask_cmd, caller, "--notify", "--no-wrap", message],
-                capture_output=True,
-                text=True,
-                timeout=timeout
-            )
-        else:
-            subprocess.run(
-                [ask_cmd, caller, "--notify", "--no-wrap", message],
-                capture_output=True,
-                text=True,
-                timeout=timeout
-            )
-    except Exception:
-        pass
+    _run_ask_notify(ask_cmd, caller, message, timeout)
     return 0
 
 
