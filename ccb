@@ -53,6 +53,55 @@ _MNT_DRIVE_RE = re.compile(r"^/mnt/([A-Za-z])/(.*)$")
 _MSYS_DRIVE_RE = re.compile(r"^/([A-Za-z])/(.*)$")
 
 
+def _get_bin_dir() -> Path:
+    """Best-effort resolve the bin dir where CCB helper scripts live.
+
+    Priority:
+    1) CODEX_BIN_DIR / CCB_BIN_DIR env
+    2) directory of the invoked executable on PATH (shutil.which)
+    3) default ~/.local/bin
+    """
+    env_bin = (os.environ.get("CODEX_BIN_DIR") or os.environ.get("CCB_BIN_DIR") or "").strip()
+    if env_bin:
+        return Path(env_bin).expanduser()
+
+    argv0 = (sys.argv[0] or "").strip()
+    candidates: list[Path] = []
+    if argv0:
+        # If invoked via an explicit path, keep its directory (do NOT resolve symlinks).
+        if ("/" in argv0) or ("\\" in argv0):
+            candidates.append(Path(argv0).expanduser())
+        found = shutil.which(argv0)
+        if found:
+            candidates.append(Path(found))
+
+    found_ccb = shutil.which("ccb")
+    if found_ccb:
+        candidates.append(Path(found_ccb))
+
+    for p in candidates:
+        try:
+            if p.exists():
+                return p.parent
+        except Exception:
+            continue
+
+    return Path.home() / ".local" / "bin"
+
+
+def _find_helper_script(name: str) -> Path | None:
+    """Locate an installed helper script by name."""
+    found = shutil.which(name)
+    if found:
+        return Path(found)
+
+    for base in (_get_bin_dir(), script_dir / "config"):
+        p = base / name
+        if p.exists():
+            return p
+    return None
+
+
 def _looks_like_windows_path(value: str) -> bool:
     s = value.strip()
     if not s:
@@ -901,14 +950,15 @@ class AILauncher:
         Enable/disable CCB tmux UI theming for the *current tmux session*.
 
         This is session-scoped and reversible (saves/restores user options) via helper scripts
-        installed to `~/.local/bin/`.
+        installed to BIN_DIR (see env `CODEX_BIN_DIR`).
         """
         if self.terminal_type != "tmux":
             return
         if not os.environ.get("TMUX"):
             return
-        script = Path.home() / ".local" / "bin" / ("ccb-tmux-on.sh" if active else "ccb-tmux-off.sh")
-        if not script.exists():
+        script_name = "ccb-tmux-on.sh" if active else "ccb-tmux-off.sh"
+        script = _find_helper_script(script_name)
+        if not script:
             return
         try:
             debug = os.environ.get("CCB_DEBUG") in ("1", "true", "yes")
@@ -3847,9 +3897,13 @@ def _detect_cca() -> tuple[str | None, str | None]:
         install_dir = _infer_install_dir_from_exe(exe)
         return str(exe.resolve()), str(install_dir)
     candidates = [
-        Path.home() / ".local/share/claude_code_autoflow",
-        Path.home() / ".local/bin/cca",
+        Path.home() / ".local" / "share" / "claude_code_autoflow",
     ]
+    # If user configured a custom bin dir for tools, also consider it for legacy fallbacks.
+    env_bin_dir = (os.environ.get("CODEX_BIN_DIR") or os.environ.get("CCB_BIN_DIR") or "").strip()
+    if env_bin_dir:
+        candidates.append(Path(env_bin_dir).expanduser() / "cca")
+    candidates.append(Path.home() / ".local" / "bin" / "cca")
     # Windows 特定路径
     if platform.system() == "Windows":
         localappdata = os.environ.get("LOCALAPPDATA", "")

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import shutil
 import sys
 import threading
 from pathlib import Path
@@ -40,11 +41,25 @@ def _run_hook_async(
     def _run():
         try:
             # Find ccb-completion-hook script (Python script only, not .cmd wrapper)
-            script_paths = [
+            script_paths: list[Path] = []
+
+            found = shutil.which("ccb-completion-hook")
+            if found:
+                script_paths.append(Path(found))
+
+            bin_dir = (os.environ.get("CODEX_BIN_DIR") or "").strip()
+            if bin_dir:
+                script_paths.append(Path(bin_dir).expanduser() / "ccb-completion-hook")
+
+            install_prefix = (os.environ.get("CODEX_INSTALL_PREFIX") or "").strip()
+            if install_prefix:
+                script_paths.append(Path(install_prefix).expanduser() / "bin" / "ccb-completion-hook")
+
+            script_paths.extend([
                 Path(__file__).parent.parent / "bin" / "ccb-completion-hook",
                 Path.home() / ".local" / "bin" / "ccb-completion-hook",
                 Path("/usr/local/bin/ccb-completion-hook"),
-            ]
+            ])
             # On Windows, check installed location (Python script, not .cmd)
             if os.name == "nt":
                 localappdata = os.environ.get("LOCALAPPDATA", "")

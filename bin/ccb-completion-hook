@@ -24,6 +24,7 @@ import argparse
 import json
 import os
 import subprocess
+import shutil
 import sys
 from pathlib import Path
 
@@ -186,11 +187,28 @@ def send_via_tmux(pane_id: str, message: str) -> bool:
 
 def find_ask_command() -> str | None:
     """Find the ask command in common locations."""
+    found = shutil.which("ask")
+    if found:
+        return found
+
     ask_paths = [
+        # Prefer the sibling command in the same installed bin folder.
         Path(__file__).resolve().parent / "ask",
+    ]
+
+    bin_dir = (os.environ.get("CODEX_BIN_DIR") or "").strip()
+    if bin_dir:
+        ask_paths.append(Path(bin_dir).expanduser() / "ask")
+
+    install_prefix = (os.environ.get("CODEX_INSTALL_PREFIX") or "").strip()
+    if install_prefix:
+        ask_paths.append(Path(install_prefix).expanduser() / "bin" / "ask")
+
+    # Legacy/default locations
+    ask_paths.extend([
         Path.home() / ".local" / "share" / "codex-dual" / "bin" / "ask",
         Path.home() / ".local" / "bin" / "ask",
-    ]
+    ])
     # On Windows, also check LOCALAPPDATA
     if os.name == "nt":
         localappdata = os.environ.get("LOCALAPPDATA", "")
@@ -365,7 +383,10 @@ Result: {reply_content}
     session_filename = session_files.get(caller, ".claude-session")
 
     # Search for session file in multiple locations (order matters - most specific first)
-    work_dir = os.environ.get("CCB_WORK_DIR", "")
+    work_dir = os.environ.get("CCB_WORK_DIR", "").strip()
+    if not work_dir:
+        work_dir = os.getcwd()
+
     search_paths = []
 
     # 1. Request's work_dir (most specific)
@@ -374,13 +395,18 @@ Result: {reply_content}
 
     # 2. Current working directory (fallback)
     cwd = os.getcwd()
-    if cwd != work_dir:
+    if cwd and cwd != work_dir:
         search_paths.append(Path(cwd) / ".ccb_config" / session_filename)
 
-    # 3. User's home-based locations
+    # 3. Explicit install prefix (optional)
+    install_prefix = (os.environ.get("CODEX_INSTALL_PREFIX") or "").strip()
+    if install_prefix:
+        search_paths.append(Path(install_prefix).expanduser() / ".ccb_config" / session_filename)
+
+    # 4. Legacy/default install location
     search_paths.append(Path.home() / ".local" / "share" / "codex-dual" / ".ccb_config" / session_filename)
 
-    # 4. On Windows, also check LOCALAPPDATA
+    # 5. On Windows, also check LOCALAPPDATA
     if os.name == "nt":
         localappdata = os.environ.get("LOCALAPPDATA", "")
         if localappdata:
