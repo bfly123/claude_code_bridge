@@ -1,0 +1,45 @@
+{
+  "taskName": "Hello AutoFlow",
+  "objective": {
+    "goal": "Create hello.py and test_hello.py for AutoFlow E2E verification",
+    "nonGoals": "No packaging, no CI config, no complex project structure",
+    "doneWhen": "hello.py prints Hello AutoFlow and pytest test passes"
+  },
+  "context": {
+    "repoType": "python/shell",
+    "keyFiles": [
+      "hello.py",
+      "test_hello.py"
+    ],
+    "background": "AutoFlow E2E system test task"
+  },
+  "constraints": [
+    "Files in project root",
+    "Minimal implementation"
+  ],
+  "current": {
+    "type": "step",
+    "stepIndex": 2,
+    "subIndex": null
+  },
+  "steps": [
+    {
+      "index": 1,
+      "title": "Create hello.py with main() that prints Hello, AutoFlow!",
+      "status": "done",
+      "attempts": 1,
+      "substeps": []
+    },
+    {
+      "index": 2,
+      "title": "Create test_hello.py with pytest test using capsys",
+      "status": "doing",
+      "attempts": 0,
+      "substeps": []
+    }
+  ],
+  "finalDone": [
+    "python3 hello.py prints Hello, AutoFlow!",
+    "python3 -m pytest test_hello.py passes"
+  ]
+}

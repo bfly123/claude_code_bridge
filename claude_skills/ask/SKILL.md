@@ -25,9 +25,16 @@ Bash(CCB_CALLER=claude ask $PROVIDER "$MESSAGE")
 
 ## Rules
 
-- After running the command, say "[Provider] processing..." and immediately end your turn.
-- Do not wait for results or check status in the same turn.
-- The task ID and log file path will be displayed for tracking.
+- Hard stop contract (MUST):
+  - After running the command, reply with exactly one line: `[Provider] processing...`
+  - Then END YOUR TURN IMMEDIATELY.
+- Forbidden after submit (MUST NOT):
+  - Do not call any more tools in this turn (including Bash/Read/Grep/etc.).
+  - Do not check logs, do not poll status, do not run `pend`.
+  - Do not add extra explanation, suggestions, or follow-up text.
+- If submit fails (non-zero exit):
+  - Reply with exactly one line: `[Provider] submit failed: <short error>`
+  - End your turn immediately.
 
 ## Examples
 
