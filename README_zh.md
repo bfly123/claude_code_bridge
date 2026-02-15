@@ -1,6 +1,6 @@
 <div align="center">
 
-# Claude Code Bridge (ccb) v5.2.2
+# Claude Code Bridge (ccb) v5.2.5
 
 **基于终端分屏的全新多模型交互协作工具**
 **Claude & Codex & Gemini & OpenCode & Droid**
@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/模型皆可控-CF1322?style=for-the-badge" alt="模型皆可控">
 </p>
 
-[![Version](https://img.shields.io/badge/version-5.2.2-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-5.2.5-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 [English](README.md) | **中文**
@@ -51,6 +51,18 @@
 <h2 align="center">🚀 新版本速览</h2>
 
 <details open>
+<summary><b>v5.2.5</b> - 异步护栏加固</summary>
+
+**🔧 异步轮次停止修复：**
+- **全局护栏**：在 `claude-md-ccb.md` 中添加强制 `Async Guardrail` 规则，同时覆盖 `/ask` 技能和直接 `Bash(ask ...)` 调用
+- **标记一致性**：`bin/ask` 现在输出 `[CCB_ASYNC_SUBMITTED provider=xxx]`，与其他 provider 脚本格式统一
+- **技能精简**：Ask 技能规则引用全局护栏并保留本地兜底，单一权威源
+
+此修复防止 Claude 在提交异步任务后继续轮询/休眠。
+
+</details>
+
+<details>
 <summary><b>v5.2.3</b> - 项目内历史记录 & 旧目录兼容</summary>
 
 **📂 项目内历史记录：**
@@ -126,7 +138,7 @@
 | 旧命令 | 新统一命令 |
 |--------|-----------|
 | `cask`, `gask`, `oask`, `dask`, `lask` | `ask <provider> <message>` |
-| `cping`, `gping`, `oping`, `dping`, `lping` | `ping <provider>` |
+| `cping`, `gping`, `oping`, `dping`, `lping` | `ccb-ping <provider>` |
 | `cpend`, `gpend`, `opend`, `dpend`, `lpend` | `pend <provider> [N]` |
 
 **支持的 provider:** `gemini`, `codex`, `opencode`, `droid`, `claude`
@@ -139,7 +151,7 @@
 
 **📦 新技能：**
 - `/ask <provider> <message>` - 请求 AI provider（默认后台）
-- `/ping <provider>` - 测试 provider 连通性
+- `/cping <provider>` - 测试 provider 连通性
 - `/pend <provider> [N]` - 查看最新回复
 
 详见 [CHANGELOG.md](CHANGELOG.md)。
@@ -561,7 +573,7 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile
   - 支持 `--notify` 用于短消息同步通知
   - 支持 `CCB_CALLER` 指定发起者（Codex 环境默认 codex，其它默认 claude）
 
-- **`ping <provider>`** - 统一的连通性测试命令
+- **`ccb-ping <provider>`** - 统一的连通性测试命令
   - 测试指定 provider 的 daemon 是否在线
 
 - **`pend <provider> [N]`** - 统一的查看回复命令
@@ -570,7 +582,7 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile
 
 ### 技能系统 (Skills)
 - `/ask <provider> <message>` - 请求技能（默认后台；Codex 托管环境前台）
-- `/ping <provider>` - 连通性测试技能
+- `/cping <provider>` - 连通性测试技能
 - `/pend <provider>` - 查看回复技能
 
 ### 跨平台支持

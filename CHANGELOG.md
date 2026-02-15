@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v5.2.5 (2026-02-15)
+
+### 🔧 Bug Fixes
+
+- **Async Guardrail**: Added global mandatory turn-stop rule to `claude-md-ccb.md` to prevent Claude from polling after async `ask` submission
+- **Marker Consistency**: `bin/ask` now emits `[CCB_ASYNC_SUBMITTED provider=xxx]` matching all other provider scripts
+- **SKILL.md DRY**: Ask skill rules reference global guardrail with local fallback, eliminating duplicate maintenance
+- **Command References**: Fixed `/ping` → `/cping` and `ping` → `ccb-ping` in docs
+
 ## v5.2.4 (2026-02-11)
 
 ### 🔧 Bug Fixes
@@ -60,7 +69,7 @@
 | Old Commands | New Unified Command |
 |--------------|---------------------|
 | `cask`, `gask`, `oask`, `dask`, `lask` | `ask <provider> <message>` |
-| `cping`, `gping`, `oping`, `dping`, `lping` | `ping <provider>` |
+| `cping`, `gping`, `oping`, `dping`, `lping` | `ccb-ping <provider>` (skill: `/cping`) |
 | `cpend`, `gpend`, `opend`, `dpend`, `lpend` | `pend <provider> [N]` |
 
 **Supported providers:** `gemini`, `codex`, `opencode`, `droid`, `claude`
@@ -68,7 +77,7 @@
 ### 🪟 Windows WezTerm + PowerShell Support
 
 - Full support for Windows native environment with WezTerm terminal
-- `install.ps1` now generates wrappers for `ask`, `ping`, `pend`, `ccb-completion-hook`
+- `install.ps1` now generates wrappers for `ask`, `ccb-ping`, `pend`, `ccb-completion-hook`
 - Background execution uses PowerShell scripts with `DETACHED_PROCESS` flag
 - WezTerm CLI integration with stdin for large payloads (avoids command line length limits)
 - UTF-8 BOM handling for PowerShell-generated session files
@@ -83,13 +92,13 @@
 - `bin/ask`:
   - Unix: Uses `nohup` for true background execution
   - Windows: Uses PowerShell script + message file to avoid escaping issues
-- Added `SKILL.md.powershell` for `ping` and `pend` skills
+- Added `SKILL.md.powershell` for `cping` and `pend` skills
 
 ### 📦 Skills System
 
 New unified skills:
 - `/ask <provider> <message>` - Async request to AI provider
-- `/ping <provider>` - Test provider connectivity
+- `/cping <provider>` - Test provider connectivity
 - `/pend <provider> [N]` - View latest provider reply
 
 ### ⚠️ Breaking Changes
@@ -108,7 +117,7 @@ cpend
 
 # New way
 ask codex "What is 1+1?"
-ping gemini
+ccb-ping gemini
 pend codex
 ```
 

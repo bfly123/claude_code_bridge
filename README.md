@@ -1,6 +1,6 @@
 <div align="center">
 
-# Claude Code Bridge (ccb) v5.2.2
+# Claude Code Bridge (ccb) v5.2.5
 
 **New Multi-Model Collaboration Tool via Split-Pane Terminal**
 **Claude & Codex & Gemini & OpenCode & Droid**
@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Every_Model_Controllable-CF1322?style=for-the-badge" alt="Every Model Controllable">
 </p>
 
-[![Version](https://img.shields.io/badge/version-5.2.2-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-5.2.5-orange.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![CI](https://github.com/bfly123/claude_code_bridge/actions/workflows/test.yml/badge.svg)](https://github.com/bfly123/claude_code_bridge/actions/workflows/test.yml)
@@ -50,6 +50,18 @@
 <h2 align="center">🚀 What's New</h2>
 
 <details open>
+<summary><b>v5.2.5</b> - Async Guardrail Hardening</summary>
+
+**🔧 Async Turn-Stop Fix:**
+- **Global Guardrail**: Added mandatory `Async Guardrail` rule to `claude-md-ccb.md` — covers both `/ask` skill and direct `Bash(ask ...)` calls
+- **Marker Consistency**: `bin/ask` now emits `[CCB_ASYNC_SUBMITTED provider=xxx]` matching all other provider scripts
+- **DRY Skills**: Ask skill rules reference global guardrail with local fallback, single source of truth
+
+This fix prevents Claude from polling/sleeping after submitting async tasks.
+
+</details>
+
+<details>
 <summary><b>v5.2.3</b> - Project-Local History & Legacy Compatibility</summary>
 
 **📂 Project-Local History:**
@@ -149,7 +161,7 @@ See [CHANGELOG.md](CHANGELOG.md) for full details.
 | Old Commands | New Unified Command |
 |--------------|---------------------|
 | `cask`, `gask`, `oask`, `dask`, `lask` | `ask <provider> <message>` |
-| `cping`, `gping`, `oping`, `dping`, `lping` | `ping <provider>` |
+| `cping`, `gping`, `oping`, `dping`, `lping` | `ccb-ping <provider>` |
 | `cpend`, `gpend`, `opend`, `dpend`, `lpend` | `pend <provider> [N]` |
 
 **Supported providers:** `gemini`, `codex`, `opencode`, `droid`, `claude`
@@ -162,7 +174,7 @@ See [CHANGELOG.md](CHANGELOG.md) for full details.
 
 **📦 New Skills:**
 - `/ask <provider> <message>` - Request to AI provider (background by default)
-- `/ping <provider>` - Test provider connectivity
+- `/cping <provider>` - Test provider connectivity
 - `/pend <provider> [N]` - View latest provider reply
 
 See [CHANGELOG.md](CHANGELOG.md) for full details.
@@ -554,7 +566,7 @@ Once started, collaborate naturally. Claude will detect when to delegate tasks.
   - Supports `--notify` for short synchronous notifications
   - Supports `CCB_CALLER` (default: `codex` in Codex sessions, otherwise `claude`)
 
-- **`ping <provider>`** - Unified connectivity test
+- **`ccb-ping <provider>`** - Unified connectivity test
   - Checks if the specified provider's daemon is online
 
 - **`pend <provider> [N]`** - Unified reply fetch
@@ -563,7 +575,7 @@ Once started, collaborate naturally. Claude will detect when to delegate tasks.
 
 ### Skills System
 - `/ask <provider> <message>` - Request skill (background by default; foreground in managed Codex sessions)
-- `/ping <provider>` - Connectivity test skill
+- `/cping <provider>` - Connectivity test skill
 - `/pend <provider>` - Reply fetch skill
 
 ### Cross-Platform Support
