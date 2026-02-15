@@ -25,13 +25,8 @@ Bash(CCB_CALLER=claude ask $PROVIDER "$MESSAGE")
 
 ## Rules
 
-- Hard stop contract (MUST):
-  - After running the command, reply with exactly one line: `[Provider] processing...`
-  - Then END YOUR TURN IMMEDIATELY.
-- Forbidden after submit (MUST NOT):
-  - Do not call any more tools in this turn (including Bash/Read/Grep/etc.).
-  - Do not check logs, do not poll status, do not run `pend`.
-  - Do not add extra explanation, suggestions, or follow-up text.
+- Follow the **Async Guardrail** rule in CLAUDE.md (mandatory).
+- Local fallback: if output contains `CCB_ASYNC_SUBMITTED`, end your turn immediately.
 - If submit fails (non-zero exit):
   - Reply with exactly one line: `[Provider] submit failed: <short error>`
   - End your turn immediately.
@@ -46,4 +41,4 @@ Bash(CCB_CALLER=claude ask $PROVIDER "$MESSAGE")
 ## Notes
 
 - `ask` already runs in background by default; no manual `nohup` is needed.
-- If it fails, check backend health with the corresponding ping command (`ping <provider>` (e.g., `ping gemini`)).
+- If it fails, check backend health with the corresponding ping command (`ccb-ping <provider>` (e.g., `ccb-ping gemini`)).

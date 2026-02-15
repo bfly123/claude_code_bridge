@@ -398,9 +398,9 @@ ASKEOF
             stderr=subprocess.DEVNULL,
         )
 
-    print(f"{provider.capitalize()} processing (task: {task_id}, log: {log_file})...")
-    print("[CCB_ASYNC_SUBMITTED]")
-    print("IMPORTANT: Task submitted. END YOUR TURN NOW. Do NOT call tools or poll logs.")
+    print(f"[CCB_ASYNC_SUBMITTED provider={provider}]")
+    print(f"{provider.capitalize()} processing (task: {task_id})")
+    print(f"MANDATORY: END YOUR TURN NOW. Reply ONLY '{provider.capitalize()} processing...', then stop. See 'Async Guardrail' in CLAUDE.md.")
     return EXIT_OK
 
 

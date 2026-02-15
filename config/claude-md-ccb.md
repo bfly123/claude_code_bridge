@@ -1,10 +1,20 @@
 <!-- CCB_CONFIG_START -->
 ## AI Collaboration
 Use `/ask <provider>` to consult other AI assistants (codex/gemini/opencode/droid).
-Use `/ping <provider>` to check connectivity.
+Use `/cping <provider>` to check connectivity.
 Use `/pend <provider>` to view latest replies.
 
 Providers: `codex`, `gemini`, `opencode`, `droid`, `claude`
+
+## Async Guardrail (MANDATORY)
+
+When you run `ask` (via `/ask` skill OR direct `Bash(ask ...)`) and the output contains `[CCB_ASYNC_SUBMITTED`:
+1. Reply with exactly one line: `<Provider> processing...` (use actual provider name, e.g. `Codex processing...`)
+2. **END YOUR TURN IMMEDIATELY** — do not call any more tools
+3. Do NOT poll, sleep, call `pend`, check logs, or add follow-up text
+4. Wait for the user or completion hook to deliver results in a later turn
+
+This rule applies unconditionally. Violating it causes duplicate requests and wasted resources.
 
 <!-- CCB_ROLES_START -->
 ## Role Assignment
