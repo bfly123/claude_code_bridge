@@ -40,6 +40,10 @@ exports.listInstances = listInstances;
 exports.isInstanceRunning = isInstanceRunning;
 const path = __importStar(require("path"));
 const fs = __importStar(require("fs"));
+const crypto_1 = require("crypto");
+function _shortProjectHash(projectRoot) {
+    return (0, crypto_1.createHash)('sha256').update(projectRoot).digest('hex').slice(0, 8);
+}
 function getProjectInfo() {
     const root = process.cwd();
     const name = path.basename(root);
@@ -49,16 +53,30 @@ function getInstancesDir(projectRoot) {
     return path.join(projectRoot, '.ccb-instances');
 }
 function getInstanceDir(projectRoot, instanceId) {
-    return path.join(getInstancesDir(projectRoot), `instance-${instanceId}`);
+    const hash = _shortProjectHash(projectRoot);
+    const newDir = path.join(getInstancesDir(projectRoot), `inst-${hash}-${instanceId}`);
+    // Backward compat: if new dir doesn't exist but old format does, use old
+    if (!fs.existsSync(newDir)) {
+        const oldDir = path.join(getInstancesDir(projectRoot), `instance-${instanceId}`);
+        if (fs.existsSync(oldDir)) {
+            return oldDir;
+        }
+    }
+    return newDir;
 }
 function listInstances(projectRoot) {
     const instancesDir = getInstancesDir(projectRoot);
     if (!fs.existsSync(instancesDir)) {
         return [];
     }
+    const hash = _shortProjectHash(projectRoot);
+    const newPrefix = `inst-${hash}-`;
     return fs.readdirSync(instancesDir)
-        .filter(name => name.startsWith('instance-'))
-        .map(name => name.replace('instance-', ''))
+        .filter(name => name.startsWith(newPrefix) || name.startsWith('instance-'))
+        .map(name => {
+            if (name.startsWith(newPrefix)) return name.slice(newPrefix.length);
+            return name.replace('instance-', '');
+        })
         .sort((a, b) => parseInt(a) - parseInt(b));
 }
 function isInstanceRunning(projectRoot, instanceId) {

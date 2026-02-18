@@ -66,7 +66,7 @@ program
             return;
         }
         const instances = fs.readdirSync(instancesDir)
-            .filter(name => name.startsWith('instance-'));
+            .filter(name => name.startsWith('inst-') || name.startsWith('instance-'));
         if (instances.length === 0) {
             console.log(chalk_1.default.dim('  No instances to clean'));
             return;

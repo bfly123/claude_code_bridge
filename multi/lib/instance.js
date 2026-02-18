@@ -41,8 +41,15 @@ const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const child_process_1 = require("child_process");
 const chalk_1 = __importDefault(require("chalk"));
+const crypto_1 = require("crypto");
+function _shortProjectHash(projectRoot) {
+    // Generate a short (8-char) hash from project root path to avoid
+    // basename collisions across projects in Gemini CLI 0.29.0.
+    return (0, crypto_1.createHash)('sha256').update(projectRoot).digest('hex').slice(0, 8);
+}
 async function startInstance(instanceId, providers, projectInfo) {
-    const instanceDir = path.join(projectInfo.root, '.ccb-instances', `instance-${instanceId}`);
+    const projectHash = _shortProjectHash(projectInfo.root);
+    const instanceDir = path.join(projectInfo.root, '.ccb-instances', `inst-${projectHash}-${instanceId}`);
     const ccbDir = path.join(instanceDir, '.ccb');
     // Create instance directory
     fs.mkdirSync(instanceDir, { recursive: true });

@@ -33,6 +33,26 @@ _GEMINI_HASH_CACHE: dict[str, list[Path]] = {}
 _GEMINI_HASH_CACHE_TS = 0.0
 
 
+
+def _is_ccb_instance_dir(work_dir: Path) -> bool:
+    """Detect ccb-multi instance directories.
+
+    These have generic basenames that collide across projects, so SHA-256
+    should be preferred over basename for Gemini session lookup.
+
+    Detection (any match = True):
+      1) CCB_INSTANCE_ID env var is set (ccb-multi always sets this)
+      2) Parent directory is named '.ccb-instances'
+    """
+    if os.environ.get("CCB_INSTANCE_ID", "").strip():
+        return True
+    try:
+        abs_path = work_dir.expanduser().absolute()
+    except Exception:
+        abs_path = work_dir
+    return abs_path.parent.name == ".ccb-instances"
+
+
 def _compute_project_hashes(work_dir: Optional[Path] = None) -> tuple[str, str]:
     """Return ``(basename_hash, sha256_hash)`` for *work_dir*.
 
@@ -55,14 +75,30 @@ def _get_project_hash(work_dir: Optional[Path] = None) -> str:
 
     Prefers the new basename format when its ``chats/`` directory exists,
     falls back to SHA-256, and defaults to basename for forward compat.
+
+    For ccb-multi instance directories (e.g. instance-1), prefer SHA-256
+    to avoid cross-project basename collisions.
     """
-    basename_hash, sha256_hash = _compute_project_hashes(work_dir)
+    path = work_dir or Path.cwd()
+    basename_hash, sha256_hash = _compute_project_hashes(path)
     root = Path(os.environ.get("GEMINI_ROOT") or (Path.home() / ".gemini" / "tmp")).expanduser()
-    if (root / basename_hash / "chats").is_dir():
-        return basename_hash
-    if (root / sha256_hash / "chats").is_dir():
+    is_instance = _is_ccb_instance_dir(path)
+
+    if is_instance:
+        # Old instance dirs (instance-1, ...) have generic basenames that
+        # collide across projects. New format (inst-<hash>-N) is unique, but
+        # we still prefer SHA-256 for backward compat with old instances.
+        if (root / sha256_hash / "chats").is_dir():
+            return sha256_hash
+        if (root / basename_hash / "chats").is_dir():
+            return basename_hash
         return sha256_hash
-    return basename_hash
+    else:
+        if (root / basename_hash / "chats").is_dir():
+            return basename_hash
+        if (root / sha256_hash / "chats").is_dir():
+            return sha256_hash
+        return basename_hash
 
 
 def _iter_registry_work_dirs() -> list[Path]:
@@ -199,6 +235,7 @@ class GeminiLogReader:
             bn, sha = _compute_project_hashes(self.work_dir)
             # Store all known hashes so they survive hash adoption
             self._all_known_hashes = {bn, sha}
+        self._is_instance = _is_ccb_instance_dir(self.work_dir)
         self._preferred_session: Optional[Path] = None
         try:
             poll = float(os.environ.get("GEMINI_POLL_INTERVAL", "0.05"))
@@ -294,6 +331,16 @@ class GeminiLogReader:
         if preferred and preferred.exists():
             if scanned and scanned.exists():
                 try:
+                    # For ccb-multi instance dirs, only accept scanned session
+                    # from the SAME hash directory to prevent cross-project
+                    # contamination via shared basename (old "instance-N" format).
+                    if self._is_instance:
+                        pref_hash = preferred.parent.parent.name
+                        scan_hash = scanned.parent.parent.name
+                        if pref_hash != scan_hash:
+                            self._debug(f"Instance mode: ignoring cross-hash scan {scanned}")
+                            return preferred
+
                     pref_mtime = preferred.stat().st_mtime
                     scan_mtime = scanned.stat().st_mtime
                     if scan_mtime > pref_mtime:
