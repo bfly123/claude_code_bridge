@@ -1,0 +1,67 @@
+import { dirname, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+import { bold } from "kleur/colors";
+import { normalizePath } from "vite";
+import { AstroError, AstroErrorData } from "../errors/index.js";
+import { REFERENCE_FILE } from "./constants.js";
+async function writeFiles(settings, fs, logger) {
+  try {
+    writeInjectedTypes(settings, fs);
+    await setUpEnvTs(settings, fs, logger);
+  } catch (e) {
+    throw new AstroError(AstroErrorData.UnknownFilesystemError, { cause: e });
+  }
+}
+function getTsReference(type, value) {
+  return `/// <reference ${type}=${JSON.stringify(value)} />`;
+}
+const CLIENT_TYPES_REFERENCE = getTsReference("types", "astro/client");
+function writeInjectedTypes(settings, fs) {
+  const references = [];
+  for (const { filename, content } of settings.injectedTypes) {
+    const filepath = fileURLToPath(new URL(filename, settings.dotAstroDir));
+    fs.mkdirSync(dirname(filepath), { recursive: true });
+    fs.writeFileSync(filepath, content, "utf-8");
+    references.push(normalizePath(relative(fileURLToPath(settings.dotAstroDir), filepath)));
+  }
+  const astroDtsContent = `${CLIENT_TYPES_REFERENCE}
+${references.map((reference) => getTsReference("path", reference)).join("\n")}`;
+  if (references.length === 0) {
+    fs.mkdirSync(settings.dotAstroDir, { recursive: true });
+  }
+  fs.writeFileSync(
+    fileURLToPath(new URL(REFERENCE_FILE, settings.dotAstroDir)),
+    astroDtsContent,
+    "utf-8"
+  );
+}
+async function setUpEnvTs(settings, fs, logger) {
+  const envTsPath = fileURLToPath(new URL("env.d.ts", settings.config.srcDir));
+  const envTsPathRelativetoRoot = relative(fileURLToPath(settings.config.root), envTsPath);
+  const relativePath = normalizePath(
+    relative(
+      fileURLToPath(settings.config.srcDir),
+      fileURLToPath(new URL(REFERENCE_FILE, settings.dotAstroDir))
+    )
+  );
+  const expectedTypeReference = getTsReference("path", relativePath);
+  if (fs.existsSync(envTsPath)) {
+    const initialEnvContents = await fs.promises.readFile(envTsPath, "utf-8");
+    let typesEnvContents = initialEnvContents;
+    if (!typesEnvContents.includes(expectedTypeReference)) {
+      typesEnvContents = `${expectedTypeReference}
+${typesEnvContents}`;
+    }
+    if (initialEnvContents !== typesEnvContents) {
+      logger.info("types", `Updated ${bold(envTsPathRelativetoRoot)} type declarations.`);
+      await fs.promises.writeFile(envTsPath, typesEnvContents, "utf-8");
+    }
+  } else {
+    await fs.promises.mkdir(settings.config.srcDir, { recursive: true });
+    await fs.promises.writeFile(envTsPath, expectedTypeReference, "utf-8");
+    logger.info("types", `Added ${bold(envTsPathRelativetoRoot)} type declarations`);
+  }
+}
+export {
+  writeFiles
+};

@@ -1,0 +1,43 @@
+---
+---
+<nav class="fixed top-0 w-full z-50 bg-navy/90 backdrop-blur-md">
+  <div class="max-w-7xl mx-auto px-4 lg:px-8">
+    <div class="h-16 flex items-center justify-between">
+      <a href="/" class="text-white font-bold text-xl">UpFinance</a>
+      <div class="hidden lg:flex items-center space-x-8">
+        <a href="#features" class="text-gray-300 hover:text-cyan transition">服务</a>
+        <a href="#comparison" class="text-gray-300 hover:text-cyan transition">对比</a>
+        <a href="#pricing" class="text-gray-300 hover:text-cyan transition">定价</a>
+        <a href="#contact" class="text-gray-300 hover:text-cyan transition">联系</a>
+      </div>
+      <div class="lg:hidden">
+        <button id="menu-toggle" class="text-gray-300 hover:text-cyan focus:outline-none">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7"></path></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+  <div id="mobile-menu" class="lg:hidden hidden bg-navy w-full">
+    <a href="#features" class="block text-gray-300 hover:text-cyan transition px-4 py-3">服务</a>
+    <a href="#comparison" class="block text-gray-300 hover:text-cyan transition px-4 py-3">对比</a>
+    <a href="#pricing" class="block text-gray-300 hover:text-cyan transition px-4 py-3">定价</a>
+    <a href="#contact" class="block text-gray-300 hover:text-cyan transition px-4 py-3">联系</a>
+  </div>
+</nav>
+
+<script>
+  const menuToggle = document.getElementById('menu-toggle');
+  const mobileMenu = document.getElementById('mobile-menu');
+
+  menuToggle.addEventListener('click', () => {
+    mobileMenu.classList.toggle('hidden');
+  });
+
+  // Close menu when a link is clicked
+  const mobileLinks = mobileMenu.getElementsByTagName('a');
+  for (const link of mobileLinks) {
+    link.addEventListener('click', () => {
+      mobileMenu.classList.add('hidden');
+    });
+  }
+</script>

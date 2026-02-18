@@ -1,0 +1,19 @@
+{
+  "name": "upfinance-cn",
+  "type": "module",
+  "version": "0.0.1",
+  "scripts": {
+    "dev": "astro dev",
+    "start": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "astro": "^4.5.0",
+    "tailwindcss": "4.0.0-beta.1",
+    "@tailwindcss/postcss": "4.0.0-beta.1",
+    "postcss": "^8.4.38",
+    "autoprefixer": "^10.4.19"
+  }
+}

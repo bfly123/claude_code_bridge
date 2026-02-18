@@ -1,0 +1,42 @@
+{
+  "name": "which-pm",
+  "version": "3.0.1",
+  "description": "Detects what package manager was used for installation",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts"
+  ],
+  "engines": {
+    "node": ">=18.12"
+  },
+  "repository": "https://github.com/zkochan/packages/tree/main/which-pm",
+  "bugs": {
+    "url": "https://github.com/zkochan/packages/labels/package%3A%20which-pm"
+  },
+  "keywords": [
+    "npm",
+    "pnpm",
+    "bun",
+    "yarn"
+  ],
+  "author": "Zoltan Kochan",
+  "license": "MIT",
+  "dependenciesMeta": {
+    "which-pm": {
+      "injected": true
+    }
+  },
+  "dependencies": {
+    "load-yaml-file": "^0.2.0"
+  },
+  "devDependencies": {
+    "standard": "^16.0.4",
+    "tape": "^5.3.2",
+    "which-pm": "file:"
+  },
+  "scripts": {
+    "test": "standard && node test"
+  }
+}

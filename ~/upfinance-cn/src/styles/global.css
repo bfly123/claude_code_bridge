@@ -1,0 +1,10 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@theme {
+  --color-navy: #0f1729;
+  --color-navy-light: #1a2744;
+  --color-cyan: #00d4aa;
+  --color-cyan-hover: #00b894;
+}
