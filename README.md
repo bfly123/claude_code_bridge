@@ -1,10 +1,10 @@
 <div align="center">
 
-# Claude Code Bridge (ccb) v5.2.5
+# Claude Code Bridge Multi v5.2.5
 
-**New Multi-Model Collaboration Tool via Split-Pane Terminal**
+**Enhanced Multi-Instance CCB with True Concurrent Execution**
 **Claude & Codex & Gemini & OpenCode & Droid**
-**Ultra-low token real-time communication, unleashing full CLI power**
+**Run multiple instances in parallel, multiple LLMs working concurrently**
 
 <p>
   <img src="https://img.shields.io/badge/Every_Interaction_Visible-096DD9?style=for-the-badge" alt="Every Interaction Visible">
