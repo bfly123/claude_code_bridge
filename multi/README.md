@@ -8,6 +8,7 @@ Multi-instance support for Claude Code Bridge with true concurrent execution.
 - **⚡ Concurrent LLM Execution**: Multiple AI providers (Claude, Codex, Gemini) work in parallel, not sequentially
 - **📊 Real-time Status Monitoring**: Check all instance status with `ccb-multi-status`
 - **🧹 Instance Management**: Create, list, and clean instances easily
+- **🔒 Collision-Free Naming**: Instance dirs use `inst-<hash>-N` format (8-char SHA-256 of project root) to prevent cross-project collisions in Gemini CLI 0.29.0's basename-based session storage
 
 ## Quick Start
 
@@ -54,6 +55,23 @@ pend opencode
 - **Session Isolation**: Each instance has independent session context
 - **Concurrent Workers**: Different sessions execute in parallel automatically
 - **Shared Resources**: Worker pool and file watchers are shared efficiently
+
+## Instance Directory Format
+
+Instances are created under `.ccb-instances/` in the project root:
+
+```
+.ccb-instances/
+  inst-a1b2c3d4-1/    # New format: inst-<projectHash>-<id>
+  inst-a1b2c3d4-2/
+  instance-3/          # Old format: still recognized for backward compat
+```
+
+The `<projectHash>` is an 8-character SHA-256 hash of the project root path, ensuring globally unique directory basenames across different projects.
+
+Environment variables set per instance:
+- `CCB_INSTANCE_ID` - Instance number (1, 2, 3, ...)
+- `CCB_PROJECT_ROOT` - Original project root path
 
 ## Commands
 
