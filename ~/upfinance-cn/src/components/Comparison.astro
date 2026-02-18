@@ -1,0 +1,55 @@
+---
+const checkIcon = `<svg class="w-5 h-5 text-green-500 mr-3 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>`;
+const crossIcon = `<svg class="w-5 h-5 text-red-500 mr-3 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>`;
+---
+
+<section id="comparison" class="bg-navy py-20">
+  <div class="max-w-7xl mx-auto px-4 lg:px-8">
+    <div class="text-center mb-16">
+      <h2 class="text-3xl lg:text-4xl font-bold text-white">为什么选择 UpFinance</h2>
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <!-- Column 1: API Forwarding Platforms -->
+      <div class="bg-white/5 rounded-2xl p-8">
+        <h3 class="text-xl font-bold text-white text-center mb-6">API 转发平台</h3>
+        <ul class="space-y-4">
+          <li class="flex items-start"><Fragment set:html={crossIcon} /> <span class="text-gray-300">接入方式: 第三方中转</span></li>
+          <li class="flex items-start"><Fragment set:html={crossIcon} /> <span class="text-gray-300">模型能力: 可能阉割</span></li>
+          <li class="flex items-start"><Fragment set:html={crossIcon} /> <span class="text-gray-300">封号风险: 无保障</span></li>
+          <li class="flex items-start"><Fragment set:html={crossIcon} /> <span class="text-gray-300">数据安全: 经第三方</span></li>
+          <li class="flex items-start"><Fragment set:html={checkIcon} /> <span class="text-gray-300">操作难度: 简单</span></li>
+          <li class="flex items-start"><Fragment set:html={crossIcon} /> <span class="text-gray-300">支付方式: 有限</span></li>
+        </ul>
+      </div>
+
+      <!-- Column 2: Virtual Card Platforms -->
+      <div class="bg-white/5 rounded-2xl p-8">
+        <h3 class="text-xl font-bold text-white text-center mb-6">虚拟卡平台</h3>
+        <ul class="space-y-4">
+          <li class="flex items-start"><Fragment set:html={checkIcon} /> <span class="text-gray-300">接入方式: 官方账号</span></li>
+          <li class="flex items-start"><Fragment set:html={checkIcon} /> <span class="text-gray-300">模型能力: 完整</span></li>
+          <li class="flex items-start"><Fragment set:html={crossIcon} /> <span class="text-gray-300">封号风险: 封号自担</span></li>
+          <li class="flex items-start"><Fragment set:html={checkIcon} /> <span class="text-gray-300">数据安全: 直达</span></li>
+          <li class="flex items-start"><Fragment set:html={crossIcon} /> <span class="text-gray-300">操作难度: 复杂</span></li>
+          <li class="flex items-start"><Fragment set:html={crossIcon} /> <span class="text-gray-300">支付方式: 多为加密货币</span></li>
+        </ul>
+      </div>
+
+      <!-- Column 3: UpFinance -->
+      <div class="border-2 border-cyan rounded-2xl p-8 relative">
+        <div class="absolute -top-4 left-1/2 -translate-x-1/2">
+            <span class="bg-cyan text-navy text-xs font-bold px-3 py-1 rounded-full">推荐</span>
+        </div>
+        <h3 class="text-xl font-bold text-white text-center mb-6">UpFinance</h3>
+        <ul class="space-y-4">
+          <li class="flex items-start"><Fragment set:html={checkIcon} /> <span class="text-gray-300">接入方式: 官方 API 直连</span></li>
+          <li class="flex items-start"><Fragment set:html={checkIcon} /> <span class="text-gray-300">模型能力: 完整</span></li>
+          <li class="flex items-start"><Fragment set:html={checkIcon} /> <span class="text-gray-300">封号风险: 智能防封保障</span></li>
+          <li class="flex items-start"><Fragment set:html={checkIcon} /> <span class="text-gray-300">数据安全: 直达官方</span></li>
+          <li class="flex items-start"><Fragment set:html={checkIcon} /> <span class="text-gray-300">操作难度: 一站式搞定</span></li>
+          <li class="flex items-start"><Fragment set:html={checkIcon} /> <span class="text-gray-300">支付方式: 微信/支付宝/银行卡</span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>

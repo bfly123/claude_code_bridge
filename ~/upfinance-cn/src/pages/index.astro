@@ -2,14 +2,18 @@
 import Layout from '../layouts/Layout.astro';
 import Navbar from '../components/Navbar.astro';
 import Hero from '../components/Hero.astro';
+import HowItWorks from '../components/HowItWorks.astro';
+import Features from '../components/Features.astro';
+import Comparison from '../components/Comparison.astro';
 ---
 
 <Layout>
   <Navbar />
   <main>
     <Hero />
-    <div id="features" class="h-screen bg-gray-100"></div>
-    <div id="comparison" class="h-screen bg-white"></div>
+    <HowItWorks />
+    <Features />
+    <Comparison />
     <div id="pricing" class="h-screen bg-gray-100"></div>
     <div id="contact" class="h-screen bg-white"></div>
   </main>
