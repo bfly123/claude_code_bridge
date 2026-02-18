@@ -135,17 +135,16 @@ cd claude_code_bridge_multi
 
 This installs the full CCB + multi-instance tooling.
 
-### Option 2: Add Multi to Existing CCB
+### Option 2: npm Package Only (with existing upstream CCB)
 
-If you already have upstream CCB installed:
+If you already have upstream CCB installed and only want the multi-instance CLI:
 
 ```bash
-cd claude_code_bridge_multi/multi
-npm install
-npm link
+npm install -g ccb-multi
 ```
 
-This makes `ccb-multi`, `ccb-multi-status`, `ccb-multi-history`, and `ccb-multi-clean` available globally.
+This installs `ccb-multi`, `ccb-multi-status`, `ccb-multi-history`, and `ccb-multi-clean` globally.
+Source: [github.com/daniellee2015/ccb-multi](https://github.com/daniellee2015/ccb-multi)
 
 ### Update & Uninstall
 
