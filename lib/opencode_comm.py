@@ -11,6 +11,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import sys
 import time
 import threading
@@ -398,12 +399,13 @@ def _parse_opencode_log_epoch_s(line: str) -> float | None:
 
 class OpenCodeLogReader:
     """
-    Reads OpenCode session/message/part JSON files.
+    Reads OpenCode session/message/part data from storage JSON files or SQLite.
 
     Observed storage layout:
       storage/session/<projectID>/ses_*.json
       storage/message/<sessionID>/msg_*.json
       storage/part/<messageID>/prt_*.json
+      ../opencode.db (message/part tables)
     """
 
     def __init__(
@@ -442,6 +444,7 @@ class OpenCodeLogReader:
         except Exception:
             force = 1.0
         self._force_read_interval = min(5.0, max(0.2, force))
+        self._db_path_hint: Path | None = None
 
     def _session_dir(self) -> Path:
         return self.root / "session" / self.project_id
@@ -487,6 +490,107 @@ class OpenCodeLogReader:
             return data if isinstance(data, dict) else {}
         except Exception:
             return {}
+
+    def _load_json_blob(self, raw: Any) -> dict:
+        if isinstance(raw, dict):
+            return raw
+        if not isinstance(raw, str) or not raw:
+            return {}
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _opencode_db_candidates(self) -> list[Path]:
+        candidates: list[Path] = []
+        env = (os.environ.get("OPENCODE_DB_PATH") or "").strip()
+        if env:
+            candidates.append(Path(env).expanduser())
+
+        # OpenCode currently stores the DB one level above storage/, but keep root-local fallback.
+        candidates.append(self.root.parent / "opencode.db")
+        candidates.append(self.root / "opencode.db")
+
+        out: list[Path] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            key = str(candidate)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(candidate)
+        return out
+
+    def _resolve_opencode_db_path(self) -> Path | None:
+        if self._db_path_hint:
+            try:
+                if self._db_path_hint.exists():
+                    return self._db_path_hint
+            except Exception:
+                pass
+
+        for candidate in self._opencode_db_candidates():
+            try:
+                if candidate.exists() and candidate.is_file():
+                    self._db_path_hint = candidate
+                    return candidate
+            except Exception:
+                continue
+        self._db_path_hint = None
+        return None
+
+    def _fetch_opencode_db_rows(self, query: str, params: tuple[object, ...]) -> list[sqlite3.Row]:
+        db_path = self._resolve_opencode_db_path()
+        if not db_path:
+            return []
+        conn: sqlite3.Connection | None = None
+        try:
+            try:
+                db_uri = f"{db_path.resolve().as_uri()}?mode=ro"
+                conn = sqlite3.connect(db_uri, uri=True, timeout=0.2)
+            except Exception:
+                conn = sqlite3.connect(str(db_path), timeout=0.2)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout = 200")
+            rows = conn.execute(query, params).fetchall()
+            return [row for row in rows if isinstance(row, sqlite3.Row)]
+        except Exception:
+            return []
+        finally:
+            try:
+                if conn is not None:
+                    conn.close()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _message_sort_key(m: dict) -> tuple[int, float, str]:
+        created = (m.get("time") or {}).get("created")
+        try:
+            created_i = int(created)
+        except Exception:
+            created_i = -1
+        try:
+            mtime = Path(m.get("_path", "")).stat().st_mtime if m.get("_path") else 0.0
+        except Exception:
+            mtime = 0.0
+        mid = m.get("id") if isinstance(m.get("id"), str) else ""
+        return created_i, mtime, mid
+
+    @staticmethod
+    def _part_sort_key(p: dict) -> tuple[int, float, str]:
+        ts = (p.get("time") or {}).get("start")
+        try:
+            ts_i = int(ts)
+        except Exception:
+            ts_i = -1
+        try:
+            mtime = Path(p.get("_path", "")).stat().st_mtime if p.get("_path") else 0.0
+        except Exception:
+            mtime = 0.0
+        pid = p.get("id") if isinstance(p.get("id"), str) else ""
+        return ts_i, mtime, pid
 
     def _detect_project_id_for_workdir(self) -> Optional[str]:
         """
@@ -545,6 +649,60 @@ class OpenCodeLogReader:
         return best_id
 
     def _get_latest_session(self) -> Optional[dict]:
+        session = self._get_latest_session_from_db()
+        if session:
+            return session
+        return self._get_latest_session_from_files()
+
+    def _get_latest_session_from_db(self) -> Optional[dict]:
+        candidates = self._work_dir_candidates()
+        if not candidates:
+            return None
+
+        # Fetch more sessions to ensure we find matches even if other projects are more active
+        rows = self._fetch_opencode_db_rows("SELECT * FROM session ORDER BY time_updated DESC LIMIT 200", ())
+
+        best_match: dict | None = None
+        best_updated = -1
+
+        for row in rows:
+            directory = row["directory"]
+            if not directory:
+                continue
+
+            sid = row["id"]
+            if self._session_id_filter and sid != self._session_id_filter:
+                continue
+
+            updated = row["time_updated"]
+
+            # Match directory
+            dir_norm = _normalize_path_for_match(directory)
+            matched = False
+            for cwd in candidates:
+                if self._allow_parent_match:
+                    if _path_is_same_or_parent(dir_norm, cwd) or _path_is_same_or_parent(cwd, dir_norm):
+                        matched = True
+                        break
+                else:
+                    if dir_norm == cwd:
+                        matched = True
+                        break
+
+            if matched and updated > best_updated:
+                best_match = {
+                    "path": None, # DB doesn't have a path
+                    "payload": {
+                        "id": sid,
+                        "directory": directory,
+                        "time": {"updated": updated}
+                    }
+                }
+                best_updated = updated
+
+        return best_match
+
+    def _get_latest_session_from_files(self) -> Optional[dict]:
         sessions_dir = self._session_dir()
         if not sessions_dir.exists():
             return None
@@ -642,6 +800,16 @@ class OpenCodeLogReader:
         return None
 
     def _read_messages(self, session_id: str) -> List[dict]:
+        messages = self._read_messages_from_db(session_id)
+        if messages:
+            messages.sort(key=self._message_sort_key)
+            return messages
+
+        messages = self._read_messages_from_files(session_id)
+        messages.sort(key=self._message_sort_key)
+        return messages
+
+    def _read_messages_from_files(self, session_id: str) -> List[dict]:
         message_dir = self._message_dir(session_id)
         if not message_dir.exists():
             return []
@@ -656,24 +824,51 @@ class OpenCodeLogReader:
                 continue
             payload["_path"] = str(path)
             messages.append(payload)
-        # Sort by created time (ms), fallback to mtime
-        def _key(m: dict) -> tuple[int, float, str]:
-            created = (m.get("time") or {}).get("created")
-            try:
-                created_i = int(created)
-            except Exception:
-                created_i = -1
-            try:
-                mtime = Path(m.get("_path", "")).stat().st_mtime if m.get("_path") else 0.0
-            except Exception:
-                mtime = 0.0
-            mid = m.get("id") if isinstance(m.get("id"), str) else ""
-            return created_i, mtime, mid
+        return messages
 
-        messages.sort(key=_key)
+    def _read_messages_from_db(self, session_id: str) -> List[dict]:
+        rows = self._fetch_opencode_db_rows(
+            """
+            SELECT id, session_id, time_created, time_updated, data
+            FROM message
+            WHERE session_id = ?
+            ORDER BY time_created ASC, time_updated ASC, id ASC
+            """,
+            (session_id,),
+        )
+        if not rows:
+            return []
+
+        messages: list[dict] = []
+        for row in rows:
+            payload = self._load_json_blob(row["data"])
+            if not payload:
+                payload = {}
+
+            payload.setdefault("id", row["id"])
+            payload.setdefault("sessionID", row["session_id"])
+            time_data = payload.get("time")
+            if not isinstance(time_data, dict):
+                time_data = {}
+            if time_data.get("created") is None:
+                time_data["created"] = row["time_created"]
+            if time_data.get("updated") is None:
+                time_data["updated"] = row["time_updated"]
+            payload["time"] = time_data
+            messages.append(payload)
         return messages
 
     def _read_parts(self, message_id: str) -> List[dict]:
+        parts = self._read_parts_from_db(message_id)
+        if parts:
+            parts.sort(key=self._part_sort_key)
+            return parts
+
+        parts = self._read_parts_from_files(message_id)
+        parts.sort(key=self._part_sort_key)
+        return parts
+
+    def _read_parts_from_files(self, message_id: str) -> List[dict]:
         part_dir = self._part_dir(message_id)
         if not part_dir.exists():
             return []
@@ -688,21 +883,39 @@ class OpenCodeLogReader:
                 continue
             payload["_path"] = str(path)
             parts.append(payload)
+        return parts
 
-        def _key(p: dict) -> tuple[int, float, str]:
-            ts = (p.get("time") or {}).get("start")
-            try:
-                ts_i = int(ts)
-            except Exception:
-                ts_i = -1
-            try:
-                mtime = Path(p.get("_path", "")).stat().st_mtime if p.get("_path") else 0.0
-            except Exception:
-                mtime = 0.0
-            pid = p.get("id") if isinstance(p.get("id"), str) else ""
-            return ts_i, mtime, pid
+    def _read_parts_from_db(self, message_id: str) -> List[dict]:
+        rows = self._fetch_opencode_db_rows(
+            """
+            SELECT id, message_id, session_id, time_created, time_updated, data
+            FROM part
+            WHERE message_id = ?
+            ORDER BY time_created ASC, time_updated ASC, id ASC
+            """,
+            (message_id,),
+        )
+        if not rows:
+            return []
 
-        parts.sort(key=_key)
+        parts: list[dict] = []
+        for row in rows:
+            payload = self._load_json_blob(row["data"])
+            if not payload:
+                payload = {}
+
+            payload.setdefault("id", row["id"])
+            payload.setdefault("messageID", row["message_id"])
+            payload.setdefault("sessionID", row["session_id"])
+            time_data = payload.get("time")
+            if not isinstance(time_data, dict):
+                time_data = {}
+            if time_data.get("start") is None:
+                time_data["start"] = row["time_created"]
+            if time_data.get("updated") is None:
+                time_data["updated"] = row["time_updated"]
+            payload["time"] = time_data
+            parts.append(payload)
         return parts
 
     @staticmethod
@@ -790,7 +1003,7 @@ class OpenCodeLogReader:
             # Fallback: some OpenCode builds may omit completed timestamps.
             # If the message already contains a completion marker, treat it as complete.
             parts = self._read_parts(str(latest_id))
-            text = self._extract_text(parts, allow_reasoning_fallback=False)
+            text = self._extract_text(parts, allow_reasoning_fallback=True)
             completion_marker = (os.environ.get("CCB_EXECUTION_COMPLETE_MARKER") or "[EXECUTION_COMPLETE]").strip() or "[EXECUTION_COMPLETE]"
             has_done = bool(text) and ("CCB_DONE:" in text)
             if text and (completion_marker in text or has_done):
@@ -804,10 +1017,8 @@ class OpenCodeLogReader:
             return None
 
         parts = self._read_parts(str(latest_id))
-        # Prefer text content; if empty and completed, fallback to reasoning
-        text = self._extract_text(parts, allow_reasoning_fallback=False)
-        if not text and completed_i is not None:
-            text = self._extract_text(parts, allow_reasoning_fallback=True)
+        # Extract text with reasoning fallback to handle all OpenCode response types
+        text = self._extract_text(parts, allow_reasoning_fallback=True)
         return text or None
 
     def _read_since(self, state: Dict[str, Any], timeout: float, block: bool) -> Tuple[Optional[str], Dict[str, Any]]:
