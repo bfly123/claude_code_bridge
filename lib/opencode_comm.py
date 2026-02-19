@@ -664,6 +664,9 @@ class OpenCodeLogReader:
 
         best_match: dict | None = None
         best_updated = -1
+        # Track the absolute latest session (ignoring filter) to detect new sessions
+        latest_unfiltered: dict | None = None
+        latest_unfiltered_updated = -1
 
         for row in rows:
             directory = row["directory"]
@@ -671,9 +674,6 @@ class OpenCodeLogReader:
                 continue
 
             sid = row["id"]
-            if self._session_id_filter and sid != self._session_id_filter:
-                continue
-
             updated = row["time_updated"]
 
             # Match directory
@@ -689,7 +689,26 @@ class OpenCodeLogReader:
                         matched = True
                         break
 
-            if matched and updated > best_updated:
+            if not matched:
+                continue
+
+            # Track latest unfiltered session for this work_dir
+            if updated > latest_unfiltered_updated:
+                latest_unfiltered = {
+                    "path": None,
+                    "payload": {
+                        "id": sid,
+                        "directory": directory,
+                        "time": {"updated": updated}
+                    }
+                }
+                latest_unfiltered_updated = updated
+
+            # Apply session_id_filter if set
+            if self._session_id_filter and sid != self._session_id_filter:
+                continue
+
+            if updated > best_updated:
                 best_match = {
                     "path": None, # DB doesn't have a path
                     "payload": {
@@ -699,6 +718,11 @@ class OpenCodeLogReader:
                     }
                 }
                 best_updated = updated
+
+        # If we have a filter but found a newer unfiltered session, use it instead
+        # This allows detecting new sessions created after the filter was set
+        if self._session_id_filter and latest_unfiltered and latest_unfiltered_updated > best_updated:
+            return latest_unfiltered
 
         return best_match
 
@@ -943,7 +967,13 @@ class OpenCodeLogReader:
     def capture_state(self) -> Dict[str, Any]:
         session_entry = self._get_latest_session()
         if not session_entry:
-            return {"session_id": None, "session_updated": -1, "assistant_count": 0, "last_assistant_id": None}
+            return {
+                "session_id": None,
+                "session_updated": -1,
+                "assistant_count": 0,
+                "last_assistant_id": None,
+                "last_assistant_has_done": False,
+            }
 
         payload = session_entry.get("payload") or {}
         session_id = payload.get("id") if isinstance(payload.get("id"), str) else None
@@ -956,6 +986,7 @@ class OpenCodeLogReader:
         assistant_count = 0
         last_assistant_id: str | None = None
         last_completed: int | None = None
+        last_has_done = False
 
         if session_id:
             messages = self._read_messages(session_id)
@@ -970,6 +1001,10 @@ class OpenCodeLogReader:
                             last_completed = int(completed) if completed is not None else None
                         except Exception:
                             last_completed = None
+            if isinstance(last_assistant_id, str) and last_assistant_id:
+                parts = self._read_parts(last_assistant_id)
+                text = self._extract_text(parts, allow_reasoning_fallback=True)
+                last_has_done = bool(text) and ("CCB_DONE:" in text)
 
         return {
             "session_path": session_entry.get("path"),
@@ -978,17 +1013,21 @@ class OpenCodeLogReader:
             "assistant_count": assistant_count,
             "last_assistant_id": last_assistant_id,
             "last_assistant_completed": last_completed,
+            "last_assistant_has_done": last_has_done,
         }
 
-    def _find_new_assistant_reply(self, session_id: str, state: Dict[str, Any]) -> Optional[str]:
+    def _find_new_assistant_reply_with_state(
+        self, session_id: str, state: Dict[str, Any]
+    ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
         prev_count = int(state.get("assistant_count") or 0)
         prev_last = state.get("last_assistant_id")
         prev_completed = state.get("last_assistant_completed")
+        prev_has_done = bool(state.get("last_assistant_has_done"))
 
         messages = self._read_messages(session_id)
         assistants = [m for m in messages if m.get("role") == "assistant" and isinstance(m.get("id"), str)]
         if not assistants:
-            return None
+            return None, None
 
         latest = assistants[-1]
         latest_id = latest.get("id")
@@ -997,6 +1036,10 @@ class OpenCodeLogReader:
             completed_i = int(completed) if completed is not None else None
         except Exception:
             completed_i = None
+
+        parts: List[dict] | None = None
+        text = ""
+        has_done = False
 
         # If assistant is still streaming, wait (prefer completed reply).
         if completed_i is None:
@@ -1009,17 +1052,35 @@ class OpenCodeLogReader:
             if text and (completion_marker in text or has_done):
                 completed_i = int(time.time() * 1000)
             else:
-                return None  # Still streaming, wait
+                return None, None  # Still streaming, wait
+
+        if parts is None:
+            parts = self._read_parts(str(latest_id))
+            text = self._extract_text(parts, allow_reasoning_fallback=True)
+            has_done = bool(text) and ("CCB_DONE:" in text)
 
         # Detect change via count or last id or completion timestamp.
         # If nothing changed, no new reply yet - keep waiting.
-        if len(assistants) <= prev_count and latest_id == prev_last and completed_i == prev_completed:
-            return None
+        # Include done-marker visibility so part/text updates on the same message are detectable.
+        if (
+            len(assistants) <= prev_count
+            and latest_id == prev_last
+            and completed_i == prev_completed
+            and has_done == prev_has_done
+        ):
+            return None, None
 
-        parts = self._read_parts(str(latest_id))
-        # Extract text with reasoning fallback to handle all OpenCode response types
-        text = self._extract_text(parts, allow_reasoning_fallback=True)
-        return text or None
+        reply_state = {
+            "assistant_count": len(assistants),
+            "last_assistant_id": latest_id,
+            "last_assistant_completed": completed_i,
+            "last_assistant_has_done": has_done,
+        }
+        return text or None, reply_state
+
+    def _find_new_assistant_reply(self, session_id: str, state: Dict[str, Any]) -> Optional[str]:
+        reply, _reply_state = self._find_new_assistant_reply_with_state(session_id, state)
+        return reply
 
     def _read_since(self, state: Dict[str, Any], timeout: float, block: bool) -> Tuple[Optional[str], Dict[str, Any]]:
         deadline = time.time() + timeout
@@ -1042,14 +1103,16 @@ class OpenCodeLogReader:
             payload = session_entry.get("payload") or {}
             current_session_id = payload.get("id") if isinstance(payload.get("id"), str) else None
             if session_id and current_session_id and current_session_id != session_id:
-                # Check if new session has a completed reply - if so, follow it
-                new_reply = self._find_new_assistant_reply(current_session_id, {"assistant_count": 0})
-                if new_reply:
-                    # New session has reply, switch to it
-                    session_id = current_session_id
-                else:
-                    # No reply in new session yet, keep old session
-                    current_session_id = session_id
+                # OpenCode can create a new session per request. Follow the newest session
+                # immediately and reset per-session reply cursors while it is still streaming.
+                session_id = current_session_id
+                state = dict(state)
+                state["session_id"] = current_session_id
+                state["session_updated"] = -1
+                state["assistant_count"] = 0
+                state["last_assistant_id"] = None
+                state["last_assistant_completed"] = None
+                state["last_assistant_has_done"] = False
             elif not session_id:
                 session_id = current_session_id
 
@@ -1074,17 +1137,47 @@ class OpenCodeLogReader:
                 last_forced_read = time.time()
 
             if should_scan:
-                reply = self._find_new_assistant_reply(current_session_id, state)
+                reply, reply_state = self._find_new_assistant_reply_with_state(current_session_id, state)
                 if reply:
-                    new_state = self.capture_state()
-                    # Preserve session binding
+                    # Build next cursor from the exact reply snapshot to avoid racing
+                    # against newer assistant messages created immediately afterwards.
+                    new_state = dict(state)
                     if session_id:
                         new_state["session_id"] = session_id
+                    elif current_session_id:
+                        new_state["session_id"] = current_session_id
+                    if payload.get("id") == current_session_id:
+                        new_state["session_path"] = session_entry.get("path")
+                    new_state["session_updated"] = updated_i
+                    if reply_state:
+                        new_state.update(reply_state)
                     return reply, new_state
 
                 # Update state baseline even if reply isn't ready yet.
                 state = dict(state)
                 state["session_updated"] = updated_i
+                # Also update assistant state baseline to avoid stale comparisons
+                # This prevents the second call from using outdated assistant_count
+                try:
+                    current_messages = self._read_messages(current_session_id)
+                    current_assistants = [m for m in current_messages
+                                         if m.get("role") == "assistant" and isinstance(m.get("id"), str)]
+                    state["assistant_count"] = len(current_assistants)
+                    if current_assistants:
+                        latest = current_assistants[-1]
+                        state["last_assistant_id"] = latest.get("id")
+                        completed = (latest.get("time") or {}).get("completed")
+                        try:
+                            state["last_assistant_completed"] = int(completed) if completed is not None else None
+                        except Exception:
+                            state["last_assistant_completed"] = None
+                        # Update has_done flag
+                        parts = self._read_parts(str(latest.get("id")))
+                        text = self._extract_text(parts, allow_reasoning_fallback=True)
+                        state["last_assistant_has_done"] = bool(text) and ("CCB_DONE:" in text)
+                except Exception:
+                    # If state update fails, keep existing state
+                    pass
 
             if not block:
                 return None, state
