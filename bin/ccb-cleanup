@@ -65,7 +65,7 @@ def cleanup_stale_locks():
     return removed
 
 
-def list_running_daemons():
+def list_running_daemons(verbose=False):
     """List all running askd daemons."""
     cache_dir = Path.home() / ".cache" / "ccb" / "projects"
     if not cache_dir.exists():
@@ -82,17 +82,78 @@ def list_running_daemons():
             if pid > 0 and is_pid_alive(pid):
                 parent_alive = is_pid_alive(parent_pid) if parent_pid > 0 else False
                 project_hash = state_file.parent.name
-                daemons.append({
+                daemon_info = {
                     "pid": pid,
                     "parent_pid": parent_pid,
                     "parent_alive": parent_alive,
                     "project_hash": project_hash,
                     "started_at": data.get("started_at", "unknown"),
-                })
+                }
+
+                if verbose:
+                    daemon_info.update({
+                        "work_dir": data.get("work_dir", "unknown"),
+                        "port": data.get("port", "unknown"),
+                        "host": data.get("host", "unknown"),
+                        "managed": data.get("managed", False),
+                    })
+
+                daemons.append(daemon_info)
         except Exception:
             pass
 
     return daemons
+
+
+def kill_daemon_by_pid(pid: int) -> bool:
+    """Kill a specific daemon by PID."""
+    if not is_pid_alive(pid):
+        print(f"PID {pid} is not running", file=sys.stderr)
+        return False
+
+    try:
+        os.kill(pid, 15)  # SIGTERM
+        print(f"✅ Killed daemon PID {pid}")
+        return True
+    except Exception as e:
+        print(f"❌ Failed to kill PID {pid}: {e}", file=sys.stderr)
+        return False
+
+
+def interactive_kill():
+    """Interactive mode to select and kill daemons."""
+    daemons = list_running_daemons(verbose=True)
+    if not daemons:
+        print("No running daemons found")
+        return
+
+    print("=== Running askd daemons ===\n")
+    for idx, d in enumerate(daemons, 1):
+        status = "ZOMBIE (parent dead)" if not d["parent_alive"] else "OK"
+        print(f"{idx}. PID {d['pid']} (parent {d['parent_pid']}) - {status}")
+        print(f"   Project: {d['project_hash']}")
+        print(f"   Work Dir: {d.get('work_dir', 'unknown')}")
+        print(f"   Started: {d['started_at']}")
+        print()
+
+    try:
+        choice = input("Enter daemon number to kill (or 'q' to quit): ").strip()
+        if choice.lower() == 'q':
+            print("Cancelled")
+            return
+
+        idx = int(choice)
+        if 1 <= idx <= len(daemons):
+            daemon = daemons[idx - 1]
+            confirm = input(f"Kill PID {daemon['pid']}? (y/N): ").strip().lower()
+            if confirm == 'y':
+                kill_daemon_by_pid(daemon['pid'])
+            else:
+                print("Cancelled")
+        else:
+            print(f"Invalid choice: {idx}", file=sys.stderr)
+    except (ValueError, KeyboardInterrupt):
+        print("\nCancelled")
 
 
 def main():
@@ -100,14 +161,28 @@ def main():
 
     parser = argparse.ArgumentParser(description="Clean up CCB zombie daemons and stale files")
     parser.add_argument("--list", action="store_true", help="List running daemons")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Show detailed daemon info")
     parser.add_argument("--clean", action="store_true", help="Clean stale files")
     parser.add_argument("--kill-zombies", action="store_true", help="Kill zombie daemons (parent dead)")
+    parser.add_argument("--kill-pid", type=int, metavar="PID", help="Kill specific daemon by PID")
+    parser.add_argument("-i", "--interactive", action="store_true", help="Interactive mode to select daemon to kill")
 
     args = parser.parse_args()
 
+    # Interactive mode
+    if args.interactive:
+        interactive_kill()
+        return
+
+    # Kill specific PID
+    if args.kill_pid:
+        kill_daemon_by_pid(args.kill_pid)
+        return
+
+    # List daemons
     if args.list or not (args.clean or args.kill_zombies):
         print("=== Running askd daemons ===")
-        daemons = list_running_daemons()
+        daemons = list_running_daemons(verbose=args.verbose)
         if not daemons:
             print("No running daemons found")
         else:
@@ -116,6 +191,11 @@ def main():
                 print(f"  PID {d['pid']} (parent {d['parent_pid']}) - {status}")
                 print(f"    Project: {d['project_hash']}")
                 print(f"    Started: {d['started_at']}")
+                if args.verbose:
+                    print(f"    Work Dir: {d.get('work_dir', 'unknown')}")
+                    print(f"    Port: {d.get('port', 'unknown')}")
+                    print(f"    Host: {d.get('host', 'unknown')}")
+                    print(f"    Managed: {d.get('managed', False)}")
 
     if args.clean:
         print("\n=== Cleaning stale files ===")
