@@ -21,7 +21,7 @@ except ImportError:
     TEXTUAL_AVAILABLE = False
 
 from mail.config import (
-    MailConfig, AccountConfig, RoutingConfig, PollingConfig,
+    MailConfig, AccountConfig, PollingConfig,
     ImapConfig, SmtpConfig, PROVIDER_PRESETS, load_config, save_config,
 )
 from mail.credentials import store_password, has_password
@@ -95,7 +95,7 @@ def run_simple_wizard() -> bool:
     print("  2. Subject prefix ([claude] message)")
 
     route_choice = input("\nEnter choice [1-2]: ").strip()
-    routing_mode = "subject_prefix" if route_choice == "2" else "plus_alias"
+    _routing_mode = "subject_prefix" if route_choice == "2" else "plus_alias"
 
     # Step 5: Default provider
     print("\nSelect default AI provider:")
@@ -143,12 +143,16 @@ def run_simple_wizard() -> bool:
         )
 
     config.account.email = email
-    config.routing = RoutingConfig(
-        mode=routing_mode,
-        default_provider=default_provider,
-        allowed_senders=allowed_senders,
-        reply_to_address=reply_to,
-    )
+
+    # V3 config no longer has RoutingConfig.
+    # Keep setup inputs mapped to current fields:
+    # - default provider stays explicit
+    # - target_email acts as the authorized/reply address
+    config.default_provider = default_provider
+    if reply_to:
+        config.target_email = reply_to
+    elif allowed_senders:
+        config.target_email = allowed_senders[0]
 
     # Step 8: Test connection
     print("\nTesting connection...")
@@ -291,4 +295,3 @@ def run_wizard() -> bool:
             print(f"TUI error: {e}, falling back to simple wizard")
 
     return run_simple_wizard()
-
