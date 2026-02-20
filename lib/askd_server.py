@@ -232,7 +232,7 @@ class AskDaemonServer:
                                 threading.Thread(target=httpd.shutdown, daemon=True).start()
                                 return
 
-                threading.Thread(target=_parent_monitor, daemon=True).start()
+                    threading.Thread(target=_parent_monitor, daemon=True).start()
 
                 actual_host, actual_port = httpd.server_address
                 self._write_state(str(actual_host), int(actual_port))
