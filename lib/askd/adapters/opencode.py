@@ -201,6 +201,19 @@ class OpenCodeAdapter(BaseProviderAdapter):
         combined = "\n".join(chunks)
         final_reply = strip_done_text(combined, task.req_id)
 
+        # Fallback: if timeout but we have a reply with any CCB_DONE marker,
+        # accept it even if req_id doesn't match (degraded completion detection)
+        if not done_seen and chunks and "CCB_DONE:" in combined:
+            _write_log(f"[WARN] Found CCB_DONE but req_id mismatch for req_id={task.req_id}")
+            # Extract the mismatched req_id for logging
+            for line in combined.splitlines():
+                if "CCB_DONE:" in line:
+                    _write_log(f"[WARN] Expected: CCB_DONE: {task.req_id}, Found: {line.strip()}")
+                    break
+            # Accept as completed in degraded mode
+            done_seen = True
+            done_ms = _now_ms() - started_ms
+
         notify_completion(
             provider="opencode",
             output_file=req.output_path,

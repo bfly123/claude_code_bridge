@@ -124,7 +124,8 @@ def _send_via_unified_daemon(
     host = state.get("connect_host") or state.get("host") or "127.0.0.1"
     port = int(state.get("port") or 0)
     token = state.get("token") or ""
-    # Use daemon's work_dir instead of current shell's cwd
+    # Use daemon's work_dir from state file
+    # This ensures consistency with CCB session (pane id, work_dir, hash)
     raw_work_dir = state.get("work_dir")
     daemon_work_dir = raw_work_dir.strip() if isinstance(raw_work_dir, str) and raw_work_dir.strip() else ""
     if not daemon_work_dir or not Path(daemon_work_dir).is_dir():
@@ -295,7 +296,8 @@ def main(argv: list[str]) -> int:
         return EXIT_ERROR
 
     # Use unified daemon if enabled (CCB_UNIFIED_ASKD=1)
-    if _use_unified_daemon() and foreground_mode:
+    # Changed: removed foreground_mode requirement to support all modes
+    if _use_unified_daemon():
         caller = _require_caller()
         return _send_via_unified_daemon(provider, message, timeout, no_wrap, caller)
 

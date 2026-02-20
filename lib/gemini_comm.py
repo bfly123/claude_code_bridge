@@ -612,7 +612,8 @@ class GeminiLogReader:
                             if content:
                                 content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
                                 msg_id = msg.get("id")
-                                if msg_id == prev_last_gemini_id and content_hash == prev_last_gemini_hash:
+                                # Only skip if msg_id is not None and matches previous
+                                if msg_id and msg_id == prev_last_gemini_id and content_hash == prev_last_gemini_hash:
                                     continue
                                 last_gemini_content = content
                                 last_gemini_id = msg_id
