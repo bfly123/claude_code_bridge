@@ -26,7 +26,7 @@ from pathlib import Path
 
 script_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(script_dir / "lib"))
-from terminal import TmuxBackend, WeztermBackend, detect_terminal, is_wsl, get_shell_type
+from terminal import TmuxBackend, WeztermBackend, detect_terminal, is_wsl, get_shell_type, get_backend_for_session
 from compat import setup_windows_encoding
 from ccb_config import get_backend_env
 from ccb_start_config import DEFAULT_PROVIDERS, ensure_default_start_config, load_start_config
@@ -38,7 +38,7 @@ from session_utils import (
     resolve_project_config_dir,
     safe_write_session,
 )
-from pane_registry import upsert_registry
+from pane_registry import upsert_registry, load_registry_by_project_id
 from project_id import compute_ccb_project_id
 from providers import CASK_CLIENT_SPEC, GASK_CLIENT_SPEC, OASK_CLIENT_SPEC, LASK_CLIENT_SPEC, DASK_CLIENT_SPEC
 from process_lock import ProviderLock
@@ -604,6 +604,14 @@ class AILauncher:
             env["CCB_RUN_DIR"] = os.environ["CCB_RUN_DIR"]
         return env
 
+    def _provider_env_overrides(self, provider: str) -> dict:
+        """Managed env + explicit caller marker for the pane/provider process."""
+        env = self._managed_env_overrides()
+        prov = (provider or "").strip().lower()
+        if prov in {"claude", "codex", "gemini", "opencode", "droid", "email", "manual"}:
+            env["CCB_CALLER"] = prov
+        return env
+
     def _project_config_dir(self) -> Path:
         return resolve_project_config_dir(self.project_root)
 
@@ -749,13 +757,13 @@ class AILauncher:
     def _maybe_start_caskd(self) -> None:
         self._maybe_start_provider_daemon("codex")
 
-    def _maybe_start_unified_askd(self) -> None:
+    def _maybe_start_unified_askd(self, *, quiet: bool = False) -> None:
         """Start unified askd daemon (provider-agnostic)."""
         # Try to start for any enabled provider that uses askd (including claude)
         for provider in ["codex", "gemini", "opencode", "droid", "claude"]:
             if provider in [p.lower() for p in self.providers]:
                 # Try to start and check if successful
-                self._maybe_start_provider_daemon(provider)
+                self._maybe_start_provider_daemon(provider, quiet=quiet)
                 # Verify daemon actually started by pinging
                 try:
                     from askd_runtime import state_file_path
@@ -767,7 +775,7 @@ class AILauncher:
                     pass
                 # If not successful, continue to next provider
 
-    def _maybe_start_provider_daemon(self, provider: str) -> None:
+    def _maybe_start_provider_daemon(self, provider: str, *, quiet: bool = False) -> None:
         def _bool_from_env(name: str):
             raw = os.environ.get(name)
             if raw is None or raw == "":
@@ -778,6 +786,11 @@ class AILauncher:
             if v in {"1", "true", "yes", "on"}:
                 return True
             return None
+
+        def _emit(msg: str, *, err: bool = False) -> None:
+            if quiet and not _env_bool("CCB_DEBUG", False):
+                return
+            print(msg, file=sys.stderr if err else sys.stdout)
 
         provider = (provider or "").strip().lower()
         specs = {
@@ -808,7 +821,7 @@ class AILauncher:
             read_state = getattr(daemon_module, "read_state", None)
             shutdown_daemon_fn = getattr(daemon_module, "shutdown_daemon", None)
         except Exception as exc:
-            print(f"⚠️ Failed to import {spec.daemon_module}: {exc}")
+            _emit(f"⚠️ Failed to import {spec.daemon_module}: {exc}")
             return
 
         def _owned_by_ccb(state: dict | None) -> bool:
@@ -854,9 +867,9 @@ class AILauncher:
                     if force_rebind or not foreign_parent_alive:
                         # Safe to rebind: either forced or foreign parent is dead/stale
                         if force_rebind:
-                            print(f"⚠️ CCB_FORCE_REBIND=1 set, forcing askd rebind despite live parent (PID {foreign_parent_pid})...")
+                            _emit(f"⚠️ CCB_FORCE_REBIND=1 set, forcing askd rebind despite live parent (PID {foreign_parent_pid})...")
                         else:
-                            print(f"⚠️ askd owned by dead parent (PID {foreign_parent_pid}), restarting to bind lifecycle...")
+                            _emit(f"⚠️ askd owned by dead parent (PID {foreign_parent_pid}), restarting to bind lifecycle...")
                         if callable(shutdown_daemon_fn):
                             try:
                                 shutdown_daemon_fn(timeout_s=1.0, state_file=state_file)
@@ -864,14 +877,14 @@ class AILauncher:
                                 pass
                     else:
                         # Foreign parent is still alive, don't force rebind
-                        print(f"⚠️ askd owned by live parent (PID {foreign_parent_pid}), skipping rebind to avoid disruption")
-                        print(f"   Set CCB_FORCE_REBIND=1 to override this safety check")
+                        _emit(f"⚠️ askd owned by live parent (PID {foreign_parent_pid}), skipping rebind to avoid disruption")
+                        _emit(f"   Set CCB_FORCE_REBIND=1 to override this safety check")
                         host = st.get("host") if isinstance(st, dict) else None
                         port = st.get("port") if isinstance(st, dict) else None
                         if host and port:
-                            print(f"✅ {spec.daemon_bin_name} already running at {host}:{port}")
+                            _emit(f"✅ {spec.daemon_bin_name} already running at {host}:{port}")
                         else:
-                            print(f"✅ {spec.daemon_bin_name} already running")
+                            _emit(f"✅ {spec.daemon_bin_name} already running")
                         return
                     deadline = time.time() + 2.0
                     while time.time() < deadline:
@@ -879,34 +892,34 @@ class AILauncher:
                             break
                         time.sleep(0.1)
                     if ping_daemon(timeout_s=0.2, state_file=state_file):
-                        print("⚠️ askd restart skipped: existing daemon still running")
+                        _emit("⚠️ askd restart skipped: existing daemon still running")
                         host = st.get("host") if isinstance(st, dict) else None
                         port = st.get("port") if isinstance(st, dict) else None
                         if host and port:
-                            print(f"✅ {spec.daemon_bin_name} already running at {host}:{port}")
+                            _emit(f"✅ {spec.daemon_bin_name} already running at {host}:{port}")
                         else:
-                            print(f"✅ {spec.daemon_bin_name} already running")
+                            _emit(f"✅ {spec.daemon_bin_name} already running")
                         return
                 else:
                     host = st.get("host") if isinstance(st, dict) else None
                     port = st.get("port") if isinstance(st, dict) else None
                     if host and port:
-                        print(f"✅ {spec.daemon_bin_name} already running at {host}:{port}")
+                        _emit(f"✅ {spec.daemon_bin_name} already running at {host}:{port}")
                     else:
-                        print(f"✅ {spec.daemon_bin_name} already running")
+                        _emit(f"✅ {spec.daemon_bin_name} already running")
                     return
             else:
                 host = st.get("host") if isinstance(st, dict) else None
                 port = st.get("port") if isinstance(st, dict) else None
                 if host and port:
-                    print(f"✅ {spec.daemon_bin_name} already running at {host}:{port}")
+                    _emit(f"✅ {spec.daemon_bin_name} already running at {host}:{port}")
                 else:
-                    print(f"✅ {spec.daemon_bin_name} already running")
+                    _emit(f"✅ {spec.daemon_bin_name} already running")
                 return
 
         daemon_script = self.script_dir / "bin" / spec.daemon_bin_name
         if not daemon_script.exists():
-            print(f"⚠️ {spec.daemon_bin_name} not found (bin/{spec.daemon_bin_name}). Reinstall or update your checkout.")
+            _emit(f"⚠️ {spec.daemon_bin_name} not found (bin/{spec.daemon_bin_name}). Reinstall or update your checkout.")
             return
 
         kwargs = {
@@ -929,7 +942,7 @@ class AILauncher:
                 with self._daemon_proc_lock:
                     self._daemon_proc = proc
         except Exception as exc:
-            print(f"⚠️ Failed to start {spec.daemon_bin_name}: {exc}")
+            _emit(f"⚠️ Failed to start {spec.daemon_bin_name}: {exc}")
             return
 
         deadline = time.time() + 2.0
@@ -939,12 +952,12 @@ class AILauncher:
                 host = st.get("host") if isinstance(st, dict) else None
                 port = st.get("port") if isinstance(st, dict) else None
                 if host and port:
-                    print(f"✅ {spec.daemon_bin_name} started at {host}:{port}")
+                    _emit(f"✅ {spec.daemon_bin_name} started at {host}:{port}")
                 else:
-                    print(f"✅ {spec.daemon_bin_name} started")
+                    _emit(f"✅ {spec.daemon_bin_name} started")
                 return
             time.sleep(0.1)
-        print(f"⚠️ {spec.daemon_bin_name} start requested, but daemon not reachable yet")
+        _emit(f"⚠️ {spec.daemon_bin_name} start requested, but daemon not reachable yet")
 
     def _start_daemon_watchdog(self) -> None:
         """Start watchdog thread to monitor askd daemon health."""
@@ -971,6 +984,12 @@ class AILauncher:
         from askd_runtime import state_file_path
         from askd.daemon import ping_daemon, read_state
 
+        verbose_watchdog = _env_bool("CCB_WATCHDOG_VERBOSE", False) or _env_bool("CCB_DEBUG", False)
+
+        def _wd_log(msg: str) -> None:
+            if verbose_watchdog:
+                print(msg, file=sys.stderr)
+
         # Validate and clamp check interval
         try:
             check_interval = float(os.environ.get("CCB_WATCHDOG_INTERVAL_S", "10"))
@@ -994,7 +1013,7 @@ class AILauncher:
                         exit_code = self._daemon_proc.poll()
                         if exit_code is not None:
                             # Daemon process has exited
-                            print(f"⚠️ askd daemon process exited with code {exit_code}", file=sys.stderr)
+                            _wd_log(f"⚠️ askd daemon process exited with code {exit_code}")
                             self._daemon_proc = None
                             # Will be restarted by health check below
 
@@ -1004,8 +1023,8 @@ class AILauncher:
                     consecutive_failures += 1
                     if consecutive_failures >= max_failures:
                         # Daemon is unhealthy, try to restart
-                        print(f"⚠️ askd daemon unhealthy (failed {consecutive_failures} checks), attempting restart...", file=sys.stderr)
-                        self._maybe_start_unified_askd()
+                        _wd_log(f"⚠️ askd daemon unhealthy (failed {consecutive_failures} checks), attempting restart...")
+                        self._maybe_start_unified_askd(quiet=not verbose_watchdog)
                         consecutive_failures = 0
                 else:
                     # Daemon is healthy, verify ownership
@@ -1015,7 +1034,7 @@ class AILauncher:
                         managed = bool(state.get("managed"))
                         if managed and parent_pid != self.ccb_pid:
                             ownership_mismatch_count += 1
-                            print(f"⚠️ askd daemon ownership mismatch (parent_pid={parent_pid}, expected={self.ccb_pid}, count={ownership_mismatch_count})", file=sys.stderr)
+                            _wd_log(f"⚠️ askd daemon ownership mismatch (parent_pid={parent_pid}, expected={self.ccb_pid}, count={ownership_mismatch_count})")
                             if ownership_mismatch_count >= max_ownership_mismatches:
                                 # Check if forced rebind is enabled (case-insensitive)
                                 force_rebind = _env_bool("CCB_FORCE_REBIND", False)
@@ -1032,21 +1051,21 @@ class AILauncher:
                                 if force_rebind or not foreign_parent_alive:
                                     # Safe to rebind: either forced or foreign parent is dead/stale
                                     if force_rebind:
-                                        print(f"⚠️ CCB_FORCE_REBIND=1 set, forcing rebind despite live parent (PID {parent_pid})...", file=sys.stderr)
+                                        _wd_log(f"⚠️ CCB_FORCE_REBIND=1 set, forcing rebind despite live parent (PID {parent_pid})...")
                                     else:
-                                        print(f"⚠️ Foreign parent (PID {parent_pid}) is dead, attempting to rebind daemon...", file=sys.stderr)
+                                        _wd_log(f"⚠️ Foreign parent (PID {parent_pid}) is dead, attempting to rebind daemon...")
                                     try:
                                         from askd_rpc import shutdown_daemon
                                         shutdown_daemon("ask", timeout_s=2.0, state_file=state_file)
                                         time.sleep(1.0)  # Wait for shutdown
                                     except Exception:
                                         pass
-                                    self._maybe_start_unified_askd()
+                                    self._maybe_start_unified_askd(quiet=not verbose_watchdog)
                                     ownership_mismatch_count = 0
                                 else:
                                     # Foreign parent is still alive, don't force rebind
-                                    print(f"⚠️ Foreign parent (PID {parent_pid}) is still alive, skipping forced rebind to avoid disruption", file=sys.stderr)
-                                    print(f"   Set CCB_FORCE_REBIND=1 to override this safety check", file=sys.stderr)
+                                    _wd_log(f"⚠️ Foreign parent (PID {parent_pid}) is still alive, skipping forced rebind to avoid disruption")
+                                    _wd_log(f"   Set CCB_FORCE_REBIND=1 to override this safety check")
                                     ownership_mismatch_count = 0  # Reset to avoid repeated warnings
                         else:
                             ownership_mismatch_count = 0  # Reset on correct ownership
@@ -1236,7 +1255,7 @@ class AILauncher:
 
         pane_title_marker = f"CCB-{provider.capitalize()}"
         title_cmd = _build_pane_title_cmd(pane_title_marker)
-        env_overrides = self._managed_env_overrides()
+        env_overrides = self._provider_env_overrides(provider)
         full_cmd = title_cmd + self._build_env_prefix(env_overrides) + _build_export_path_cmd(self.script_dir / "bin") + start_cmd
         backend = WeztermBackend()
         pane_id = backend.create_pane(full_cmd, str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent)
@@ -2068,7 +2087,7 @@ class AILauncher:
         if not output_fifo.exists():
             os.mkfifo(output_fifo, 0o644)
 
-        env_overrides = self._managed_env_overrides()
+        env_overrides = self._provider_env_overrides("codex")
         start_cmd = self._build_env_prefix(env_overrides) + _build_export_path_cmd(self.script_dir / "bin") + self._build_codex_start_cmd()
         pane_title_marker = "CCB-Codex"
 
@@ -2159,7 +2178,7 @@ class AILauncher:
         runtime = self.runtime_dir / "gemini"
         runtime.mkdir(parents=True, exist_ok=True)
 
-        env_overrides = self._managed_env_overrides()
+        env_overrides = self._provider_env_overrides("gemini")
         start_cmd = self._build_env_prefix(env_overrides) + _build_export_path_cmd(self.script_dir / "bin") + self._build_gemini_start_cmd()
         pane_title_marker = "CCB-Gemini"
 
@@ -2210,7 +2229,7 @@ class AILauncher:
         runtime = self.runtime_dir / "opencode"
         runtime.mkdir(parents=True, exist_ok=True)
 
-        env_overrides = self._managed_env_overrides()
+        env_overrides = self._provider_env_overrides("opencode")
         start_cmd = self._build_env_prefix(env_overrides) + _build_export_path_cmd(self.script_dir / "bin") + self._build_opencode_start_cmd()
         pane_title_marker = "CCB-OpenCode"
 
@@ -2264,7 +2283,7 @@ class AILauncher:
         runtime = self.runtime_dir / "droid"
         runtime.mkdir(parents=True, exist_ok=True)
 
-        env_overrides = self._managed_env_overrides()
+        env_overrides = self._provider_env_overrides("droid")
         start_cmd = self._build_env_prefix(env_overrides) + _build_export_path_cmd(self.script_dir / "bin") + self._build_droid_start_cmd()
         pane_title_marker = "CCB-Droid"
 
@@ -2320,7 +2339,7 @@ class AILauncher:
         start_cmd = (cmd_settings.get("start_cmd") or "").strip() or self._default_cmd_start_cmd()
         full_cmd = (
             _build_pane_title_cmd(title)
-            + self._build_env_prefix(self._managed_env_overrides())
+            + self._build_env_prefix(self._provider_env_overrides("codex"))
             + _build_export_path_cmd(self.script_dir / "bin")
             + _build_cd_cmd(Path.cwd())
             + start_cmd
@@ -2374,7 +2393,7 @@ class AILauncher:
         title_cmd = _build_pane_title_cmd(pane_title_marker) if self.terminal_type == "wezterm" else ""
         start_cmd = (
             title_cmd
-            + self._build_env_prefix(self._managed_env_overrides())
+            + self._build_env_prefix(self._provider_env_overrides("codex"))
             + _build_export_path_cmd(self.script_dir / "bin")
             + self._build_codex_start_cmd()
         )
@@ -2421,7 +2440,7 @@ class AILauncher:
         # 因而会触发 [WinError 2] 找不到可执行文件。这里改为通过 shell 执行以确保可启动。
         if os.name == "nt":
             env = self._with_bin_path_env()
-            env.update(self._managed_env_overrides())
+            env.update(self._provider_env_overrides("codex"))
             env["CODEX_SESSION_ID"] = self.session_id
             env["CODEX_RUNTIME_DIR"] = str(runtime)
             env["CODEX_INPUT_FIFO"] = str(input_fifo)
@@ -2435,7 +2454,7 @@ class AILauncher:
 
         cmd_parts = shlex.split(self._build_codex_start_cmd())
         env = self._with_bin_path_env()
-        env.update(self._managed_env_overrides())
+        env.update(self._provider_env_overrides("codex"))
         env["CODEX_SESSION_ID"] = self.session_id
         env["CODEX_RUNTIME_DIR"] = str(runtime)
         env["CODEX_INPUT_FIFO"] = str(input_fifo)
@@ -2481,7 +2500,7 @@ class AILauncher:
         title_cmd = _build_pane_title_cmd(pane_title_marker) if self.terminal_type == "wezterm" else ""
         start_cmd = (
             title_cmd
-            + self._build_env_prefix(self._managed_env_overrides())
+            + self._build_env_prefix(self._provider_env_overrides("gemini"))
             + _build_export_path_cmd(self.script_dir / "bin")
             + self._build_gemini_start_cmd()
         )
@@ -2514,11 +2533,12 @@ class AILauncher:
                 pass
 
         title_cmd = _build_pane_title_cmd(pane_title_marker) if self.terminal_type == "wezterm" else ""
+        opencode_cmd = self._build_opencode_start_cmd()
         start_cmd = (
             title_cmd
-            + self._build_env_prefix(self._managed_env_overrides())
+            + self._build_env_prefix(self._provider_env_overrides("opencode"))
             + _build_export_path_cmd(self.script_dir / "bin")
-            + self._build_opencode_start_cmd()
+            + opencode_cmd
         )
         self._write_opencode_session(
             runtime,
@@ -2527,6 +2547,31 @@ class AILauncher:
             pane_title_marker=pane_title_marker,
             start_cmd=start_cmd,
         )
+
+        # tmux path: run OpenCode directly (without shell -lc) to avoid shell startup side-effects
+        # that can make the TUI appear to hang before rendering.
+        if self.terminal_type == "tmux" and os.name != "nt":
+            env = self._with_bin_path_env()
+            env.update(self._provider_env_overrides("opencode"))
+            env["OPENCODE_SESSION_ID"] = self.session_id
+            env["OPENCODE_RUNTIME_DIR"] = str(runtime)
+            env["OPENCODE_TERMINAL"] = self.terminal_type
+            env["OPENCODE_TMUX_SESSION"] = pane_id
+            try:
+                cmd_parts = shlex.split(opencode_cmd)
+                if not cmd_parts:
+                    print("❌ Empty OpenCode start command", file=sys.stderr)
+                    return 1
+                # Single-provider `ccb opencode`: fully hand over the pane process to OpenCode.
+                # This mirrors manual `opencode` startup and avoids a long-lived Python parent.
+                exec_raw = (os.environ.get("CCB_OPENCODE_EXEC") or "").strip().lower()
+                use_exec = (exec_raw not in {"0", "false", "no", "off"}) and (len(self.providers) == 1)
+                if use_exec:
+                    os.execvpe(cmd_parts[0], cmd_parts, env)
+                return subprocess.run(cmd_parts, env=env, cwd=str(Path.cwd())).returncode
+            except Exception as exc:
+                print(f"❌ Failed to start OpenCode: {exc}", file=sys.stderr)
+                return 1
 
         return self._run_shell_command(start_cmd, cwd=str(Path.cwd()))
 
@@ -2551,7 +2596,7 @@ class AILauncher:
         title_cmd = _build_pane_title_cmd(pane_title_marker) if self.terminal_type == "wezterm" else ""
         start_cmd = (
             title_cmd
-            + self._build_env_prefix(self._managed_env_overrides())
+            + self._build_env_prefix(self._provider_env_overrides("droid"))
             + _build_export_path_cmd(self.script_dir / "bin")
             + self._build_droid_start_cmd()
         )
@@ -2955,7 +3000,7 @@ class AILauncher:
 
     def _claude_env_overrides(self) -> dict:
         env: dict[str, str] = {}
-        env.update(self._managed_env_overrides())
+        env.update(self._provider_env_overrides("claude"))
         if "codex" in self.providers:
             runtime = self.runtime_dir / "codex"
             env["CODEX_SESSION_ID"] = self.session_id
@@ -3544,6 +3589,31 @@ def cmd_start(args):
             print(f"❌ Failed to create {cfg}: {exc}", file=sys.stderr)
             return 2
 
+    # Parse explicit provider args early so lock-collision path can reuse an existing pane.
+    requested_providers, _requested_cmd_enabled = _parse_providers_with_cmd(args.providers or [])
+
+    def _existing_provider_pane_for_project(project_work_dir: Path, provider: str) -> tuple[dict | None, str]:
+        prov = (provider or "").strip().lower()
+        if not prov:
+            return None, ""
+        try:
+            project_id = compute_ccb_project_id(project_work_dir)
+        except Exception:
+            return None, ""
+        if not project_id:
+            return None, ""
+        record = load_registry_by_project_id(project_id, prov)
+        if not isinstance(record, dict):
+            return None, ""
+        providers_map = record.get("providers")
+        if not isinstance(providers_map, dict):
+            return record, ""
+        entry = providers_map.get(prov)
+        if not isinstance(entry, dict):
+            return record, ""
+        pane_id = str(entry.get("pane_id") or "").strip()
+        return record, pane_id
+
     # Enforce single ccb instance per directory.
     lock_cwd = str(Path.cwd().resolve())
     ccb_lock = ProviderLock("ccb", timeout=0.1, cwd=lock_cwd)
@@ -3554,12 +3624,35 @@ def cmd_start(args):
         except Exception:
             pid = ""
         pid_msg = f" (pid {pid})" if pid else ""
+
+        # Fast-path: if user requests a single provider, try activating its existing pane
+        # in the already-running instance instead of hard failing.
+        focus_provider = requested_providers[0] if len(requested_providers) == 1 else ""
+        if focus_provider:
+            record, pane_id = _existing_provider_pane_for_project(work_dir, focus_provider)
+            if record and pane_id:
+                try:
+                    backend = get_backend_for_session(record)
+                    if backend and backend.is_alive(pane_id):
+                        if os.environ.get("TMUX") or sys.stdin.isatty():
+                            backend.activate(pane_id)
+                        print(
+                            f"ℹ️ Reusing existing ccb instance for this directory{pid_msg}; "
+                            f"activated {focus_provider} pane {pane_id}.",
+                            file=sys.stderr,
+                        )
+                        return 0
+                except Exception:
+                    pass
+
         print(f"❌ Another ccb instance is already running for this directory{pid_msg}.", file=sys.stderr)
         print("💡 Only one ccb instance is allowed per directory.", file=sys.stderr)
+        if focus_provider:
+            print(f"💡 Try switching to the existing {focus_provider} pane in that ccb session.", file=sys.stderr)
         return 2
     atexit.register(ccb_lock.release)
 
-    providers, cmd_enabled = _parse_providers_with_cmd(args.providers or [])
+    providers, cmd_enabled = requested_providers, _requested_cmd_enabled
     config = load_start_config(work_dir)
     config_data = config.data if isinstance(config.data, dict) else {}
 

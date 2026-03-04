@@ -22,6 +22,8 @@ Examples:
 from __future__ import annotations
 
 import os
+import json
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -44,6 +46,7 @@ from compat import read_stdin_text, setup_windows_encoding
 setup_windows_encoding()
 
 from cli_output import EXIT_ERROR, EXIT_OK
+from session_utils import find_project_session_file
 
 
 # Provider to daemon command mapping
@@ -54,6 +57,30 @@ PROVIDER_DAEMONS = {
     "droid": "dask",
     "claude": "lask",
 }
+
+CALLER_SESSION_FILES = {
+    "claude": ".claude-session",
+    "codex": ".codex-session",
+    "gemini": ".gemini-session",
+    "opencode": ".opencode-session",
+    "droid": ".droid-session",
+}
+
+CALLER_PANE_ENV_HINTS = {
+    "codex": ("CODEX_TMUX_SESSION", "CODEX_WEZTERM_PANE"),
+    "gemini": ("GEMINI_TMUX_SESSION", "GEMINI_WEZTERM_PANE"),
+    "opencode": ("OPENCODE_TMUX_SESSION", "OPENCODE_WEZTERM_PANE"),
+    "droid": ("DROID_TMUX_SESSION", "DROID_WEZTERM_PANE"),
+}
+
+CALLER_ENV_HINTS = {
+    "codex": ("CODEX_SESSION_ID", "CODEX_RUNTIME_DIR"),
+    "gemini": ("GEMINI_SESSION_ID", "GEMINI_RUNTIME_DIR"),
+    "opencode": ("OPENCODE_SESSION_ID", "OPENCODE_RUNTIME_DIR"),
+    "droid": ("DROID_SESSION_ID", "DROID_RUNTIME_DIR"),
+}
+
+VALID_CALLERS = set(CALLER_SESSION_FILES.keys()) | {"email", "manual"}
 
 
 def _env_int(name: str, default: int) -> int:
@@ -83,11 +110,99 @@ def _cleanup_task_logs(log_dir: Path) -> None:
         logs.sort(key=lambda p: p.name, reverse=True)
     for path in logs[max_files:]:
         prefix = path.name[:-4]  # strip .log
-        for ext in (".log", ".sh", ".ps1", ".msg"):
+        for ext in (".log", ".sh", ".ps1", ".msg", ".status"):
             try:
                 (log_dir / f"{prefix}{ext}").unlink(missing_ok=True)
             except Exception:
                 pass
+
+
+def _normalize_caller(raw: str) -> str:
+    caller = (raw or "").strip().lower()
+    if caller in VALID_CALLERS:
+        return caller
+    return ""
+
+
+def _load_json_dict(path: Path) -> dict:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {}
+
+
+def _infer_caller_from_pane() -> str:
+    pane_id = (os.environ.get("TMUX_PANE") or os.environ.get("WEZTERM_PANE") or "").strip()
+    if not pane_id:
+        return ""
+
+    # Fast-path: CCB may export known pane ids in env for cross-pane routing.
+    for caller, keys in CALLER_PANE_ENV_HINTS.items():
+        for key in keys:
+            value = (os.environ.get(key) or "").strip()
+            if value and value == pane_id:
+                return caller
+
+    # Fallback: resolve by local session files for the current project/cwd.
+    cwd = Path.cwd()
+    for caller, session_filename in CALLER_SESSION_FILES.items():
+        try:
+            session_file = find_project_session_file(cwd, session_filename)
+        except Exception:
+            session_file = None
+        if not session_file:
+            continue
+        data = _load_json_dict(session_file)
+        session_pane = str(data.get("pane_id") or data.get("tmux_session") or "").strip()
+        if session_pane and session_pane == pane_id:
+            return caller
+
+    return ""
+
+
+def _infer_caller_from_env_hints() -> str:
+    matches: list[str] = []
+    for caller, keys in CALLER_ENV_HINTS.items():
+        if any((os.environ.get(key) or "").strip() for key in keys):
+            matches.append(caller)
+    if len(matches) == 1:
+        return matches[0]
+    return ""
+
+
+def _detect_caller() -> str:
+    direct = _normalize_caller(os.environ.get("CCB_CALLER", ""))
+    if direct:
+        return direct
+
+    # Email worker may carry email metadata even when CCB_CALLER isn't exported.
+    if (os.environ.get("CCB_EMAIL_REQ_ID") or "").strip():
+        return "email"
+
+    pane = _infer_caller_from_pane()
+    if pane:
+        return pane
+
+    hinted = _infer_caller_from_env_hints()
+    if hinted:
+        return hinted
+
+    return ""
+
+
+def _append_task_status_line(status_file: Path, line: str) -> None:
+    """Append one timestamped lifecycle line for async task observability."""
+    ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S%z")
+    try:
+        status_file.parent.mkdir(parents=True, exist_ok=True)
+        with status_file.open("a", encoding="utf-8") as handle:
+            handle.write(f"{ts} {line}\n")
+    except Exception:
+        pass
 
 
 def _use_unified_daemon() -> bool:
@@ -301,19 +416,40 @@ def _default_foreground() -> bool:
         return False
     if _env_bool("CCB_ASK_FOREGROUND", False):
         return True
-    # If CCB_CALLER is set, use background (nohup) mode
-    if os.environ.get("CCB_CALLER"):
+    # Default async only for Claude caller to preserve historical guardrail behavior.
+    # Other callers (codex/gemini/opencode/droid/manual) default to foreground.
+    caller = _detect_caller()
+    if caller == "claude":
         return False
-    # No caller set, use foreground mode
     return True
 
 
+def _should_emit_async_guardrail(caller: str) -> bool:
+    """
+    Decide whether to print strict async guardrail text.
+
+    Override with CCB_ASK_EMIT_GUARDRAIL=0/1.
+    Default: enabled only when caller is Claude.
+    """
+    raw = (os.environ.get("CCB_ASK_EMIT_GUARDRAIL") or "").strip().lower()
+    if raw:
+        return raw not in ("0", "false", "no", "off")
+    return (caller or "").strip().lower() == "claude"
+
+
 def _require_caller() -> str:
-    caller = (os.environ.get("CCB_CALLER") or "").strip()
+    caller = _detect_caller()
     if caller:
         return caller
-    print("[ERROR] CCB_CALLER is required. Set CCB_CALLER=<provider> (e.g. CCB_CALLER=claude).", file=sys.stderr)
-    sys.exit(1)
+    default_caller = _normalize_caller(os.environ.get("CCB_CALLER_DEFAULT", ""))
+    if not default_caller:
+        default_caller = "manual"
+    print(
+        f"[WARN] CCB_CALLER not set; using '{default_caller}'. "
+        "Set CCB_CALLER explicitly to override.",
+        file=sys.stderr,
+    )
+    return default_caller
 
 
 def make_task_id() -> str:
@@ -446,22 +582,32 @@ def main(argv: list[str]) -> int:
                 print(f"[ERROR] {e}", file=sys.stderr)
                 return EXIT_ERROR
 
-    # Default async mode: background task via nohup
+    # Default async mode: background task
     task_id = make_task_id()
     log_dir = Path(tempfile.gettempdir()) / "ccb-tasks"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / f"ask-{provider}-{task_id}.log"
+    status_file = log_dir / f"ask-{provider}-{task_id}.status"
     try:
         log_file.touch(exist_ok=True)
+    except Exception:
+        pass
+    try:
+        status_file.touch(exist_ok=True)
     except Exception:
         pass
     _cleanup_task_logs(log_dir)
 
     # Detect caller from environment or default to "claude"
     caller = _require_caller()
+    _append_task_status_line(
+        status_file,
+        f"submitted task={task_id} provider={provider} caller={caller} work_dir={os.getcwd()}",
+    )
 
     # Get the path to this script for recursive call with --foreground
     ask_cmd = str(Path(__file__).resolve())
+    bg_pid: int | None = None
 
     # Platform-specific background execution
     if os.name == "nt":
@@ -476,24 +622,40 @@ def main(argv: list[str]) -> int:
 
         # Write PowerShell script - call ask --foreground to use unified daemon
         script_file = log_dir / f"ask-{provider}-{task_id}.ps1"
+        status_file_win = str(status_file).replace('"', '`"')
+        log_file_win = str(log_file).replace('"', '`"')
         script_content = f'''$ErrorActionPreference = "SilentlyContinue"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $env:CCB_REQ_ID = "{task_id}"
 $env:CCB_CALLER = "{caller}"
 $env:CCB_WORK_DIR = "{os.getcwd()}"
+$statusFile = "{status_file_win}"
+$logFile = "{log_file_win}"
+function Write-CcbStatus([string]$line) {{
+  Add-Content -Path $statusFile -Value ("{{0}} {{1}}" -f (Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"), $line) -Encoding UTF8
+}}
+Write-CcbStatus "running pid=$PID"
 Get-Content -Path "{msg_file}" -Encoding UTF8 | python "{ask_cmd}" {provider} --foreground --timeout {timeout}
+$rc = $LASTEXITCODE
+Write-CcbStatus "finished exit_code=$rc"
+if ($rc -ne 0) {{
+  Write-CcbStatus "failed exit_code=$rc"
+}}
+exit $rc
 '''
         script_file.write_text(script_content, encoding="utf-8")
 
-        subprocess.Popen(
-            ["powershell", "-ExecutionPolicy", "Bypass", "-NoProfile", "-File", str(script_file)],
-            stdin=subprocess.DEVNULL,
-            stdout=open(log_file, "w"),
-            stderr=subprocess.STDOUT,
-            creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP,
-        )
+        with log_file.open("a", encoding="utf-8") as log_handle:
+            proc = subprocess.Popen(
+                ["powershell", "-ExecutionPolicy", "Bypass", "-NoProfile", "-File", str(script_file)],
+                stdin=subprocess.DEVNULL,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP,
+            )
+        bg_pid = proc.pid
     else:
-        # Unix: use nohup, call ask --foreground to use unified daemon
+        # Unix: run detached shell script, call ask --foreground to use unified daemon
         # Collect CCB_EMAIL_* env vars for email caller
         email_env_lines = ""
         if caller == "email":
@@ -506,31 +668,62 @@ Get-Content -Path "{msg_file}" -Encoding UTF8 | python "{ask_cmd}" {provider} --
         ccb_run_dir = os.environ.get("CCB_RUN_DIR", "")
         run_dir_line = f'export CCB_RUN_DIR="{ccb_run_dir}"\n' if ccb_run_dir else ""
 
-        bg_script = f'''
+        quoted_status = shlex.quote(str(status_file))
+        quoted_ask_cmd = shlex.quote(ask_cmd)
+        quoted_provider = shlex.quote(provider)
+        bg_script = f'''#!/bin/sh
+set +e
+_now() {{
+  date '+%Y-%m-%dT%H:%M:%S%z'
+}}
+echo "$(_now) running pid=$$" >> {quoted_status}
+echo "[CCB_TASK_START] task={task_id} provider={provider} caller={caller} pid=$$"
 export CCB_REQ_ID="{task_id}"
 export CCB_CALLER="{caller}"
 export CCB_WORK_DIR="{os.getcwd()}"
-{run_dir_line}{email_env_lines}python3 "{ask_cmd}" {provider} --foreground --timeout {timeout} <<'ASKEOF'
+{run_dir_line}{email_env_lines}python3 {quoted_ask_cmd} {quoted_provider} --foreground --timeout {timeout} <<'ASKEOF'
 {message}
 ASKEOF
+rc=$?
+echo "[CCB_TASK_END] task={task_id} provider={provider} exit_code=$rc"
+echo "$(_now) finished exit_code=$rc" >> {quoted_status}
+if [ "$rc" -ne 0 ]; then
+  echo "$(_now) failed exit_code=$rc" >> {quoted_status}
+fi
+exit "$rc"
 '''
-        # Write script to temp file for nohup execution
+        # Write script to temp file for detached execution
         script_file = log_dir / f"ask-{provider}-{task_id}.sh"
         script_file.write_text(bg_script, encoding="utf-8")
         script_file.chmod(0o755)
 
-        # Use nohup to run in background, independent of terminal
-        subprocess.Popen(
-            f'nohup sh "{script_file}" > "{log_file}" 2>&1 &',
-            shell=True,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        # Run detached in its own session and stream stdout/stderr to task log.
+        with log_file.open("a", encoding="utf-8") as log_handle:
+            proc = subprocess.Popen(
+                ["sh", str(script_file)],
+                stdin=subprocess.DEVNULL,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                close_fds=True,
+            )
+        bg_pid = proc.pid
+
+    if bg_pid is not None:
+        _append_task_status_line(status_file, f"spawned pid={bg_pid}")
+    else:
+        _append_task_status_line(status_file, "spawned pid=unknown")
 
     print(f"[CCB_ASYNC_SUBMITTED provider={provider}]")
     print(f"{display_name(provider)} processing (task: {task_id})")
-    print(f"MANDATORY: END YOUR TURN NOW. Reply ONLY '{display_name(provider)} processing...', then stop. See 'Async Guardrail' in CLAUDE.md.")
+    if bg_pid is not None:
+        print(f"[CCB_ASYNC_PID task={task_id} pid={bg_pid}]")
+    print(f"[CCB_ASYNC_STATUS_FILE task={task_id}] {status_file}")
+    print(f"[CCB_ASYNC_LOG_FILE task={task_id}] {log_file}")
+    if _should_emit_async_guardrail(caller):
+        print(
+            f"MANDATORY: END YOUR TURN NOW. Reply ONLY '{display_name(provider)} processing...', then stop. See 'Async Guardrail' in CLAUDE.md."
+        )
     return EXIT_OK
 
 

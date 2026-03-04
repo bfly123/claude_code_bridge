@@ -143,19 +143,26 @@ def find_project_session_file(work_dir: Path, session_filename: str) -> Optional
     """
     Find a session file for the given work_dir.
 
-    Lookup is local-only (no upward traversal):
-      1) <work_dir>/.ccb/<session_filename>
-      2) <work_dir>/.ccb_config/<session_filename>  (legacy)
-      3) <work_dir>/<session_filename>  (legacy)
+    Lookup walks upward from `work_dir` to support calls from subdirectories:
+      1) <dir>/.ccb/<session_filename>
+      2) <dir>/.ccb_config/<session_filename>  (legacy)
+      3) <dir>/<session_filename>  (legacy)
+
+    The nearest match wins.
     """
-    current = Path(work_dir).resolve()
-    candidate = current / CCB_PROJECT_CONFIG_DIRNAME / session_filename
-    if candidate.exists():
-        return candidate
-    legacy_candidate = current / CCB_PROJECT_CONFIG_LEGACY_DIRNAME / session_filename
-    if legacy_candidate.exists():
-        return legacy_candidate
-    legacy = current / session_filename
-    if legacy.exists():
-        return legacy
+    try:
+        current = Path(work_dir).resolve()
+    except Exception:
+        current = Path(work_dir).absolute()
+
+    for root in [current, *current.parents]:
+        candidate = root / CCB_PROJECT_CONFIG_DIRNAME / session_filename
+        if candidate.exists():
+            return candidate
+        legacy_candidate = root / CCB_PROJECT_CONFIG_LEGACY_DIRNAME / session_filename
+        if legacy_candidate.exists():
+            return legacy_candidate
+        legacy = root / session_filename
+        if legacy.exists():
+            return legacy
     return None

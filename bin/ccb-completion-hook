@@ -33,6 +33,7 @@ lib_dir = script_dir.parent / "lib"
 sys.path.insert(0, str(lib_dir))
 
 from compat import read_stdin_text, setup_windows_encoding
+from session_utils import find_project_session_file
 
 setup_windows_encoding()
 
@@ -61,6 +62,45 @@ def load_session_file(session_path: Path) -> dict:
             return json.load(f)
     except Exception:
         return {}
+
+
+def _normalize_path_for_match(value: str) -> str:
+    s = (value or "").strip()
+    if not s:
+        return ""
+    try:
+        normalized = str(Path(s).expanduser().resolve())
+    except Exception:
+        try:
+            normalized = str(Path(s).expanduser().absolute())
+        except Exception:
+            normalized = s
+    normalized = normalized.replace("\\", "/").rstrip("/")
+    if os.name == "nt":
+        normalized = normalized.lower()
+    return normalized
+
+
+def _path_is_same_or_parent(parent: str, child: str) -> bool:
+    p = _normalize_path_for_match(parent)
+    c = _normalize_path_for_match(child)
+    if not p or not c:
+        return False
+    if p == c:
+        return True
+    if not c.startswith(p):
+        return False
+    return c[len(p):].startswith("/")
+
+
+def _work_dirs_compatible(session_work_dir: str, request_work_dir: str) -> bool:
+    if not session_work_dir or not request_work_dir:
+        return True
+    # Accept exact match and parent/child relationship to support calls from subdirectories.
+    return (
+        _path_is_same_or_parent(session_work_dir, request_work_dir)
+        or _path_is_same_or_parent(request_work_dir, session_work_dir)
+    )
 
 
 def send_via_terminal(pane_id: str, message: str, terminal: str, session_data: dict) -> bool:
@@ -360,36 +400,58 @@ Result: {reply_content}
     session_files = {
         "claude": ".claude-session",
         "codex": ".codex-session",
+        "gemini": ".gemini-session",
+        "opencode": ".opencode-session",
         "droid": ".droid-session",
     }
     session_filename = session_files.get(caller, ".claude-session")
 
     # Search for session file in multiple locations (order matters - most specific first)
     work_dir = os.environ.get("CCB_WORK_DIR", "")
-    search_paths = []
+    search_paths: list[Path] = []
+    seen_paths: set[str] = set()
     config_dirnames = (".ccb", ".ccb_config")
 
-    # 1. Request's work_dir (most specific)
-    if work_dir:
-        for dirname in config_dirnames:
-            search_paths.append(Path(work_dir) / dirname / session_filename)
+    def add_search_path(path: Path | None) -> None:
+        if not path:
+            return
+        p = Path(path)
+        key = str(p)
+        if key in seen_paths:
+            return
+        seen_paths.add(key)
+        search_paths.append(p)
 
-    # 2. Current working directory (fallback)
+    # 1. Request's work_dir (most specific), with upward lookup for nested dirs.
+    if work_dir:
+        try:
+            add_search_path(find_project_session_file(Path(work_dir), session_filename))
+        except Exception:
+            pass
+
+    # 2. Current working directory (fallback), with upward lookup.
     cwd = os.getcwd()
     if cwd != work_dir:
-        for dirname in config_dirnames:
-            search_paths.append(Path(cwd) / dirname / session_filename)
+        try:
+            add_search_path(find_project_session_file(Path(cwd), session_filename))
+        except Exception:
+            pass
 
     # 3. User's home-based locations
     for dirname in config_dirnames:
-        search_paths.append(Path.home() / ".local" / "share" / "codex-dual" / dirname / session_filename)
+        add_search_path(Path.home() / ".local" / "share" / "codex-dual" / dirname / session_filename)
 
     # 4. On Windows, also check LOCALAPPDATA
     if os.name == "nt":
         localappdata = os.environ.get("LOCALAPPDATA", "")
         if localappdata:
             for dirname in reversed(config_dirnames):
-                search_paths.insert(0, Path(localappdata) / "codex-dual" / dirname / session_filename)
+                p = Path(localappdata) / "codex-dual" / dirname / session_filename
+                key = str(p)
+                if key in seen_paths:
+                    continue
+                seen_paths.add(key)
+                search_paths.insert(0, p)
 
     pane_id = None
     terminal = "tmux"  # default
@@ -405,7 +467,7 @@ Result: {reply_content}
                 found_session_path = session_path
                 # Validate: check if session's work_dir matches request's work_dir
                 session_work_dir = session_data.get("work_dir", "")
-                if work_dir and session_work_dir and session_work_dir != work_dir:
+                if work_dir and session_work_dir and not _work_dirs_compatible(str(session_work_dir), str(work_dir)):
                     # Session file is for a different project, skip it
                     pane_id = None
                     continue
