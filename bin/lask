@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -109,6 +110,73 @@ def _parse_args(argv: list[str]) -> Tuple[Optional[Path], float, str, bool, Opti
     return output, timeout, message, quiet, session_file, async_mode, sync_mode, no_wrap
 
 
+def _daemon_startup_wait_s(timeout: float) -> float:
+    raw = (os.environ.get("CCB_LASKD_STARTUP_WAIT_S") or "").strip()
+    if raw:
+        try:
+            v = float(raw)
+        except Exception:
+            v = 0.0
+        if v > 0:
+            return min(max(0.2, v), max(0.2, float(timeout)))
+    return min(8.0, max(1.0, float(timeout)))
+
+
+def _daemon_retry_wait_s(timeout: float) -> float:
+    raw = (os.environ.get("CCB_LASKD_RETRY_WAIT_S") or "").strip()
+    if raw:
+        try:
+            v = float(raw)
+        except Exception:
+            v = 0.0
+        if v > 0:
+            return min(1.0, max(0.05, v))
+    return min(0.3, max(0.05, float(timeout) / 50.0))
+
+
+def _daemon_request_with_retries(
+    work_dir: Path,
+    message: str,
+    timeout: float,
+    quiet: bool,
+    output_path: Path | None,
+) -> tuple[str, int] | None:
+    state_file = state_file_from_env(LASK_CLIENT_SPEC.state_file_env)
+
+    result = try_daemon_request(LASK_CLIENT_SPEC, work_dir, message, timeout, quiet, state_file, output_path=output_path)
+    if result is not None:
+        return result
+
+    if not env_bool(LASK_CLIENT_SPEC.enabled_env, True):
+        return None
+    if not find_project_session_file(work_dir, LASK_CLIENT_SPEC.session_filename):
+        return None
+
+    if state_file and state_file.exists():
+        try:
+            if not wait_for_daemon_ready(LASK_CLIENT_SPEC, 0.2, state_file):
+                try:
+                    state_file.unlink()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    started = maybe_start_daemon(LASK_CLIENT_SPEC, work_dir)
+    if started:
+        wait_for_daemon_ready(LASK_CLIENT_SPEC, _daemon_startup_wait_s(timeout), state_file)
+
+    wait_s = _daemon_retry_wait_s(timeout)
+    deadline = time.time() + min(3.0, max(0.2, float(timeout)))
+    while time.time() < deadline:
+        result = try_daemon_request(LASK_CLIENT_SPEC, work_dir, message, timeout, quiet, state_file, output_path=output_path)
+        if result is not None:
+            return result
+        time.sleep(wait_s)
+
+    return None
+
+
 def main(argv: list[str]) -> int:
     try:
         output_path, timeout, message, quiet, session_file, async_mode, sync_mode, no_wrap = _parse_args(argv)
@@ -131,11 +199,7 @@ def main(argv: list[str]) -> int:
             env_session_file=os.environ.get("CCB_SESSION_FILE"),
         )
 
-        state_file = state_file_from_env(LASK_CLIENT_SPEC.state_file_env)
-        daemon_result = try_daemon_request(LASK_CLIENT_SPEC, work_dir, message, timeout, quiet, state_file, output_path=output_path)
-        if daemon_result is None and maybe_start_daemon(LASK_CLIENT_SPEC, work_dir):
-            wait_for_daemon_ready(LASK_CLIENT_SPEC, timeout_s=min(2.0, max(0.2, float(timeout))), state_file=state_file)
-            daemon_result = try_daemon_request(LASK_CLIENT_SPEC, work_dir, message, timeout, quiet, state_file, output_path=output_path)
+        daemon_result = _daemon_request_with_retries(work_dir, message, timeout, quiet, output_path)
 
         if daemon_result is not None:
             reply, exit_code = daemon_result
