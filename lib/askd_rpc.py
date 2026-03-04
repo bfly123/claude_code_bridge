@@ -27,12 +27,16 @@ def ping_daemon(protocol_prefix: str, timeout_s: float, state_file: Path) -> boo
         return False
     try:
         with socket.create_connection((host, port), timeout=timeout_s) as sock:
+            sock.settimeout(max(0.1, float(timeout_s)))
             req = {"type": f"{protocol_prefix}.ping", "v": 1, "id": "ping", "token": token}
             sock.sendall((json.dumps(req) + "\n").encode("utf-8"))
             buf = b""
             deadline = time.time() + timeout_s
             while b"\n" not in buf and time.time() < deadline:
-                chunk = sock.recv(1024)
+                try:
+                    chunk = sock.recv(1024)
+                except socket.timeout:
+                    continue
                 if not chunk:
                     break
                 buf += chunk
@@ -57,9 +61,13 @@ def shutdown_daemon(protocol_prefix: str, timeout_s: float, state_file: Path) ->
         return False
     try:
         with socket.create_connection((host, port), timeout=timeout_s) as sock:
+            sock.settimeout(max(0.1, float(timeout_s)))
             req = {"type": f"{protocol_prefix}.shutdown", "v": 1, "id": "shutdown", "token": token}
             sock.sendall((json.dumps(req) + "\n").encode("utf-8"))
-            _ = sock.recv(1024)
+            try:
+                _ = sock.recv(1024)
+            except socket.timeout:
+                pass
         return True
     except Exception:
         return False
