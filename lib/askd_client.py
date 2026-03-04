@@ -292,7 +292,16 @@ def maybe_start_daemon(spec: ProviderClientSpec, work_dir: Path) -> bool:
     else:
         argv = [sys.executable, entry]
     try:
-        kwargs = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "close_fds": True}
+        env = os.environ.copy()
+        env["CCB_WORK_DIR"] = str(work_dir)
+        kwargs = {
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "close_fds": True,
+            "cwd": str(work_dir),
+            "env": env,
+        }
         if os.name == "nt":
             kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         else:
