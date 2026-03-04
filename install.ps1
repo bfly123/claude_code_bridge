@@ -684,6 +684,15 @@ function Install-ClaudeConfig {
     }
   }
 
+  # Remove legacy system-ping permissions to avoid conflict with ccb ping skill.
+  $legacyPerms = @("Bash(ping:*)", "Bash(ping *)")
+  foreach ($legacy in $legacyPerms) {
+    if ($currentAllow -contains $legacy) {
+      [void]$currentAllow.Remove($legacy)
+      $updated = $true
+    }
+  }
+
   if ($updated) {
     $settings.permissions.allow = $currentAllow.ToArray()
     $settings | ConvertTo-Json -Depth 10 | Out-File -Encoding UTF8 -FilePath $settingsJson

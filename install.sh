@@ -1161,6 +1161,7 @@ SETTINGS
   # Remove legacy permissions from previous versions
   local perms_to_remove=(
     'Bash(ping *)'
+    'Bash(ping:*)'
   )
   for old_perm in "${perms_to_remove[@]}"; do
     if grep -q "$old_perm" "$settings_file" 2>/dev/null; then
