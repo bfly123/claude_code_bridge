@@ -69,7 +69,7 @@ class PerSessionWorkerPool(Generic[WorkerT]):
         with self._lock:
             worker = self._workers.get(session_key)
             # Check if worker thread is dead and needs replacement
-            if worker is not None and not worker.is_alive():
+            if worker is not None and not self._is_worker_alive(worker):
                 # Worker thread died, remove it and create a new one
                 self._workers.pop(session_key, None)
                 worker = None
@@ -80,3 +80,13 @@ class PerSessionWorkerPool(Generic[WorkerT]):
         if created:
             worker.start()
         return worker
+
+    @staticmethod
+    def _is_worker_alive(worker: WorkerT) -> bool:
+        """Best-effort liveness check across Python/runtime quirks and test doubles."""
+        try:
+            return bool(worker.is_alive())
+        except Exception:
+            # Some test doubles (or future runtimes) may not implement Thread internals
+            # expected by `is_alive()`. Treat as alive to avoid duplicate worker creation.
+            return True

@@ -95,6 +95,39 @@ def test_caskd_ensure_pane_already_alive(tmp_path: Path, monkeypatch: pytest.Mon
     assert backend.respawned == []  # No respawn needed
 
 
+def test_caskd_ensure_pane_prefers_marker_over_stale_alive_pane(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If pane_id is stale-but-alive, marker match should take precedence for routing."""
+    session_path = tmp_path / ".codex-session"
+    session_path.write_text(
+        json.dumps({
+            "session_id": "test-session",
+            "terminal": "tmux",
+            "pane_id": "%1",
+            "pane_title_marker": "CCB-codex-test",
+            "work_dir": str(tmp_path),
+            "active": True,
+        }),
+        encoding="utf-8",
+    )
+
+    backend = FakeTmuxBackend()
+    backend.alive = {"%1": True, "%2": True}
+    backend.marker_map = {"CCB-codex": "%2"}
+    monkeypatch.setattr(caskd_session, "get_backend_for_session", lambda data: backend)
+
+    sess = caskd_session.load_project_session(tmp_path)
+    assert sess is not None
+
+    ok, pane = sess.ensure_pane()
+    assert ok is True
+    assert pane == "%2"
+
+    data = json.loads(session_path.read_text(encoding="utf-8"))
+    assert data["pane_id"] == "%2"
+
+
 def test_caskd_ensure_pane_marker_rediscover(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """When original pane is dead but marker finds alive pane, should update pane_id."""
     session_path = tmp_path / ".codex-session"

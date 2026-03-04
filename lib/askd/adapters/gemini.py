@@ -162,7 +162,16 @@ class GeminiAdapter(BaseProviderAdapter):
         prompt = wrap_gemini_prompt(req.message, task.req_id)
         backend.send_text(pane_id, prompt)
 
-        deadline = None if float(req.timeout_s) < 0.0 else (time.time() + float(req.timeout_s))
+        req_timeout = float(req.timeout_s)
+        if req_timeout < 0.0:
+            max_wait = float(os.environ.get("CCB_GASKD_MAX_WAIT_SECONDS", "300"))
+            deadline = time.time() + max(1.0, max_wait)
+            _write_log(
+                f"[WARN] timeout_s<0 for req_id={task.req_id}; "
+                f"using safety max wait {max(1.0, max_wait)}s"
+            )
+        else:
+            deadline = time.time() + req_timeout
         done_seen = False
         done_ms: Optional[int] = None
         latest_reply = ""

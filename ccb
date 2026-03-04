@@ -1424,6 +1424,30 @@ class AILauncher:
                 pass
         self._maybe_start_provider_daemon("claude")
 
+    def _backfill_local_claude_session_work_dir_fields(self) -> None:
+        """
+        Ensure existing .claude-session has work_dir/work_dir_norm for current project.
+        This keeps resume/routing robust even when Claude is not the anchor pane.
+        """
+        path = self._claude_session_file()
+        if not path.exists():
+            return
+        data = self._read_json_file(path)
+        if not isinstance(data, dict):
+            return
+        work_dir = str(self.project_root)
+        work_dir_norm = _normalize_path_for_match(work_dir)
+        updated = False
+        if data.get("work_dir") != work_dir:
+            data["work_dir"] = work_dir
+            updated = True
+        if data.get("work_dir_norm") != work_dir_norm:
+            data["work_dir_norm"] = work_dir_norm
+            updated = True
+        if updated:
+            data["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            self._write_json_file(path, data)
+
     def _get_latest_codex_session_id(self) -> tuple[str | None, bool]:
         """
         Returns (session_id, has_any_history_for_cwd).
@@ -3274,6 +3298,13 @@ class AILauncher:
 
         if not self._require_project_config_dir():
             return 2
+
+        # Keep existing Claude session metadata aligned with current project even
+        # when Claude is not the anchor provider in this run.
+        try:
+            self._backfill_local_claude_session_work_dir_fields()
+        except Exception:
+            pass
 
         if not self.providers:
             print("❌ No providers configured. Define providers in ccb.config or pass them on the command line.", file=sys.stderr)

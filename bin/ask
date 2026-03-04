@@ -174,10 +174,11 @@ def _send_via_unified_daemon(
     # This already contains the correct project-specific path.
     state_file = state_file_path("askd.json")
 
+    allow_autostart = _allow_unified_autostart()
     state = askd_rpc.read_state(state_file)
     if not state:
         # Try to start daemon and retry once
-        if _maybe_start_unified_daemon():
+        if allow_autostart and _maybe_start_unified_daemon():
             state = askd_rpc.read_state(state_file)
         if not state:
             print("[ERROR] Unified askd daemon not running", file=sys.stderr)
@@ -250,7 +251,7 @@ def _send_via_unified_daemon(
         except (ConnectionRefusedError, ConnectionResetError) as e:
             # Only retry if connection failed before request was sent
             if attempt == 0 and not request_sent:
-                if _maybe_start_unified_daemon():
+                if allow_autostart and _maybe_start_unified_daemon():
                     # Re-read state for new daemon
                     state = askd_rpc.read_state(state_file)
                     if state:
@@ -264,7 +265,7 @@ def _send_via_unified_daemon(
         except OSError as e:
             # For other OS errors, only retry if connection not yet established
             if attempt == 0 and not request_sent:
-                if _maybe_start_unified_daemon():
+                if allow_autostart and _maybe_start_unified_daemon():
                     state = askd_rpc.read_state(state_file)
                     if state:
                         host = state.get("connect_host") or state.get("host") or "127.0.0.1"
@@ -293,6 +294,11 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if not val:
         return default
     return val not in ("0", "false", "no", "off")
+
+
+def _allow_unified_autostart() -> bool:
+    """Whether `ask` may auto-start unified askd when state is missing."""
+    return _env_bool("CCB_ASKD_AUTOSTART", True)
 
 
 def _default_foreground() -> bool:
@@ -447,6 +453,19 @@ def main(argv: list[str]) -> int:
                 return EXIT_ERROR
 
     # Default async mode: background task via nohup
+    if _use_unified_daemon():
+        # Fail fast in async mode when daemon is unavailable and autostart is disabled.
+        try:
+            from askd_runtime import state_file_path
+            import askd_rpc
+
+            state = askd_rpc.read_state(state_file_path("askd.json"))
+        except Exception:
+            state = None
+        if not state and not _allow_unified_autostart():
+            print("[ERROR] Unified askd daemon not running", file=sys.stderr)
+            return EXIT_ERROR
+
     task_id = make_task_id()
     log_dir = Path(tempfile.gettempdir()) / "ccb-tasks"
     log_dir.mkdir(parents=True, exist_ok=True)

@@ -213,7 +213,14 @@ class CodexAdapter(BaseProviderAdapter):
             if (not anchor_seen) and time.time() < anchor_collect_grace:
                 continue
 
-            chunks.append(text)
+            # Codex may emit repeated assistant snapshots; keep only the newest
+            # snapshot when content is cumulative to avoid duplicate chunks.
+            if chunks and text == chunks[-1]:
+                continue
+            if chunks and text.startswith(chunks[-1]):
+                chunks[-1] = text
+            else:
+                chunks.append(text)
             combined = "\n".join(chunks)
             if is_done_text(combined, task.req_id):
                 done_seen = True
