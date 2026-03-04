@@ -222,22 +222,23 @@ class OpenCodeAdapter(BaseProviderAdapter):
             else:
                 _write_log(f"[WARN] Degraded completion rejected: empty reply for req_id={task.req_id}")
 
-        # Skip completion hook for cancelled tasks
-        if not task.cancelled:
-            notify_completion(
-                provider="opencode",
-                output_file=req.output_path,
-                reply=final_reply,
-                req_id=task.req_id,
-                done_seen=done_seen,
-                caller=req.caller,
-                email_req_id=req.email_req_id,
-                email_msg_id=req.email_msg_id,
-                email_from=req.email_from,
-                work_dir=req.work_dir,
-            )
-        else:
-            _write_log(f"[INFO] Task cancelled, skipping completion hook: req_id={task.req_id}")
+        reply_for_hook = final_reply
+        if task.cancelled:
+            _write_log(f"[WARN] Task cancelled, sending failure completion hook: req_id={task.req_id}")
+            if not reply_for_hook.strip():
+                reply_for_hook = "Task cancelled or timed out before completion."
+        notify_completion(
+            provider="opencode",
+            output_file=req.output_path,
+            reply=reply_for_hook,
+            req_id=task.req_id,
+            done_seen=done_seen and (not task.cancelled),
+            caller=req.caller,
+            email_req_id=req.email_req_id,
+            email_msg_id=req.email_msg_id,
+            email_from=req.email_from,
+            work_dir=req.work_dir,
+        )
 
         result = ProviderResult(
             exit_code=0 if done_seen else 2,

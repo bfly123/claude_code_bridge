@@ -552,18 +552,21 @@ class ClaudeAdapter(BaseProviderAdapter):
     def _finalize_result(self, result: ProviderResult, req: ProviderRequest, task: QueuedTask) -> None:
         _write_log(f"[INFO] done provider=claude req_id={result.req_id} exit={result.exit_code}")
 
-        # Skip completion hook for cancelled tasks
+        reply_for_hook = result.reply
+        notify_done_seen = result.done_seen
         if task.cancelled:
-            _write_log(f"[INFO] Task cancelled, skipping completion hook: req_id={task.req_id}")
-            return
+            _write_log(f"[WARN] Task cancelled, sending failure completion hook: req_id={task.req_id}")
+            notify_done_seen = False
+            if not (reply_for_hook or "").strip():
+                reply_for_hook = "Task cancelled or timed out before completion."
 
-        _write_log(f"[INFO] notify_completion caller={req.caller} done_seen={result.done_seen} email_req_id={req.email_req_id}")
+        _write_log(f"[INFO] notify_completion caller={req.caller} done_seen={notify_done_seen} email_req_id={req.email_req_id}")
         notify_completion(
             provider="claude",
             output_file=req.output_path,
-            reply=result.reply,
+            reply=reply_for_hook,
             req_id=result.req_id,
-            done_seen=result.done_seen,
+            done_seen=notify_done_seen,
             caller=req.caller,
             email_req_id=req.email_req_id,
             email_msg_id=req.email_msg_id,

@@ -279,20 +279,20 @@ class CodexAdapter(BaseProviderAdapter):
             f"anchor={result.anchor_seen} done={result.done_seen}"
         )
 
-        # Skip completion hook for cancelled tasks
+        reply_for_hook = reply
+        notify_done_seen = done_seen
         if task.cancelled:
-            _write_log(f"[INFO] Task cancelled, skipping completion hook: req_id={task.req_id}")
-            return result
-
-        # Log caller info before notify_completion
-        _write_log(f"[INFO] notify_completion caller={req.caller} done_seen={done_seen}")
-
+            _write_log(f"[WARN] Task cancelled, sending failure completion hook: req_id={task.req_id}")
+            notify_done_seen = False
+            if not reply_for_hook.strip():
+                reply_for_hook = "Task cancelled or timed out before completion."
+        _write_log(f"[INFO] notify_completion caller={req.caller} done_seen={notify_done_seen}")
         notify_completion(
             provider="codex",
             output_file=req.output_path,
-            reply=reply,
+            reply=reply_for_hook,
             req_id=task.req_id,
-            done_seen=done_seen,
+            done_seen=notify_done_seen,
             caller=req.caller,
             email_req_id=req.email_req_id,
             email_msg_id=req.email_msg_id,
