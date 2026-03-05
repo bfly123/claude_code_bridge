@@ -22,6 +22,7 @@ import shutil
 import posixpath
 import shlex
 import threading
+import sqlite3
 from pathlib import Path
 
 script_dir = Path(__file__).resolve().parent
@@ -1937,7 +1938,12 @@ class AILauncher:
 
         def _matches_target(directory: str) -> bool:
             norm = _normalize_path_for_match(directory)
-            return bool(norm) and norm in target_candidates
+            if not norm:
+                return False
+            for target in target_candidates:
+                if _normpath_within(norm, target) or _normpath_within(target, norm):
+                    return True
+            return False
 
         # Prefer the runtime reader which supports modern OpenCode storage (SQLite-backed)
         # and can resolve latest session for the current work_dir.
@@ -1948,6 +1954,38 @@ class AILauncher:
                 sid = str((state or {}).get("session_id") or "").strip() if isinstance(state, dict) else ""
                 if sid:
                     return True
+            except Exception:
+                continue
+
+        # Reader matching may be strict for some OpenCode builds; add a direct DB fallback
+        # so starting from a subdirectory can still reuse parent project sessions.
+        db_candidates: list[Path] = []
+        db_env = (os.environ.get("OPENCODE_DB_PATH") or "").strip()
+        if db_env:
+            db_candidates.append(Path(db_env).expanduser())
+        db_candidates.append(root.parent / "opencode.db")
+        db_candidates.append(root / "opencode.db")
+        seen_db: set[str] = set()
+        for db_path in db_candidates:
+            key = str(db_path)
+            if key in seen_db:
+                continue
+            seen_db.add(key)
+            try:
+                if not db_path.exists() or not db_path.is_file():
+                    continue
+                conn = sqlite3.connect(str(db_path), timeout=0.2)
+                try:
+                    conn.execute("PRAGMA busy_timeout = 200")
+                    rows = conn.execute(
+                        "SELECT directory FROM session ORDER BY time_updated DESC LIMIT 400"
+                    ).fetchall()
+                    for row in rows:
+                        directory = row[0] if isinstance(row, tuple) and row else None
+                        if isinstance(directory, str) and _matches_target(directory):
+                            return True
+                finally:
+                    conn.close()
             except Exception:
                 continue
 

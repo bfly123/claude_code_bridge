@@ -58,6 +58,26 @@ def test_opencode_resume_allowed_with_db_history_no_session_dir(tmp_path: Path, 
     assert launcher._opencode_resume_allowed() is True
 
 
+def test_opencode_resume_allowed_from_subdir_with_parent_history(tmp_path: Path, monkeypatch) -> None:
+    ccb = _load_ccb_module()
+
+    project_dir = tmp_path / "project"
+    sub_dir = project_dir / "sub"
+    sub_dir.mkdir(parents=True, exist_ok=True)
+    storage_root = tmp_path / "opencode" / "storage"
+    storage_root.mkdir(parents=True, exist_ok=True)
+    _init_minimal_opencode_db(storage_root.parent / "opencode.db", project_dir)
+
+    monkeypatch.chdir(sub_dir)
+
+    import opencode_comm
+
+    monkeypatch.setattr(opencode_comm, "OPENCODE_STORAGE_ROOT", storage_root)
+    launcher = ccb.AILauncher(["opencode"], resume=True)
+
+    assert launcher._opencode_resume_allowed() is True
+
+
 def test_opencode_resume_allowed_with_session_diff_history(tmp_path: Path, monkeypatch) -> None:
     ccb = _load_ccb_module()
 
