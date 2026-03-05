@@ -31,6 +31,11 @@ def _write_log(line: str) -> None:
     write_log(log_path(OASKD_SPEC.log_file_name), line)
 
 
+def _log_done(task: QueuedTask, result: ProviderResult) -> ProviderResult:
+    _write_log(f"[INFO] done provider=opencode req_id={task.req_id} exit={result.exit_code}")
+    return result
+
+
 def _cancel_detection_enabled(default: bool = False) -> bool:
     return env_bool("CCB_OASKD_CANCEL_DETECT", default)
 
@@ -75,13 +80,13 @@ class OpenCodeAdapter(BaseProviderAdapter):
         session_key = self.compute_session_key(session)
 
         if not session:
-            return ProviderResult(
+            return _log_done(task, ProviderResult(
                 exit_code=1,
                 reply="No active OpenCode session found for work_dir.",
                 req_id=task.req_id,
                 session_key=session_key,
                 done_seen=False,
-            )
+            ))
 
         # Cross-process serialization lock
         if float(req.timeout_s) < 0.0:
@@ -90,13 +95,13 @@ class OpenCodeAdapter(BaseProviderAdapter):
             lock_timeout = min(300.0, max(1.0, float(req.timeout_s)))
         lock = ProviderLock("opencode", cwd=f"session:{session_key}", timeout=lock_timeout)
         if not lock.acquire():
-            return ProviderResult(
+            return _log_done(task, ProviderResult(
                 exit_code=1,
                 reply="Another OpenCode request is in progress (session lock timeout).",
                 req_id=task.req_id,
                 session_key=session_key,
                 done_seen=False,
-            )
+            ))
 
         try:
             return self._handle_task_locked(task, session, session_key, started_ms)
@@ -108,24 +113,24 @@ class OpenCodeAdapter(BaseProviderAdapter):
 
         ok, pane_or_err = session.ensure_pane()
         if not ok:
-            return ProviderResult(
+            return _log_done(task, ProviderResult(
                 exit_code=1,
                 reply=f"Session pane not available: {pane_or_err}",
                 req_id=task.req_id,
                 session_key=session_key,
                 done_seen=False,
-            )
+            ))
         pane_id = pane_or_err
 
         backend = get_backend_for_session(session.data)
         if not backend:
-            return ProviderResult(
+            return _log_done(task, ProviderResult(
                 exit_code=1,
                 reply="Terminal backend not available",
                 req_id=task.req_id,
                 session_key=session_key,
                 done_seen=False,
-            )
+            ))
 
         log_reader = OpenCodeLogReader(
             work_dir=Path(session.work_dir),
@@ -146,19 +151,25 @@ class OpenCodeAdapter(BaseProviderAdapter):
 
         # Async mode: timeout_s == 0 means fire-and-forget
         if float(req.timeout_s) == 0.0:
-            return ProviderResult(
+            return _log_done(task, ProviderResult(
                 exit_code=0,
                 reply="",
                 req_id=task.req_id,
                 session_key=session_key,
                 done_seen=True,
                 done_ms=_now_ms() - started_ms,
-            )
+            ))
 
         deadline = None if float(req.timeout_s) < 0.0 else (time.time() + float(req.timeout_s))
         chunks: list[str] = []
         done_seen = False
         done_ms: Optional[int] = None
+        last_progress_at = time.time()
+        try:
+            stall_timeout_s = float(os.environ.get("CCB_OASKD_STALL_TIMEOUT_S", "120"))
+        except Exception:
+            stall_timeout_s = 120.0
+        stall_timeout_s = max(1.0, stall_timeout_s)
 
         pane_check_interval = float(os.environ.get("CCB_OASKD_PANE_CHECK_INTERVAL", "2.0"))
         last_pane_check = time.time()
@@ -184,18 +195,31 @@ class OpenCodeAdapter(BaseProviderAdapter):
                     alive = False
                 if not alive:
                     _write_log(f"[ERROR] Pane {pane_id} died during request req_id={task.req_id}")
-                    return ProviderResult(
+                    return _log_done(task, ProviderResult(
                         exit_code=1,
                         reply="OpenCode pane died during request",
                         req_id=task.req_id,
                         session_key=session_key,
                         done_seen=False,
-                    )
+                    ))
                 last_pane_check = time.time()
 
             reply, state = log_reader.wait_for_message(state, wait_step)
             if not reply:
+                if (time.time() - last_progress_at) >= stall_timeout_s:
+                    _write_log(
+                        f"[ERROR] OpenCode response stalled for req_id={task.req_id} "
+                        f"(no progress for {int(stall_timeout_s)}s)"
+                    )
+                    return _log_done(task, ProviderResult(
+                        exit_code=2,
+                        reply="OpenCode response stalled (no new output).",
+                        req_id=task.req_id,
+                        session_key=session_key,
+                        done_seen=False,
+                    ))
                 continue
+            last_progress_at = time.time()
             chunks.append(reply)
             combined = "\n".join(chunks)
             if is_done_text(combined, task.req_id):
@@ -247,5 +271,4 @@ class OpenCodeAdapter(BaseProviderAdapter):
             done_seen=done_seen,
             done_ms=done_ms,
         )
-        _write_log(f"[INFO] done provider=opencode req_id={task.req_id} exit={result.exit_code}")
-        return result
+        return _log_done(task, result)

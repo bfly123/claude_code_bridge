@@ -22,9 +22,11 @@ Examples:
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -43,6 +45,7 @@ sys.path.insert(0, str(lib_dir))
 from compat import read_stdin_text, setup_windows_encoding
 setup_windows_encoding()
 
+from async_dispatch import AsyncDispatchConfig, AsyncDispatcher, AsyncTaskContext
 from cli_output import EXIT_ERROR, EXIT_OK
 
 
@@ -88,6 +91,77 @@ def _cleanup_task_logs(log_dir: Path) -> None:
                 (log_dir / f"{prefix}{ext}").unlink(missing_ok=True)
             except Exception:
                 pass
+
+
+def _find_ccb_ping_cmd() -> list[str]:
+    local = Path(__file__).resolve().parent / "ccb-ping"
+    if local.exists():
+        if os.name == "nt" and local.suffix.lower() not in (".exe", ".bat", ".cmd"):
+            return [sys.executable, str(local)]
+        return [str(local)]
+    found = shutil.which("ccb-ping")
+    if found:
+        return [found]
+    return []
+
+
+def _provider_ack_timeout_s() -> float:
+    raw = (os.environ.get("CCB_ASYNC_PROVIDER_ACK_TIMEOUT_S") or "").strip()
+    if not raw:
+        return 3.0
+    try:
+        return max(0.5, float(raw))
+    except Exception:
+        return 3.0
+
+
+def _dispatch_ack_timeout_s() -> float:
+    raw = (os.environ.get("CCB_ASYNC_DISPATCH_ACK_TIMEOUT_S") or "").strip()
+    if not raw:
+        return 3.0
+    try:
+        return max(0.5, float(raw))
+    except Exception:
+        return 3.0
+
+
+def _async_require_provider_ack() -> bool:
+    return _env_bool("CCB_ASYNC_REQUIRE_PROVIDER_ACK", True)
+
+
+def _check_provider_ack(provider: str, timeout_s: float) -> tuple[bool, str, str]:
+    """
+    Return (ok, reason, details).
+    reason: ok | timeout | unavailable | ping_missing
+    """
+    cmd = _find_ccb_ping_cmd()
+    if not cmd:
+        return False, "ping_missing", "ccb-ping command not found"
+    try:
+        proc = subprocess.run(
+            cmd + [provider],
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "timeout", f"provider ack timeout after {timeout_s:.1f}s"
+    except Exception as exc:
+        return False, "unavailable", str(exc)
+    details = (proc.stdout or "").strip()
+    if not details:
+        details = (proc.stderr or "").strip()
+    if proc.returncode == 0:
+        return True, "ok", details or "provider ack ok"
+    if not details:
+        details = "provider connectivity check failed"
+    return False, "unavailable", details
+
+
+def _print_unavailable(provider: str, reason: str, details: str) -> None:
+    print(f"[CCB_ASYNC_UNAVAILABLE provider={provider} reason={reason}]")
+    print(f"{display_name(provider)} unavailable: {details}")
+    print("MANDATORY: Treat this provider as unavailable and degrade/fallback now.")
 
 
 def _use_unified_daemon() -> bool:
@@ -479,73 +553,28 @@ def main(argv: list[str]) -> int:
     # Detect caller from environment or default to "claude"
     caller = _require_caller()
 
-    # Get the path to this script for recursive call with --foreground
-    ask_cmd = str(Path(__file__).resolve())
-
-    # Platform-specific background execution
-    if os.name == "nt":
-        # Windows: use PowerShell script
-        DETACHED_PROCESS = 0x00000008
-        CREATE_NO_WINDOW = 0x08000000
-        CREATE_NEW_PROCESS_GROUP = 0x00000200
-
-        # Write message to temp file to avoid escaping issues
-        msg_file = log_dir / f"ask-{provider}-{task_id}.msg"
-        msg_file.write_text(message, encoding="utf-8")
-
-        # Write PowerShell script - call ask --foreground to use unified daemon
-        script_file = log_dir / f"ask-{provider}-{task_id}.ps1"
-        script_content = f'''$ErrorActionPreference = "SilentlyContinue"
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$env:CCB_REQ_ID = "{task_id}"
-$env:CCB_CALLER = "{caller}"
-$env:CCB_WORK_DIR = "{os.getcwd()}"
-Get-Content -Path "{msg_file}" -Encoding UTF8 | python "{ask_cmd}" {provider} --foreground --timeout {timeout}
-'''
-        script_file.write_text(script_content, encoding="utf-8")
-
-        subprocess.Popen(
-            ["powershell", "-ExecutionPolicy", "Bypass", "-NoProfile", "-File", str(script_file)],
-            stdin=subprocess.DEVNULL,
-            stdout=open(log_file, "w"),
-            stderr=subprocess.STDOUT,
-            creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP,
-        )
-    else:
-        # Unix: use nohup, call ask --foreground to use unified daemon
-        # Collect CCB_EMAIL_* env vars for email caller
-        email_env_lines = ""
-        if caller == "email":
-            for key in ("CCB_EMAIL_REQ_ID", "CCB_EMAIL_MSG_ID", "CCB_EMAIL_FROM"):
-                val = os.environ.get(key, "")
-                if val:
-                    email_env_lines += f'export {key}="{val}"\n'
-
-        # Pass CCB_RUN_DIR so background script can find askd state file
-        ccb_run_dir = os.environ.get("CCB_RUN_DIR", "")
-        run_dir_line = f'export CCB_RUN_DIR="{ccb_run_dir}"\n' if ccb_run_dir else ""
-
-        bg_script = f'''
-export CCB_REQ_ID="{task_id}"
-export CCB_CALLER="{caller}"
-export CCB_WORK_DIR="{os.getcwd()}"
-{run_dir_line}{email_env_lines}python3 "{ask_cmd}" {provider} --foreground --timeout {timeout} <<'ASKEOF'
-{message}
-ASKEOF
-'''
-        # Write script to temp file for nohup execution
-        script_file = log_dir / f"ask-{provider}-{task_id}.sh"
-        script_file.write_text(bg_script, encoding="utf-8")
-        script_file.chmod(0o755)
-
-        # Use nohup to run in background, independent of terminal
-        subprocess.Popen(
-            f'nohup sh "{script_file}" > "{log_file}" 2>&1 &',
-            shell=True,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+    ctx = AsyncTaskContext(
+        provider=provider,
+        message=message,
+        timeout=timeout,
+        caller=caller,
+        task_id=task_id,
+        log_dir=log_dir,
+        log_file=log_file,
+        ask_cmd=str(Path(__file__).resolve()),
+        work_dir=os.getcwd(),
+        run_dir=str(os.environ.get("CCB_RUN_DIR") or ""),
+    )
+    cfg = AsyncDispatchConfig(
+        require_provider_ack=_async_require_provider_ack(),
+        provider_ack_timeout_s=_provider_ack_timeout_s(),
+        dispatch_ack_timeout_s=_dispatch_ack_timeout_s(),
+        provider_ack_checker=_check_provider_ack,
+    )
+    ok, reason, details = AsyncDispatcher(ctx, cfg).submit()
+    if not ok:
+        _print_unavailable(provider, reason, details)
+        return EXIT_ERROR
 
     print(f"[CCB_ASYNC_SUBMITTED provider={provider}]")
     print(f"{display_name(provider)} processing (task: {task_id})")

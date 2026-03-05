@@ -116,11 +116,14 @@ class OpenCodeProjectSession:
         pane_id = self.pane_id
         marker = self.pane_title_marker
         resolver = getattr(backend, "find_pane_by_title_marker", None)
+        marker_lookup_attempted = bool(marker and callable(resolver))
+        marker_resolved_alive = False
 
         # Prefer marker-discovered pane to avoid routing to a stale but alive pane_id.
         if marker and callable(resolver):
             resolved = resolver(marker)
             if resolved and backend.is_alive(str(resolved)):
+                marker_resolved_alive = True
                 if str(resolved) != str(pane_id):
                     self.data["pane_id"] = str(resolved)
                     self.data["updated_at"] = _now_str()
@@ -129,8 +132,11 @@ class OpenCodeProjectSession:
                 return True, str(resolved)
 
         if pane_id and backend.is_alive(pane_id):
-            self._attach_pane_log(backend, pane_id)
-            return True, pane_id
+            # If marker lookup was attempted but couldn't find a live pane, this pane_id may
+            # be a stale/reused tmux pane. Avoid routing to it; let respawn/failure path run.
+            if not (self.terminal == "tmux" and marker_lookup_attempted and not marker_resolved_alive):
+                self._attach_pane_log(backend, pane_id)
+                return True, pane_id
 
         if marker and callable(resolver):
             resolved = resolver(marker)
@@ -175,6 +181,9 @@ class OpenCodeProjectSession:
                         last_err = f"{exc}"
                 if last_err:
                     return False, f"Pane not alive and respawn failed: {last_err}"
+
+        if marker_lookup_attempted and not marker_resolved_alive and pane_id:
+            return False, f"Pane marker not found for active pane id: {pane_id}"
 
         return False, f"Pane not alive: {pane_id}"
 

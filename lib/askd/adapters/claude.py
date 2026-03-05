@@ -32,6 +32,11 @@ def _write_log(line: str) -> None:
     write_log(log_path(LASKD_SPEC.log_file_name), line)
 
 
+def _log_done(task: QueuedTask, result: ProviderResult) -> ProviderResult:
+    _write_log(f"[INFO] done provider=claude req_id={task.req_id} exit={result.exit_code}")
+    return result
+
+
 def _tail_state_for_log(log_path_val: Optional[Path], *, tail_bytes: int) -> dict:
     if not log_path_val or not log_path_val.exists():
         return {"session_path": log_path_val, "offset": 0, "carry": b""}
@@ -496,34 +501,34 @@ class ClaudeAdapter(BaseProviderAdapter):
         session_key = self.compute_session_key(session)
 
         if not session:
-            return ProviderResult(
+            return _log_done(task, ProviderResult(
                 exit_code=1,
                 reply="No active Claude session found for work_dir.",
                 req_id=task.req_id,
                 session_key=session_key,
                 done_seen=False,
-            )
+            ))
 
         ok, pane_or_err = session.ensure_pane()
         if not ok:
-            return ProviderResult(
+            return _log_done(task, ProviderResult(
                 exit_code=1,
                 reply=f"Session pane not available: {pane_or_err}",
                 req_id=task.req_id,
                 session_key=session_key,
                 done_seen=False,
-            )
+            ))
         pane_id = pane_or_err
 
         backend = get_backend_for_session(session.data)
         if not backend:
-            return ProviderResult(
+            return _log_done(task, ProviderResult(
                 exit_code=1,
                 reply="Terminal backend not available",
                 req_id=task.req_id,
                 session_key=session_key,
                 done_seen=False,
-            )
+            ))
 
         deadline = None if float(req.timeout_s) < 0.0 else (time.time() + float(req.timeout_s))
 
@@ -550,7 +555,7 @@ class ClaudeAdapter(BaseProviderAdapter):
         return result
 
     def _finalize_result(self, result: ProviderResult, req: ProviderRequest, task: QueuedTask) -> None:
-        _write_log(f"[INFO] done provider=claude req_id={result.req_id} exit={result.exit_code}")
+        _log_done(task, result)
 
         # Skip completion hook for cancelled tasks
         if task.cancelled:

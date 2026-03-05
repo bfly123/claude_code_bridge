@@ -6,6 +6,7 @@ from pathlib import Path
 from askd.adapters.base import ProviderRequest, QueuedTask
 from askd.adapters.codex import CodexAdapter
 from askd.adapters.gemini import GeminiAdapter
+from askd.adapters.opencode import OpenCodeAdapter
 
 
 class _FakeSession:
@@ -25,6 +26,19 @@ class _FakeBackend:
         return True
 
     def send_text(self, pane_id: str, text: str) -> None:
+        return None
+
+
+class _FakeOpenCodeSession:
+    def __init__(self, work_dir: Path) -> None:
+        self.work_dir = str(work_dir)
+        self.data = {"terminal": "tmux"}
+        self.opencode_session_id_filter = None
+
+    def ensure_pane(self):
+        return True, "%1"
+
+    def update_opencode_binding(self, *, session_id=None, project_id=None):
         return None
 
 
@@ -112,3 +126,31 @@ def test_gemini_adapter_negative_timeout_has_safety_deadline(tmp_path: Path, mon
     result = GeminiAdapter().handle_task(_task("gemini", tmp_path, timeout_s=-1.0))
     assert result.exit_code == 2
     assert result.done_seen is False
+
+
+def test_opencode_adapter_stall_timeout_unblocks_worker(tmp_path: Path, monkeypatch) -> None:
+    """If OpenCode produces no output, adapter should fail fast instead of waiting indefinitely."""
+    session = _FakeOpenCodeSession(tmp_path)
+    backend = _FakeBackend()
+
+    class _Reader:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def capture_state(self):
+            return {"session_id": "ses_test", "session_updated": 1}
+
+        def wait_for_message(self, state, timeout):
+            return None, state
+
+    monkeypatch.setenv("CCB_OASKD_STALL_TIMEOUT_S", "1")
+    monkeypatch.setenv("CCB_OASKD_PANE_CHECK_INTERVAL", "0.05")
+    monkeypatch.setattr("askd.adapters.opencode.load_project_session", lambda _wd: session)
+    monkeypatch.setattr("askd.adapters.opencode.get_backend_for_session", lambda _data: backend)
+    monkeypatch.setattr("askd.adapters.opencode.OpenCodeLogReader", _Reader)
+    monkeypatch.setattr("askd.adapters.opencode.notify_completion", lambda **kwargs: None)
+
+    result = OpenCodeAdapter().handle_task(_task("opencode", tmp_path, timeout_s=-1.0))
+    assert result.exit_code == 2
+    assert result.done_seen is False
+    assert "stalled" in result.reply.lower()
