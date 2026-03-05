@@ -1892,18 +1892,64 @@ class AILauncher:
 
     def _opencode_resume_allowed(self) -> bool:
         try:
-            from opencode_comm import OPENCODE_STORAGE_ROOT
+            from opencode_comm import OPENCODE_STORAGE_ROOT, OpenCodeLogReader
         except Exception:
             return False
 
         root = Path(OPENCODE_STORAGE_ROOT)
-        sessions_root = root / "session"
-        if not sessions_root.exists():
+
+        def _path_aliases(value: str) -> set[str]:
+            raw = (value or "").strip()
+            if not raw:
+                return set()
+            out = {raw}
+            if raw.startswith("/private/var/"):
+                out.add(raw[len("/private"):])
+            elif raw == "/private/var":
+                out.add("/var")
+            elif raw.startswith("/var/"):
+                out.add("/private" + raw)
+            elif raw == "/var":
+                out.add("/private/var")
+            return out
+
+        reader_workdirs: list[Path] = []
+        for candidate in (
+            str(self.invocation_dir),
+            str(self.project_root),
+            (os.environ.get("PWD") or "").strip(),
+        ):
+            for alias in _path_aliases(candidate):
+                try:
+                    p = Path(alias)
+                except Exception:
+                    continue
+                if p not in reader_workdirs:
+                    reader_workdirs.append(p)
+
+        target_candidates = {
+            _normalize_path_for_match(str(p))
+            for p in reader_workdirs
+        }
+        target_candidates = {x for x in target_candidates if x}
+        if not target_candidates:
             return False
 
-        target_dir = _normalize_path_for_match(str(self.project_root))
-        if not target_dir:
-            return False
+        def _matches_target(directory: str) -> bool:
+            norm = _normalize_path_for_match(directory)
+            return bool(norm) and norm in target_candidates
+
+        # Prefer the runtime reader which supports modern OpenCode storage (SQLite-backed)
+        # and can resolve latest session for the current work_dir.
+        for work_dir in reader_workdirs:
+            try:
+                reader = OpenCodeLogReader(root=root, work_dir=work_dir, project_id="global")
+                state = reader.capture_state()
+                sid = str((state or {}).get("session_id") or "").strip() if isinstance(state, dict) else ""
+                if sid:
+                    return True
+            except Exception:
+                continue
 
         def _load_json(path: Path) -> dict:
             try:
@@ -1927,8 +1973,29 @@ class AILauncher:
                 directory = payload.get("directory")
                 if not isinstance(directory, str) or not directory.strip():
                     continue
-                if _normalize_path_for_match(directory) == target_dir:
+                if _matches_target(directory):
                     return True
+            return False
+
+        # Newer OpenCode builds may keep only session_diff files (or DB) without storage/session.
+        session_diff_dir = root / "session_diff"
+        if session_diff_dir.exists():
+            try:
+                diff_files = list(session_diff_dir.glob("ses_*.json"))
+            except Exception:
+                diff_files = []
+            for path in diff_files:
+                if not path.is_file():
+                    continue
+                payload = _load_json(path)
+                directory = payload.get("directory")
+                if not isinstance(directory, str) or not directory.strip():
+                    continue
+                if _matches_target(directory):
+                    return True
+
+        sessions_root = root / "session"
+        if not sessions_root.exists():
             return False
 
         # Prefer project metadata to limit the search scope.
