@@ -561,10 +561,26 @@ copy_project() {
       -cf - . | tar -C "$staging" -xf -
   fi
 
+  # Preserve user's local config overrides across updates
+  local local_config_backup=""
+  if [[ -d "$INSTALL_PREFIX/config/local" ]]; then
+    local_config_backup="$(mktemp -d)"
+    cp -a "$INSTALL_PREFIX/config/local" "$local_config_backup/local"
+    echo "  Preserving config/local/ overrides..."
+  fi
+
   rm -rf "$INSTALL_PREFIX"
   mkdir -p "$(dirname "$INSTALL_PREFIX")"
   mv "$staging" "$INSTALL_PREFIX"
   trap - EXIT
+
+  # Restore user's local config overrides
+  if [[ -n "$local_config_backup" && -d "$local_config_backup/local" ]]; then
+    mkdir -p "$INSTALL_PREFIX/config"
+    cp -a "$local_config_backup/local" "$INSTALL_PREFIX/config/local"
+    rm -rf "$local_config_backup"
+    echo "  Restored config/local/ overrides."
+  fi
 
   # Update GIT_COMMIT and GIT_DATE in ccb file
   local git_commit="" git_date=""
@@ -968,9 +984,25 @@ except Exception as e:
   fi
 }
 
+# Resolve config template: prefer config/local/ override, fallback to default.
+# Prints the resolved path to stdout. Info messages go to stderr.
+resolve_config_template() {
+  local template_name="$1"
+  local local_override="$INSTALL_PREFIX/config/local/$template_name"
+  local default_template="$INSTALL_PREFIX/config/$template_name"
+
+  if [[ -f "$local_override" ]]; then
+    echo "  Using local override: config/local/$template_name" >&2
+    echo "$local_override"
+  else
+    echo "$default_template"
+  fi
+}
+
 install_claude_md_config() {
   local claude_md="$HOME/.claude/CLAUDE.md"
-  local template="$INSTALL_PREFIX/config/claude-md-ccb.md"
+  local template
+  template="$(resolve_config_template claude-md-ccb.md)"
   mkdir -p "$HOME/.claude"
   if ! pick_python_bin; then
     echo "ERROR: python required to update CLAUDE.md"
@@ -1040,7 +1072,8 @@ CCB_RUBRICS_END_MARKER="<!-- REVIEW_RUBRICS_END -->"
 
 install_agents_md_config() {
   local agents_md="$INSTALL_PREFIX/AGENTS.md"
-  local template="$INSTALL_PREFIX/config/agents-md-ccb.md"
+  local template
+  template="$(resolve_config_template agents-md-ccb.md)"
 
   if ! pick_python_bin; then
     echo "WARN: python required to update AGENTS.md; skipping"
@@ -1092,7 +1125,8 @@ with open(sys.argv[1], 'w', encoding='utf-8') as f:
 
 install_clinerules_config() {
   local clinerules="$INSTALL_PREFIX/.clinerules"
-  local template="$INSTALL_PREFIX/config/clinerules-ccb.md"
+  local template
+  template="$(resolve_config_template clinerules-ccb.md)"
 
   if ! pick_python_bin; then
     echo "WARN: python required to update .clinerules; skipping"

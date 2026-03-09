@@ -31,3 +31,5 @@ GEMINI.md
 openspec
 *.log
 .hippocampus
+config/local/*
+!config/local/.gitkeep
