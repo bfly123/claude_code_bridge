@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""
+bpend - View latest CodeBuddy reply
+"""
+
+import os
+import sys
+from pathlib import Path
+import argparse
+
+script_dir = Path(__file__).resolve().parent
+lib_dir = script_dir.parent / "lib"
+sys.path.insert(0, str(lib_dir))
+from compat import setup_windows_encoding
+
+setup_windows_encoding()
+
+from cli_output import EXIT_ERROR, EXIT_NO_REPLY, EXIT_OK
+from codebuddy_comm import CodebuddyLogReader
+from ccb_protocol import strip_trailing_markers
+from askd_client import resolve_work_dir_with_registry
+from providers import BASK_CLIENT_SPEC
+
+
+def _debug_enabled() -> bool:
+    return (os.environ.get("CCB_DEBUG") in ("1", "true", "yes")) or (os.environ.get("BPEND_DEBUG") in ("1", "true", "yes"))
+
+
+def _debug(message: str) -> None:
+    if not _debug_enabled():
+        return
+    print(f"[DEBUG] {message}", file=sys.stderr)
+
+
+def _resolve_pane_log(work_dir: Path) -> Path | None:
+    """Try to find the pane log path from the session file."""
+    from session_utils import find_project_session_file
+    import json
+
+    session_file = find_project_session_file(work_dir, ".codebuddy-session")
+    if not session_file:
+        return None
+    try:
+        with session_file.open("r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+        # Try explicit pane_log_path first
+        raw = data.get("pane_log_path")
+        if raw:
+            return Path(str(raw)).expanduser()
+        # Fall back to runtime_dir / pane.log
+        runtime = data.get("runtime_dir")
+        if runtime:
+            return Path(str(runtime)) / "pane.log"
+    except Exception as exc:
+        _debug(f"Failed to read .codebuddy-session ({session_file}): {exc}")
+    return None
+
+
+def main(argv: list[str]) -> int:
+    try:
+        parser = argparse.ArgumentParser(prog="bpend", add_help=True)
+        parser.add_argument("n", nargs="?", type=int, default=1, help="Show the latest N conversations")
+        parser.add_argument("--raw", action="store_true", help="Do not strip protocol/harness marker lines")
+        parser.add_argument("--session-file", dest="session_file", default=None, help="Path to .codebuddy-session (or .ccb/.codebuddy-session)")
+        args = parser.parse_args(argv[1:])
+
+        n = max(1, int(args.n or 1))
+        raw = bool(args.raw)
+
+        work_dir, _explicit_session_file = resolve_work_dir_with_registry(
+            BASK_CLIENT_SPEC,
+            provider="codebuddy",
+            cli_session_file=args.session_file,
+            env_session_file=os.environ.get("CCB_SESSION_FILE"),
+        )
+
+        pane_log = _resolve_pane_log(work_dir)
+        reader = CodebuddyLogReader(work_dir=work_dir, pane_log_path=pane_log)
+
+        if n > 1:
+            conversations = reader.latest_conversations(n)
+            if not conversations:
+                print("No reply available", file=sys.stderr)
+                return EXIT_NO_REPLY
+            for i, (question, reply) in enumerate(conversations):
+                if question:
+                    print(f"Q: {question}")
+                cleaned = reply if raw else strip_trailing_markers(reply or "")
+                print(f"A: {cleaned}")
+                if i < len(conversations) - 1:
+                    print("---")
+            return EXIT_OK
+
+        message = reader.latest_message()
+        if not message:
+            print("No reply available", file=sys.stderr)
+            return EXIT_NO_REPLY
+        print(message if raw else strip_trailing_markers(message))
+        return EXIT_OK
+    except Exception as exc:
+        if _debug_enabled():
+            import traceback
+
+            traceback.print_exc()
+        print(f"[ERROR] execution failed: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

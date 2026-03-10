@@ -254,7 +254,7 @@ def main(argv: list[str]) -> int:
     args, _unknown = parser.parse_known_args(argv[1:])
 
     provider = (args.provider or Path(argv[0]).name).strip().lower()
-    if provider not in ("codex", "gemini", "claude", "opencode", "droid", "copilot"):
+    if provider not in ("codex", "gemini", "claude", "opencode", "droid", "copilot", "codebuddy"):
         print(f"[stub] unknown provider: {provider}", file=sys.stderr)
         return 2
 
@@ -270,6 +270,8 @@ def main(argv: list[str]) -> int:
     droid_session_id = ""
     copilot_session_path: Path | None = None
     copilot_session_id = ""
+    codebuddy_session_path: Path | None = None
+    codebuddy_session_id = ""
 
     if provider == "gemini":
         gemini_session_path = _gemini_session_path()
@@ -303,6 +305,16 @@ def main(argv: list[str]) -> int:
             slug = _droid_slug(Path.cwd())
             copilot_session_path = root / slug / f"copilot-{copilot_session_id}.jsonl"
         _ensure_droid_session_start(copilot_session_path, copilot_session_id, os.getcwd())
+    elif provider == "codebuddy":
+        codebuddy_session_id = (os.environ.get("CODEBUDDY_SESSION_ID") or "").strip() or f"stub-{uuid.uuid4().hex}"
+        explicit = (os.environ.get("CODEBUDDY_SESSION_PATH") or "").strip()
+        if explicit:
+            codebuddy_session_path = Path(explicit).expanduser()
+        else:
+            root = _droid_sessions_root()
+            slug = _droid_slug(Path.cwd())
+            codebuddy_session_path = root / slug / f"codebuddy-{codebuddy_session_id}.jsonl"
+        _ensure_droid_session_start(codebuddy_session_path, codebuddy_session_id, os.getcwd())
 
     def _handle_request(req_id: str, prompt: str) -> None:
         if provider == "codex":
@@ -332,6 +344,10 @@ def main(argv: list[str]) -> int:
         if provider == "copilot":
             assert copilot_session_path is not None
             _handle_droid(req_id, prompt, delay_s, copilot_session_path, copilot_session_id)
+            return
+        if provider == "codebuddy":
+            assert codebuddy_session_path is not None
+            _handle_droid(req_id, prompt, delay_s, codebuddy_session_path, codebuddy_session_id)
             return
 
     def _signal_handler(_signum, _frame):

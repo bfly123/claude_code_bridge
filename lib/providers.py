@@ -156,3 +156,26 @@ HASK_CLIENT_SPEC = ProviderClientSpec(
     daemon_bin_name="askd",
     daemon_module="askd.daemon",
 )
+
+
+# CodeBuddy (Tencent CodeBuddy CLI)
+BASKD_SPEC = ProviderDaemonSpec(
+    daemon_key="baskd",
+    protocol_prefix="bask",
+    state_file_name="baskd.json",
+    log_file_name="baskd.log",
+    idle_timeout_env="CCB_BASKD_IDLE_TIMEOUT_S",
+    lock_name="baskd",
+)
+
+
+BASK_CLIENT_SPEC = ProviderClientSpec(
+    protocol_prefix="bask",
+    enabled_env="CCB_BASKD",
+    autostart_env_primary="CCB_BASKD_AUTOSTART",
+    autostart_env_legacy="CCB_AUTO_BASKD",
+    state_file_env="CCB_BASKD_STATE_FILE",
+    session_filename=".codebuddy-session",
+    daemon_bin_name="askd",
+    daemon_module="askd.daemon",
+)

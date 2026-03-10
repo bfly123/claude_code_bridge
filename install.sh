@@ -118,6 +118,9 @@ SCRIPTS_TO_LINK=(
   bin/hask
   bin/hpend
   bin/hping
+  bin/bask
+  bin/bpend
+  bin/bping
   bin/ask
   bin/ccb-ping
   bin/pend
