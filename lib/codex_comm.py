@@ -267,11 +267,48 @@ class CodexLogReader:
 
         return latest
 
+    def _scan_latest_any(self) -> Optional[Path]:
+        if not self.root.exists():
+            return None
+        try:
+            latest: Optional[Path] = None
+            latest_mtime = -1.0
+            for p in (p for p in self.root.glob("**/*.jsonl") if p.is_file()):
+                if self._work_dir:
+                    cwd = self._extract_cwd_from_log(p)
+                    if not cwd or cwd != self._work_dir:
+                        continue
+                try:
+                    mtime = p.stat().st_mtime
+                except OSError:
+                    continue
+                if mtime >= latest_mtime:
+                    latest = p
+                    latest_mtime = mtime
+        except OSError:
+            return None
+        return latest
+
     def _latest_log(self) -> Optional[Path]:
         preferred = self._preferred_log
         if preferred and preferred.exists():
             # If we're bound to a specific session id, prefer that log without cross-session scanning.
             if self._session_id_filter:
+                latest_any = self._scan_latest_any()
+                if latest_any and latest_any != preferred:
+                    threshold = _env_float("CCB_CODEX_STALE_LOG_SECONDS", 10.0)
+                    if threshold > 0:
+                        try:
+                            preferred_mtime = preferred.stat().st_mtime
+                            latest_mtime = latest_any.stat().st_mtime
+                            if latest_mtime - preferred_mtime >= threshold:
+                                self._preferred_log = latest_any
+                                self._debug(f"Preferred log stale (bound); switching to latest: {latest_any}")
+                                return latest_any
+                        except OSError:
+                            self._preferred_log = latest_any
+                            self._debug(f"Preferred log stat failed (bound); switching to latest: {latest_any}")
+                            return latest_any
                 self._debug(f"Using preferred log (bound): {preferred}")
                 return preferred
 
