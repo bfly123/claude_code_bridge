@@ -49,6 +49,7 @@ from aliases import load_aliases, resolve_alias
 from cli_output import EXIT_ERROR, EXIT_OK
 from providers import parse_qualified_provider
 from session_utils import find_project_session_file
+from agent_comm import AgentMessage, broadcast_message, resolve_agent_to_provider, wrap_message
 from task_router import auto_route
 from team_config import load_team_config, resolve_team_agent
 
@@ -508,6 +509,8 @@ def _usage() -> None:
     print("  --background            Force background mode", file=sys.stderr)
     print("  --no-wrap               Don't wrap with CCB protocol markers", file=sys.stderr)
     print("  --auto                  Auto-select provider based on message content", file=sys.stderr)
+    print("  --to <agent>            Send message to another agent (inter-agent)", file=sys.stderr)
+    print("  --broadcast             Send message to all team agents", file=sys.stderr)
 
 
 def main(argv: list[str]) -> int:
@@ -530,6 +533,8 @@ def main(argv: list[str]) -> int:
     notify_mode = False
     no_wrap = False
     foreground_mode = _default_foreground()
+    to_agent: str = ""
+    broadcast_mode = False
     parts: list[str] = []
 
     it = iter(argv[2:])
@@ -559,6 +564,16 @@ def main(argv: list[str]) -> int:
         if token == "--no-wrap":
             no_wrap = True
             continue
+        if token == "--to":
+            try:
+                to_agent = next(it).strip().lower()
+            except StopIteration:
+                print("[ERROR] --to requires an agent name", file=sys.stderr)
+                return EXIT_ERROR
+            continue
+        if token == "--broadcast":
+            broadcast_mode = True
+            continue
         parts.append(token)
 
     message = " ".join(parts).strip()
@@ -568,20 +583,58 @@ def main(argv: list[str]) -> int:
         print("[ERROR] Message cannot be empty", file=sys.stderr)
         return EXIT_ERROR
 
+    team = load_team_config(cwd)
+    aliases = load_aliases(cwd)
+
+    # --broadcast mode: send to all team agents, then exit
+    if broadcast_mode:
+        if not team:
+            print("[ERROR] --broadcast requires a team config (.ccb/team.json)", file=sys.stderr)
+            return EXIT_ERROR
+        sender = raw_provider if not auto_mode else "auto"
+        msgs = broadcast_message(sender, message, team)
+        if not msgs:
+            print("[WARN] No broadcast recipients", file=sys.stderr)
+            return EXIT_OK
+        ask_cmd = str(Path(__file__).resolve())
+        for msg in msgs:
+            wrapped = wrap_message(msg)
+            fg = "--foreground" if foreground_mode else ""
+            print(f"[BROADCAST] → {msg.receiver}", file=sys.stderr)
+            subprocess.Popen(
+                [sys.executable, ask_cmd, msg.receiver, fg, "--no-wrap", wrapped],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                close_fds=True,
+            )
+        print(f"[BROADCAST] Sent to {len(msgs)} agents", file=sys.stderr)
+        return EXIT_OK
+
+    # --to mode: wrap message with sender metadata and redirect to target agent
+    if to_agent:
+        target_provider = resolve_agent_to_provider(to_agent, team, aliases)
+        if not target_provider:
+            print(f"[ERROR] Unknown target agent: {to_agent}", file=sys.stderr)
+            return EXIT_ERROR
+        sender = raw_provider if not auto_mode else "auto"
+        msg = AgentMessage(sender=sender, receiver=target_provider, content=message)
+        message = wrap_message(msg)
+        raw_provider = target_provider
+        print(f"[TO] {sender} → {to_agent} ({target_provider})", file=sys.stderr)
+
     # --auto mode: select provider based on message content
-    if auto_mode:
-        team = load_team_config(cwd)
+    elif auto_mode:
         route = auto_route(message, team)
         raw_provider = route.provider
         print(f"[AUTO] → {raw_provider}" + (f" ({route.reason})" if route.reason else ""), file=sys.stderr)
     else:
         # Resolution order: team agents > aliases > direct provider names
-        team = load_team_config(cwd)
         team_agent = resolve_team_agent(raw_provider, team)
         if team_agent:
             raw_provider = team_agent.provider
         else:
-            aliases = load_aliases(cwd)
             base_part, _, instance_part = raw_provider.partition(":")
             base_part = resolve_alias(base_part, aliases)
             raw_provider = f"{base_part}:{instance_part}" if instance_part else base_part
