@@ -657,12 +657,28 @@ def main(argv: list[str]) -> int:
         script_file = log_dir / f"ask-{provider}-{task_id}.ps1"
         status_file_win = str(status_file).replace('"', '`"')
         log_file_win = str(log_file).replace('"', '`"')
+
+        # Pass CCB_RUN_DIR so background script can find askd state file
+        ccb_run_dir = os.environ.get("CCB_RUN_DIR", "")
+        run_dir_line = f'$env:CCB_RUN_DIR = "{ccb_run_dir}"\n' if ccb_run_dir else ""
+
+        # Collect CCB_EMAIL_* env vars for email caller
+        email_env_lines = ""
+        if caller == "email":
+            for key in ("CCB_EMAIL_REQ_ID", "CCB_EMAIL_MSG_ID", "CCB_EMAIL_FROM"):
+                val = os.environ.get(key, "")
+                if val:
+                    email_env_lines += f'$env:{key} = "{val}"\n'
+
         script_content = f'''$ErrorActionPreference = "SilentlyContinue"
+$OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::InputEncoding = [System.Text.Encoding]::UTF8
+$env:PYTHONIOENCODING = "utf-8"
 $env:CCB_REQ_ID = "{task_id}"
 $env:CCB_CALLER = "{caller}"
 $env:CCB_WORK_DIR = "{os.getcwd()}"
-$statusFile = "{status_file_win}"
+{run_dir_line}{email_env_lines}$statusFile = "{status_file_win}"
 $logFile = "{log_file_win}"
 function Write-CcbStatus([string]$line) {{
   Add-Content -Path $statusFile -Value ("{{0}} {{1}}" -f (Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"), $line) -Encoding UTF8
