@@ -45,6 +45,7 @@ sys.path.insert(0, str(lib_dir))
 from compat import read_stdin_text, setup_windows_encoding
 setup_windows_encoding()
 
+from aliases import load_aliases, resolve_alias
 from cli_output import EXIT_ERROR, EXIT_OK
 from providers import parse_qualified_provider
 from session_utils import find_project_session_file
@@ -481,10 +482,15 @@ def make_task_id() -> str:
 
 
 def _usage() -> None:
+    aliases = load_aliases()
+    alias_list = ", ".join(f"{k}→{v}" for k, v in sorted(aliases.items()))
     print("Usage: ask <provider> [options] <message>", file=sys.stderr)
     print("", file=sys.stderr)
     print("Providers:", file=sys.stderr)
     print("  gemini, codex, opencode, droid, claude, copilot, codebuddy, qwen", file=sys.stderr)
+    print("", file=sys.stderr)
+    print("Aliases:", file=sys.stderr)
+    print(f"  {alias_list}", file=sys.stderr)
     print("", file=sys.stderr)
     print("Options:", file=sys.stderr)
     print("  -h, --help              Show this help message", file=sys.stderr)
@@ -506,6 +512,12 @@ def main(argv: list[str]) -> int:
     if raw_provider in ("-h", "--help"):
         _usage()
         return EXIT_OK
+
+    # Resolve agent aliases (a→codex, b→gemini, etc.) before provider parsing
+    aliases = load_aliases(Path.cwd())
+    base_part, _, instance_part = raw_provider.partition(":")
+    base_part = resolve_alias(base_part, aliases)
+    raw_provider = f"{base_part}:{instance_part}" if instance_part else base_part
 
     base_provider, instance = parse_qualified_provider(raw_provider)
 
