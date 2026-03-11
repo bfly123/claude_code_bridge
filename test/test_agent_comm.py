@@ -256,3 +256,52 @@ class TestToFlowIntegration:
             wrapped = wrap_message(msg)
             assert f"[CCB_FROM agent={msg.sender}]" in wrapped
             assert msg.content in wrapped
+
+
+# ---------------------------------------------------------------------------
+# Chain CLI flow simulation
+# ---------------------------------------------------------------------------
+
+class TestChainFlowIntegration:
+    """Simulate the --chain flow as implemented in bin/ask."""
+
+    def test_chain_resolves_agents(self):
+        """Verify each step in a chain resolves to valid providers."""
+        team = TeamConfig(name="t", agents=[
+            TeamAgent(name="researcher", provider="gemini"),
+            TeamAgent(name="coder", provider="codex"),
+            TeamAgent(name="reviewer", provider="claude"),
+        ])
+        aliases = {"a": "codex"}
+
+        spec = "researcher:analyze | coder:implement | reviewer:check"
+        steps = parse_chain_spec(spec)
+        msgs = build_chain_messages(steps)
+
+        for msg in msgs:
+            target = resolve_agent_to_provider(msg.receiver, team, aliases)
+            assert target is not None, f"Failed to resolve: {msg.receiver}"
+
+    def test_chain_context_passing(self):
+        """Verify context from previous step is included in wrapped message."""
+        msg = AgentMessage(
+            sender="gemini", receiver="codex",
+            content="implement this",
+            context="Research result: use quicksort",
+        )
+        wrapped = wrap_message(msg)
+        assert "[CCB_FROM agent=gemini]" in wrapped
+        assert "[CCB_CONTEXT]" in wrapped
+        assert "Research result: use quicksort" in wrapped
+        assert "implement this" in wrapped
+
+    def test_chain_with_aliases(self):
+        """Verify aliases work in chain specs."""
+        aliases = {"a": "codex", "b": "gemini"}
+        steps = parse_chain_spec("b:research | a:implement")
+        msgs = build_chain_messages(steps)
+
+        target0 = resolve_agent_to_provider(msgs[0].receiver, None, aliases)
+        target1 = resolve_agent_to_provider(msgs[1].receiver, None, aliases)
+        assert target0 == "gemini"
+        assert target1 == "codex"

@@ -49,7 +49,10 @@ from aliases import load_aliases, resolve_alias
 from cli_output import EXIT_ERROR, EXIT_OK
 from providers import parse_qualified_provider
 from session_utils import find_project_session_file
-from agent_comm import AgentMessage, broadcast_message, resolve_agent_to_provider, wrap_message
+from agent_comm import (
+    AgentMessage, broadcast_message, build_chain_messages,
+    parse_chain_spec, resolve_agent_to_provider, wrap_message,
+)
 from task_router import auto_route
 from team_config import load_team_config, resolve_team_agent
 
@@ -511,6 +514,7 @@ def _usage() -> None:
     print("  --auto                  Auto-select provider based on message content", file=sys.stderr)
     print("  --to <agent>            Send message to another agent (inter-agent)", file=sys.stderr)
     print("  --broadcast             Send message to all team agents", file=sys.stderr)
+    print("  --chain <spec>          Run agent chain: \"a:task1 | b:task2 | c:task3\"", file=sys.stderr)
 
 
 def main(argv: list[str]) -> int:
@@ -535,6 +539,7 @@ def main(argv: list[str]) -> int:
     foreground_mode = _default_foreground()
     to_agent: str = ""
     broadcast_mode = False
+    chain_spec: str = ""
     parts: list[str] = []
 
     it = iter(argv[2:])
@@ -574,6 +579,13 @@ def main(argv: list[str]) -> int:
         if token == "--broadcast":
             broadcast_mode = True
             continue
+        if token == "--chain":
+            try:
+                chain_spec = next(it).strip()
+            except StopIteration:
+                print("[ERROR] --chain requires a spec string", file=sys.stderr)
+                return EXIT_ERROR
+            continue
         parts.append(token)
 
     message = " ".join(parts).strip()
@@ -586,7 +598,46 @@ def main(argv: list[str]) -> int:
     team = load_team_config(cwd)
     aliases = load_aliases(cwd)
 
-    # --broadcast mode: send to all team agents, then exit
+    # --chain mode: sequential multi-agent pipeline
+    if chain_spec:
+        steps = parse_chain_spec(chain_spec)
+        if not steps:
+            print("[ERROR] Invalid chain spec", file=sys.stderr)
+            return EXIT_ERROR
+        chain_msgs = build_chain_messages(steps)
+        ask_cmd = str(Path(__file__).resolve())
+        prev_output = ""
+        for i, msg in enumerate(chain_msgs):
+            # Resolve agent name to provider
+            target = resolve_agent_to_provider(msg.receiver, team, aliases)
+            if not target:
+                print(f"[ERROR] Unknown agent in chain: {msg.receiver}", file=sys.stderr)
+                return EXIT_ERROR
+            # Inject previous output as context
+            if prev_output:
+                msg = AgentMessage(sender=msg.sender, receiver=target, content=msg.content, context=prev_output)
+            else:
+                msg = AgentMessage(sender=msg.sender, receiver=target, content=msg.content)
+            wrapped = wrap_message(msg)
+            print(f"[CHAIN {i+1}/{len(chain_msgs)}] {msg.sender} → {target}", file=sys.stderr)
+            try:
+                result = subprocess.run(
+                    [sys.executable, ask_cmd, target, "--foreground", "--no-wrap"],
+                    input=wrapped, capture_output=True, text=True,
+                    timeout=timeout,
+                )
+                prev_output = result.stdout.strip()
+                if prev_output:
+                    print(prev_output)
+            except subprocess.TimeoutExpired:
+                print(f"[ERROR] Chain step {i+1} timed out", file=sys.stderr)
+                return EXIT_ERROR
+            except Exception as e:
+                print(f"[ERROR] Chain step {i+1}: {e}", file=sys.stderr)
+                return EXIT_ERROR
+        return EXIT_OK
+
+    # --broadcast mode: send to all team agents
     if broadcast_mode:
         if not team:
             print("[ERROR] --broadcast requires a team config (.ccb/team.json)", file=sys.stderr)
@@ -599,16 +650,20 @@ def main(argv: list[str]) -> int:
         ask_cmd = str(Path(__file__).resolve())
         for msg in msgs:
             wrapped = wrap_message(msg)
-            fg = "--foreground" if foreground_mode else ""
             print(f"[BROADCAST] → {msg.receiver}", file=sys.stderr)
-            subprocess.Popen(
-                [sys.executable, ask_cmd, msg.receiver, fg, "--no-wrap", wrapped],
-                stdin=subprocess.DEVNULL,
+            proc = subprocess.Popen(
+                [sys.executable, ask_cmd, msg.receiver, "--foreground", "--no-wrap"],
+                stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
                 close_fds=True,
             )
+            try:
+                proc.stdin.write(wrapped.encode("utf-8"))
+                proc.stdin.close()
+            except Exception:
+                pass
         print(f"[BROADCAST] Sent to {len(msgs)} agents", file=sys.stderr)
         return EXIT_OK
 
