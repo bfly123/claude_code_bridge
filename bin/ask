@@ -49,6 +49,7 @@ from aliases import load_aliases, resolve_alias
 from cli_output import EXIT_ERROR, EXIT_OK
 from providers import parse_qualified_provider
 from session_utils import find_project_session_file
+from team_config import load_team_config, resolve_team_agent
 
 
 # Provider to daemon command mapping
@@ -492,6 +493,12 @@ def _usage() -> None:
     print("Aliases:", file=sys.stderr)
     print(f"  {alias_list}", file=sys.stderr)
     print("", file=sys.stderr)
+    team = load_team_config(Path.cwd())
+    if team:
+        agents = ", ".join(f"{a.name}→{a.provider}" for a in team.agents)
+        print(f"Team '{team.name}' ({team.strategy}):", file=sys.stderr)
+        print(f"  {agents}", file=sys.stderr)
+        print("", file=sys.stderr)
     print("Options:", file=sys.stderr)
     print("  -h, --help              Show this help message", file=sys.stderr)
     print("  -t, --timeout SECONDS   Request timeout (default: 3600)", file=sys.stderr)
@@ -513,11 +520,17 @@ def main(argv: list[str]) -> int:
         _usage()
         return EXIT_OK
 
-    # Resolve agent aliases (a→codex, b→gemini, etc.) before provider parsing
-    aliases = load_aliases(Path.cwd())
-    base_part, _, instance_part = raw_provider.partition(":")
-    base_part = resolve_alias(base_part, aliases)
-    raw_provider = f"{base_part}:{instance_part}" if instance_part else base_part
+    # Resolution order: team agents > aliases > direct provider names
+    cwd = Path.cwd()
+    team = load_team_config(cwd)
+    team_agent = resolve_team_agent(raw_provider, team)
+    if team_agent:
+        raw_provider = team_agent.provider
+    else:
+        aliases = load_aliases(cwd)
+        base_part, _, instance_part = raw_provider.partition(":")
+        base_part = resolve_alias(base_part, aliases)
+        raw_provider = f"{base_part}:{instance_part}" if instance_part else base_part
 
     base_provider, instance = parse_qualified_provider(raw_provider)
 
