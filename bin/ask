@@ -45,9 +45,12 @@ sys.path.insert(0, str(lib_dir))
 from compat import read_stdin_text, setup_windows_encoding
 setup_windows_encoding()
 
+from aliases import load_aliases, resolve_alias
 from cli_output import EXIT_ERROR, EXIT_OK
 from providers import parse_qualified_provider
 from session_utils import find_project_session_file
+from task_router import auto_route
+from team_config import load_team_config, resolve_team_agent
 
 
 # Provider to daemon command mapping
@@ -481,11 +484,22 @@ def make_task_id() -> str:
 
 
 def _usage() -> None:
+    aliases = load_aliases()
+    alias_list = ", ".join(f"{k}→{v}" for k, v in sorted(aliases.items()))
     print("Usage: ask <provider> [options] <message>", file=sys.stderr)
     print("", file=sys.stderr)
     print("Providers:", file=sys.stderr)
     print("  gemini, codex, opencode, droid, claude, copilot, codebuddy, qwen", file=sys.stderr)
     print("", file=sys.stderr)
+    print("Aliases:", file=sys.stderr)
+    print(f"  {alias_list}", file=sys.stderr)
+    print("", file=sys.stderr)
+    team = load_team_config(Path.cwd())
+    if team:
+        agents = ", ".join(f"{a.name}→{a.provider}" for a in team.agents)
+        print(f"Team '{team.name}' ({team.strategy}):", file=sys.stderr)
+        print(f"  {agents}", file=sys.stderr)
+        print("", file=sys.stderr)
     print("Options:", file=sys.stderr)
     print("  -h, --help              Show this help message", file=sys.stderr)
     print("  -t, --timeout SECONDS   Request timeout (default: 3600)", file=sys.stderr)
@@ -493,6 +507,7 @@ def _usage() -> None:
     print("  --foreground            Run in foreground (no nohup/background)", file=sys.stderr)
     print("  --background            Force background mode", file=sys.stderr)
     print("  --no-wrap               Don't wrap with CCB protocol markers", file=sys.stderr)
+    print("  --auto                  Auto-select provider based on message content", file=sys.stderr)
 
 
 def main(argv: list[str]) -> int:
@@ -500,24 +515,17 @@ def main(argv: list[str]) -> int:
         _usage()
         return EXIT_ERROR
 
-    # First argument must be the provider
+    # First argument must be the provider (or --auto / --help)
     raw_provider = argv[1].lower()
 
     if raw_provider in ("-h", "--help"):
         _usage()
         return EXIT_OK
 
-    base_provider, instance = parse_qualified_provider(raw_provider)
+    auto_mode = raw_provider == "--auto"
+    cwd = Path.cwd()
 
-    if base_provider not in PROVIDER_DAEMONS:
-        print(f"[ERROR] Unknown provider: {base_provider}", file=sys.stderr)
-        print(f"[ERROR] Available: {', '.join(PROVIDER_DAEMONS.keys())}", file=sys.stderr)
-        return EXIT_ERROR
-
-    daemon_cmd = PROVIDER_DAEMONS[base_provider]
-    provider = raw_provider  # keep full qualified key for daemon routing
-
-    # Parse remaining arguments
+    # Parse remaining arguments (shared by both auto and normal modes)
     timeout: float = 3600.0
     notify_mode = False
     no_wrap = False
@@ -559,6 +567,34 @@ def main(argv: list[str]) -> int:
     if not message:
         print("[ERROR] Message cannot be empty", file=sys.stderr)
         return EXIT_ERROR
+
+    # --auto mode: select provider based on message content
+    if auto_mode:
+        team = load_team_config(cwd)
+        route = auto_route(message, team)
+        raw_provider = route.provider
+        print(f"[AUTO] → {raw_provider}" + (f" ({route.reason})" if route.reason else ""), file=sys.stderr)
+    else:
+        # Resolution order: team agents > aliases > direct provider names
+        team = load_team_config(cwd)
+        team_agent = resolve_team_agent(raw_provider, team)
+        if team_agent:
+            raw_provider = team_agent.provider
+        else:
+            aliases = load_aliases(cwd)
+            base_part, _, instance_part = raw_provider.partition(":")
+            base_part = resolve_alias(base_part, aliases)
+            raw_provider = f"{base_part}:{instance_part}" if instance_part else base_part
+
+    base_provider, instance = parse_qualified_provider(raw_provider)
+
+    if base_provider not in PROVIDER_DAEMONS:
+        print(f"[ERROR] Unknown provider: {base_provider}", file=sys.stderr)
+        print(f"[ERROR] Available: {', '.join(PROVIDER_DAEMONS.keys())}", file=sys.stderr)
+        return EXIT_ERROR
+
+    daemon_cmd = PROVIDER_DAEMONS[base_provider]
+    provider = raw_provider  # keep full qualified key for daemon routing
 
     # Notify mode: sync send, no wait for reply (used for hook notifications)
     if notify_mode:
