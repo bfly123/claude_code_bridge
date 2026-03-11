@@ -12,10 +12,18 @@ class _NoopThread(threading.Thread):
     def __init__(self, session_key: str, started: list[str]):
         super().__init__(daemon=True)
         self.session_key = session_key
-        self._started = started
+        self.started_keys = started
+        self._stop_event = threading.Event()
+
+    def run(self) -> None:
+        self._stop_event.wait()
 
     def start(self) -> None:  # type: ignore[override]
-        self._started.append(self.session_key)
+        self.started_keys.append(self.session_key)
+        super().start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
 
 
 def test_per_session_worker_pool_reuses_same_key() -> None:
@@ -29,6 +37,12 @@ def test_per_session_worker_pool_reuses_same_key() -> None:
     assert w1 is not w3
     assert started.count("k1") == 1
     assert started.count("k2") == 1
+
+    # Clean up threads
+    w1.stop()
+    w3.stop()
+    w1.join(timeout=1.0)
+    w3.join(timeout=1.0)
 
 
 @dataclass
