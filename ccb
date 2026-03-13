@@ -4094,7 +4094,7 @@ def _parse_providers(values: list[str], *, allow_unknown: bool = False) -> list[
 
     Returns a de-duplicated list preserving order.
     """
-    allowed = {"codex", "gemini", "opencode", "claude", "droid"}
+    allowed = {"codex", "gemini", "opencode", "claude", "droid", "copilot", "codebuddy", "qwen"}
     raw_parts = _split_provider_tokens(values)
 
     if not raw_parts:
@@ -4114,8 +4114,8 @@ def _parse_providers(values: list[str], *, allow_unknown: bool = False) -> list[
 
     if unknown and not allow_unknown:
         print(f"❌ invalid provider(s): {', '.join(unknown)}", file=sys.stderr)
-        print("💡 use: ccb codex gemini opencode claude droid  (spaces)  or  ccb codex,gemini,opencode,claude,droid  (commas)", file=sys.stderr)
-        print("💡 allowed: codex, gemini, opencode, claude, droid", file=sys.stderr)
+        print("💡 use: ccb codex gemini opencode claude droid copilot codebuddy qwen  (spaces)  or  ccb codex,gemini,opencode,claude,droid,copilot,codebuddy,qwen  (commas)", file=sys.stderr)
+        print("💡 allowed: codex, gemini, opencode, claude, droid, copilot, codebuddy, qwen", file=sys.stderr)
         return []
 
     return parsed
@@ -4126,7 +4126,7 @@ def _parse_providers_with_cmd(values: list[str]) -> tuple[list[str], bool]:
     Parse providers from argv and treat "cmd" as a separate flag.
     Returns (providers, cmd_enabled).
     """
-    allowed = {"codex", "gemini", "opencode", "claude", "droid"}
+    allowed = {"codex", "gemini", "opencode", "claude", "droid", "copilot", "codebuddy", "qwen"}
     raw_parts = _split_provider_tokens(values)
     if not raw_parts:
         return [], False
@@ -4150,8 +4150,8 @@ def _parse_providers_with_cmd(values: list[str]) -> tuple[list[str], bool]:
 
     if unknown:
         print(f"❌ invalid provider(s): {', '.join(unknown)}", file=sys.stderr)
-        print("💡 use: ccb codex gemini opencode claude droid cmd  (spaces)  or  ccb codex,gemini,opencode,claude,droid,cmd  (commas)", file=sys.stderr)
-        print("💡 allowed: codex, gemini, opencode, claude, droid, cmd", file=sys.stderr)
+        print("💡 use: ccb codex gemini opencode claude droid copilot codebuddy qwen cmd  (spaces)  or  ccb codex,gemini,opencode,claude,droid,copilot,codebuddy,qwen,cmd  (commas)", file=sys.stderr)
+        print("💡 allowed: codex, gemini, opencode, claude, droid, copilot, codebuddy, qwen, cmd", file=sys.stderr)
         return [], cmd_enabled
 
     return parsed, cmd_enabled
