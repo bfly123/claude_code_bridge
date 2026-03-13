@@ -10,7 +10,7 @@ from session_utils import legacy_project_config_dir, project_config_dir
 
 
 CONFIG_FILENAME = "ccb.config"
-DEFAULT_PROVIDERS = ["codex", "gemini", "opencode", "claude"]
+DEFAULT_PROVIDERS = ["codex", "gemini", "opencode", "claude", "droid", "copilot", "codebuddy", "qwen"]
 
 
 @dataclass

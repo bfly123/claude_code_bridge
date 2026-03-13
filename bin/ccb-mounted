@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-PROVIDERS="codex:cask gemini:gask opencode:oask claude:lask droid:dask"
+PROVIDERS="codex:cask gemini:gask opencode:oask claude:lask droid:dask copilot:hask codebuddy:bask qwen:qask"
 CWD=$(pwd)
 FORMAT="--json"
 AUTOSTART=false
