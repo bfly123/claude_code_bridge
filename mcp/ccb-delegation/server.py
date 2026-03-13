@@ -33,6 +33,10 @@ PROVIDERS = {
     "gemini": {"ask": "gask", "pend": "gpend", "ping": "gping"},
     "claude": {"ask": "lask", "pend": "lpend", "ping": "lping"},
     "opencode": {"ask": "oask", "pend": "opend", "ping": "oping"},
+    "droid": {"ask": "dask", "pend": "dpend", "ping": "dping"},
+    "copilot": {"ask": "hask", "pend": "hpend", "ping": "hping"},
+    "codebuddy": {"ask": "bask", "pend": "bpend", "ping": "bping"},
+    "qwen": {"ask": "qask", "pend": "qpend", "ping": "qping"},
 }
 
 ALIAS_TOOLS = [
@@ -40,14 +44,26 @@ ALIAS_TOOLS = [
     ("gask", "gemini", "ask"),
     ("lask", "claude", "ask"),
     ("oask", "opencode", "ask"),
+    ("dask", "droid", "ask"),
+    ("hask", "copilot", "ask"),
+    ("bask", "codebuddy", "ask"),
+    ("qask", "qwen", "ask"),
     ("cpend", "codex", "pend"),
     ("gpend", "gemini", "pend"),
     ("lpend", "claude", "pend"),
     ("opend", "opencode", "pend"),
+    ("dpend", "droid", "pend"),
+    ("hpend", "copilot", "pend"),
+    ("bpend", "codebuddy", "pend"),
+    ("qpend", "qwen", "pend"),
     ("cping", "codex", "ping"),
     ("gping", "gemini", "ping"),
     ("lping", "claude", "ping"),
     ("oping", "opencode", "ping"),
+    ("dping", "droid", "ping"),
+    ("hping", "copilot", "ping"),
+    ("bping", "codebuddy", "ping"),
+    ("qping", "qwen", "ping"),
 ]
 ALIAS_MAP = {name: (provider, kind) for name, provider, kind in ALIAS_TOOLS}
 
@@ -105,7 +121,7 @@ def _ping_schema() -> dict[str, Any]:
 
 
 TOOL_DEFS = []
-for provider in ("codex", "gemini", "claude", "opencode"):
+for provider in ("codex", "gemini", "claude", "opencode", "droid", "copilot", "codebuddy", "qwen"):
     TOOL_DEFS.append(
         {
             "name": f"ccb_ask_{provider}",

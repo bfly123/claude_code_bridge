@@ -23,16 +23,19 @@ from .formatter import ContextFormatter
 class ContextTransfer:
     """Orchestrate context transfer between providers."""
 
-    SUPPORTED_PROVIDERS = ("codex", "gemini", "opencode", "droid")
-    SUPPORTED_SOURCES = ("auto", "claude", "codex", "gemini", "opencode", "droid")
+    SUPPORTED_PROVIDERS = ("codex", "gemini", "opencode", "droid", "copilot", "codebuddy", "qwen")
+    SUPPORTED_SOURCES = ("auto", "claude", "codex", "gemini", "opencode", "droid", "copilot", "codebuddy", "qwen")
     SOURCE_SESSION_FILES = {
         "claude": ".claude-session",
         "codex": ".codex-session",
         "gemini": ".gemini-session",
         "opencode": ".opencode-session",
         "droid": ".droid-session",
+        "copilot": ".copilot-session",
+        "codebuddy": ".codebuddy-session",
+        "qwen": ".qwen-session",
     }
-    DEFAULT_SOURCE_ORDER = ("claude", "codex", "gemini", "opencode", "droid")
+    DEFAULT_SOURCE_ORDER = ("claude", "codex", "gemini", "opencode", "droid", "copilot", "codebuddy", "qwen")
     DEFAULT_FALLBACK_PAIRS = 50
 
     def __init__(

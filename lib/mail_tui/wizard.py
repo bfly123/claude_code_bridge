@@ -104,9 +104,12 @@ def run_simple_wizard() -> bool:
     print("  3. Gemini")
     print("  4. OpenCode")
     print("  5. Droid")
+    print("  6. Copilot")
+    print("  7. CodeBuddy")
+    print("  8. Qwen")
 
-    default_choice = input("\nEnter choice [1-5]: ").strip()
-    default_map = {"1": "claude", "2": "codex", "3": "gemini", "4": "opencode", "5": "droid"}
+    default_choice = input("\nEnter choice [1-8]: ").strip()
+    default_map = {"1": "claude", "2": "codex", "3": "gemini", "4": "opencode", "5": "droid", "6": "copilot", "7": "codebuddy", "8": "qwen"}
     default_provider = default_map.get(default_choice, "claude")
 
     # Step 6: Allowed senders (whitelist)
