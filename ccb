@@ -589,6 +589,7 @@ class AILauncher:
         self.tmux_panes = {}
         self.wezterm_panes = {}
         self.extra_panes = {}
+        self.linked_sessions: list[str] = []
         self.processes = {}
         self.anchor_provider = None
         self.anchor_pane_id = None
@@ -1445,24 +1446,25 @@ class AILauncher:
             return
         if pane_id:
             try:
-                upsert_registry(
-                    {
-                        "ccb_session_id": self.session_id,
-                        "ccb_project_id": compute_ccb_project_id(self.project_root),
-                        "work_dir": str(self.project_root),
-                        "terminal": terminal or self.terminal_type,
-                        "layout_mode": self.layout_mode,
-                        "providers": {
-                            "claude": {
-                                "pane_id": pane_id,
-                                "pane_title_marker": pane_title_marker,
-                                "session_file": str(path),
-                                "claude_session_id": data.get("claude_session_id"),
-                                "claude_session_path": data.get("claude_session_path"),
-                            }
-                        },
-                    }
-                )
+                _reg = {
+                    "ccb_session_id": self.session_id,
+                    "ccb_project_id": compute_ccb_project_id(self.project_root),
+                    "work_dir": str(self.project_root),
+                    "terminal": terminal or self.terminal_type,
+                    "layout_mode": self.layout_mode,
+                    "providers": {
+                        "claude": {
+                            "pane_id": pane_id,
+                            "pane_title_marker": pane_title_marker,
+                            "session_file": str(path),
+                            "claude_session_id": data.get("claude_session_id"),
+                            "claude_session_path": data.get("claude_session_path"),
+                        }
+                    },
+                }
+                if self.linked_sessions:
+                    _reg["linked_sessions"] = list(self.linked_sessions)
+                upsert_registry(_reg)
             except Exception:
                 pass
         self._maybe_start_provider_daemon("claude")
@@ -2697,7 +2699,7 @@ class AILauncher:
             print(err, file=sys.stderr)
             return False
         try:
-            upsert_registry({
+            _reg = {
                 "ccb_session_id": self.session_id,
                 "ccb_project_id": compute_ccb_project_id(self.project_root),
                 "work_dir": str(self.project_root),
@@ -2710,7 +2712,10 @@ class AILauncher:
                         "session_file": str(session_file),
                     }
                 },
-            })
+            }
+            if self.linked_sessions:
+                _reg["linked_sessions"] = list(self.linked_sessions)
+            upsert_registry(_reg)
         except Exception:
             pass
         self._maybe_start_provider_daemon("codex")
@@ -2732,6 +2737,8 @@ class AILauncher:
                 "codex": {"pane_id": codex_pane_id},
             },
         }
+        if self.linked_sessions:
+            record["linked_sessions"] = list(self.linked_sessions)
         ok = upsert_registry(record)
         if not ok:
             print("⚠️ Failed to update cpend registry", file=sys.stderr)
@@ -2776,7 +2783,7 @@ class AILauncher:
             print(err, file=sys.stderr)
             return False
         try:
-            upsert_registry({
+            _reg = {
                 "ccb_session_id": self.session_id,
                 "ccb_project_id": compute_ccb_project_id(self.project_root),
                 "work_dir": str(self.project_root),
@@ -2789,7 +2796,10 @@ class AILauncher:
                         "session_file": str(session_file),
                     }
                 },
-            })
+            }
+            if self.linked_sessions:
+                _reg["linked_sessions"] = list(self.linked_sessions)
+            upsert_registry(_reg)
         except Exception:
             pass
         self._maybe_start_provider_daemon("gemini")
@@ -2826,7 +2836,7 @@ class AILauncher:
             print(err, file=sys.stderr)
             return False
         try:
-            upsert_registry({
+            _reg = {
                 "ccb_session_id": self.session_id,
                 "ccb_project_id": compute_ccb_project_id(self.project_root),
                 "work_dir": str(self.project_root),
@@ -2839,7 +2849,10 @@ class AILauncher:
                         "session_file": str(session_file),
                     }
                 },
-            })
+            }
+            if self.linked_sessions:
+                _reg["linked_sessions"] = list(self.linked_sessions)
+            upsert_registry(_reg)
         except Exception:
             pass
         self._maybe_start_provider_daemon("opencode")
@@ -2893,7 +2906,7 @@ class AILauncher:
             print(err, file=sys.stderr)
             return False
         try:
-            upsert_registry({
+            _reg = {
                 "ccb_session_id": self.session_id,
                 "ccb_project_id": compute_ccb_project_id(self.project_root),
                 "work_dir": str(self.project_root),
@@ -2908,7 +2921,10 @@ class AILauncher:
                         "droid_session_path": droid_session_path,
                     }
                 },
-            })
+            }
+            if self.linked_sessions:
+                _reg["linked_sessions"] = list(self.linked_sessions)
+            upsert_registry(_reg)
         except Exception:
             pass
         self._maybe_start_provider_daemon("droid")
@@ -3240,6 +3256,16 @@ class AILauncher:
         except Exception:
             pass
 
+        # Kill linked tmux sessions (windows mode) before killing panes.
+        if kill_panes and self.linked_sessions:
+            _lb = TmuxBackend()
+            for ls_name in self.linked_sessions:
+                try:
+                    _lb.destroy_linked_session(ls_name)
+                except Exception:
+                    pass
+            self.linked_sessions.clear()
+
         if kill_panes:
             if self.terminal_type == "wezterm":
                 backend = WeztermBackend()
@@ -3466,6 +3492,8 @@ class AILauncher:
         if self.layout_mode == "windows":
             # Windows mode: each non-anchor provider gets its own tmux window.
             # The "cmd" item splits inside the anchor window (panes behaviour).
+            # After creating each window we also create a linked tmux session so
+            # each provider can be independently attached from another terminal.
             _win_backend = TmuxBackend()
             for item in spawn_items:
                 if item == "cmd":
@@ -3476,11 +3504,32 @@ class AILauncher:
                     return 1
                 # Label the new tmux window so the user can identify it.
                 if item != "cmd":
+                    win_name = item.capitalize()
                     try:
                         _win_backend._tmux_run(
-                            ["rename-window", "-t", pane_id, item.capitalize()],
+                            ["rename-window", "-t", pane_id, win_name],
                             check=False,
                         )
+                    except Exception:
+                        pass
+                    # Create linked session for this provider window.
+                    try:
+                        sn_cp = _win_backend._tmux_run(
+                            ["display-message", "-p", "-t", pane_id, "#{session_name}"],
+                            capture=True,
+                        )
+                        main_sess = (sn_cp.stdout or "").strip()
+                        if main_sess:
+                            linked_name = f"{main_sess}-{win_name}"
+                            _win_backend._tmux_run(
+                                ["new-session", "-d", "-t", main_sess, "-s", linked_name],
+                                check=True, capture=True,
+                            )
+                            _win_backend._tmux_run(
+                                ["select-window", "-t", f"{linked_name}:{win_name}"],
+                                check=False,
+                            )
+                            self.linked_sessions.append(linked_name)
                     except Exception:
                         pass
             # Also label the anchor window.
@@ -3961,6 +4010,14 @@ def cmd_kill(args):
                     backend.kill_pane(pane_id)
                 elif pane_id and shutil.which("tmux"):
                     backend = TmuxBackend()
+                    # Best-effort cleanup of linked session for windows mode.
+                    try:
+                        tmux_session_for_linked = str(data.get("tmux_session") or "").strip()
+                        if tmux_session_for_linked and not tmux_session_for_linked.startswith("%"):
+                            linked_name = f"{tmux_session_for_linked}-{provider.capitalize()}"
+                            backend.destroy_linked_session(linked_name)
+                    except Exception:
+                        pass
                     if str(pane_id).startswith("%"):
                         backend.kill_pane(str(pane_id))
                     else:

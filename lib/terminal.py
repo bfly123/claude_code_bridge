@@ -562,7 +562,14 @@ class TmuxBackend(TerminalBackend):
         return pane_id
 
     def new_window(self, session: str = "", window_name: str = "") -> str:
-        """Create a new tmux window and return its pane ID."""
+        """Create a new tmux window and return its pane ID.
+
+        When *window_name* is provided the method also creates a **linked
+        tmux session** named ``{main_session}-{window_name}`` so that each
+        provider window can be independently attached from another terminal.
+        Linked-session creation is best-effort -- failures are logged but do
+        not prevent the window itself from being used.
+        """
         tmux_args = ["new-window", "-P", "-F", "#{pane_id}"]
         if session:
             tmux_args.extend(["-t", session])
@@ -583,7 +590,52 @@ class TmuxBackend(TerminalBackend):
         pane_id = (cp.stdout or "").strip()
         if not self._looks_like_pane_id(pane_id):
             return ""
+
+        # --- Linked session creation (best-effort) ---
+        if window_name and pane_id:
+            try:
+                # Discover the main session name from the newly created pane.
+                sn_cp = self._tmux_run(
+                    ["display-message", "-p", "-t", pane_id, "#{session_name}"],
+                    capture=True,
+                )
+                main_session = (sn_cp.stdout or "").strip()
+                if main_session:
+                    linked_name = f"{main_session}-{window_name}"
+                    # Create a linked session (shares the same window group).
+                    self._tmux_run(
+                        ["new-session", "-d", "-t", main_session, "-s", linked_name],
+                        check=True,
+                        capture=True,
+                    )
+                    # Switch the linked session to the correct window.
+                    self._tmux_run(
+                        ["select-window", "-t", f"{linked_name}:{window_name}"],
+                        check=False,
+                    )
+            except Exception:
+                import sys
+                print(
+                    f"tmux linked-session creation failed for window {window_name!r} (non-fatal)",
+                    file=sys.stderr,
+                )
+
         return pane_id
+
+    def destroy_linked_session(self, session_name: str) -> bool:
+        """Kill a linked tmux session by name.
+
+        Returns True on success, False on failure.
+        """
+        if not session_name:
+            return False
+        try:
+            cp = self._tmux_run(
+                ["kill-session", "-t", session_name], check=False, capture=True,
+            )
+            return cp.returncode == 0
+        except Exception:
+            return False
 
     def set_pane_title(self, pane_id: str, title: str) -> None:
         if not pane_id:
