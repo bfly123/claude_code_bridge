@@ -555,11 +555,13 @@ class AILauncher:
         resume: bool = False,
         auto: bool = False,
         cmd_config: dict | None = None,
+        layout_mode: str = "panes",
     ):
         self.providers = providers or ["codex"]
         self.resume = resume
         self.auto = auto
         self.cmd_config = self._normalize_cmd_config(cmd_config)
+        self.layout_mode = layout_mode
         self.script_dir = Path(__file__).resolve().parent
         self.invocation_dir = Path.cwd()
         # Project root is strictly the current working directory.
@@ -3708,11 +3710,15 @@ def cmd_start(args):
         elif not cmd_config:
             cmd_config = True
 
+    config_layout = str(config_data.get("layout") or "").strip().lower()
+    layout_mode = "windows" if args.windows else (config_layout if config_layout in ("windows", "panes") else "panes")
+
     launcher = AILauncher(
         providers=providers,
         resume=resume,
         auto=auto,
         cmd_config=cmd_config,
+        layout_mode=layout_mode,
     )
     return launcher.run_up()
 
@@ -4889,6 +4895,7 @@ def main():
     )
     start_parser.add_argument("-r", "--resume", "--restore", action="store_true", help="Resume context")
     start_parser.add_argument("-a", "--auto", action="store_true", help="Full auto permission mode")
+    start_parser.add_argument("-w", "--windows", action="store_true", help="Launch each provider in its own tmux window instead of split panes")
     args = start_parser.parse_args(argv)
     return cmd_start(args)
 
