@@ -230,18 +230,8 @@ class TestNewWindow:
             timeout: float | None = None,
         ) -> subprocess.CompletedProcess[str]:
             calls.append(args)
-            # new-window
             if args and args[0] == "new-window":
                 return _cp(stdout="%77\n")
-            # session_name lookup for linked session creation
-            if len(args) >= 4 and "#{session_name}" in args:
-                return _cp(stdout="mysess\n")
-            # new-session (linked)
-            if args and args[0] == "new-session":
-                return _cp()
-            # select-window
-            if args and args[0] == "select-window":
-                return _cp()
             return _cp(stdout="")
 
         backend = terminal.TmuxBackend()
