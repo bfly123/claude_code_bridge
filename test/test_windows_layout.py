@@ -10,6 +10,7 @@ import pytest
 
 import terminal
 from ccb_start_config import _parse_config_obj
+from layout import PanesLayout, WindowsLayout
 from pane_registry import get_layout_mode, upsert_registry, registry_path_for_session
 
 
@@ -308,6 +309,260 @@ class TestNewWindow:
         assert len(new_session_calls) == 0
         display_calls = [c for c in calls if c["args"] and "#{session_name}" in str(c["args"])]
         assert len(display_calls) == 0
+
+
+# ---------------------------------------------------------------------------
+# TmuxBackend helper method tests
+# ---------------------------------------------------------------------------
+
+class TestBackendHelpers:
+    def test_get_session_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def fake_tmux_run(
+            self: terminal.TmuxBackend, args: list[str], *, check: bool = False,
+            capture: bool = False, input_bytes: bytes | None = None,
+            timeout: float | None = None,
+        ) -> subprocess.CompletedProcess[str]:
+            if "#{session_name}" in args:
+                return _cp(stdout="my-session\n")
+            return _cp()
+
+        backend = terminal.TmuxBackend()
+        monkeypatch.setattr(backend, "_tmux_run", fake_tmux_run.__get__(backend, terminal.TmuxBackend))
+        assert backend.get_session_name("%0") == "my-session"
+
+    def test_get_session_name_empty_pane(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        backend = terminal.TmuxBackend()
+        assert backend.get_session_name("") == ""
+
+    def test_rename_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[list[str]] = []
+
+        def fake_tmux_run(
+            self: terminal.TmuxBackend, args: list[str], *, check: bool = False,
+            capture: bool = False, input_bytes: bytes | None = None,
+            timeout: float | None = None,
+        ) -> subprocess.CompletedProcess[str]:
+            calls.append(args)
+            return _cp()
+
+        backend = terminal.TmuxBackend()
+        monkeypatch.setattr(backend, "_tmux_run", fake_tmux_run.__get__(backend, terminal.TmuxBackend))
+
+        backend.rename_window("%5", "Codex")
+        assert len(calls) == 1
+        assert calls[0][0] == "rename-window"
+        assert "%5" in calls[0]
+        assert "Codex" in calls[0]
+
+    def test_rename_window_empty_args(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[list[str]] = []
+
+        def fake_tmux_run(
+            self: terminal.TmuxBackend, args: list[str], *, check: bool = False,
+            capture: bool = False, input_bytes: bytes | None = None,
+            timeout: float | None = None,
+        ) -> subprocess.CompletedProcess[str]:
+            calls.append(args)
+            return _cp()
+
+        backend = terminal.TmuxBackend()
+        monkeypatch.setattr(backend, "_tmux_run", fake_tmux_run.__get__(backend, terminal.TmuxBackend))
+
+        backend.rename_window("", "Codex")
+        backend.rename_window("%5", "")
+        assert len(calls) == 0
+
+    def test_create_linked_session_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[list[str]] = []
+
+        def fake_tmux_run(
+            self: terminal.TmuxBackend, args: list[str], *, check: bool = False,
+            capture: bool = False, input_bytes: bytes | None = None,
+            timeout: float | None = None,
+        ) -> subprocess.CompletedProcess[str]:
+            calls.append(args)
+            return _cp()
+
+        backend = terminal.TmuxBackend()
+        monkeypatch.setattr(backend, "_tmux_run", fake_tmux_run.__get__(backend, terminal.TmuxBackend))
+
+        result = backend.create_linked_session("main", "main-Codex", select_window="main-Codex:Codex")
+        assert result is True
+        assert len(calls) == 2
+        assert calls[0][0] == "new-session"
+        assert "main" in calls[0] and "main-Codex" in calls[0]
+        assert calls[1][0] == "select-window"
+
+    def test_create_linked_session_empty_args(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        backend = terminal.TmuxBackend()
+        assert backend.create_linked_session("", "linked") is False
+        assert backend.create_linked_session("main", "") is False
+
+    def test_create_linked_session_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def fake_tmux_run(
+            self: terminal.TmuxBackend, args: list[str], *, check: bool = False,
+            capture: bool = False, input_bytes: bytes | None = None,
+            timeout: float | None = None,
+        ) -> subprocess.CompletedProcess[str]:
+            raise subprocess.CalledProcessError(1, ["tmux"])
+
+        backend = terminal.TmuxBackend()
+        monkeypatch.setattr(backend, "_tmux_run", fake_tmux_run.__get__(backend, terminal.TmuxBackend))
+        assert backend.create_linked_session("main", "main-X") is False
+
+
+# ---------------------------------------------------------------------------
+# PanesLayout strategy tests
+# ---------------------------------------------------------------------------
+
+class TestPanesLayout:
+    def test_places_right_then_left_then_right(self) -> None:
+        calls: list[tuple[str, str | None, str | None]] = []
+
+        def fake_start(item: str, parent: str | None, direction: str | None) -> str | None:
+            pane_id = f"%{len(calls) + 10}"
+            calls.append((item, parent, direction))
+            return pane_id
+
+        layout = PanesLayout()
+        rc = layout.place_providers(
+            spawn_items=["codex", "gemini"],
+            left_items=["claude", "codex"],
+            right_items=["gemini"],
+            anchor_pane_id="%0",
+            start_item=fake_start,
+        )
+        assert rc == 0
+        # First call: right_items[0] with anchor as parent, direction right
+        assert calls[0] == ("gemini", "%0", "right")
+        # Second call: left_items[1] (codex) with anchor as parent, direction bottom
+        assert calls[1] == ("codex", "%0", "bottom")
+
+    def test_returns_1_on_failure(self) -> None:
+        def failing_start(item: str, parent: str | None, direction: str | None) -> str | None:
+            return None
+
+        layout = PanesLayout()
+        rc = layout.place_providers(["codex"], ["claude"], ["codex"], "%0", failing_start)
+        assert rc == 1
+
+    def test_no_right_items(self) -> None:
+        calls: list[tuple[str, str | None, str | None]] = []
+
+        def fake_start(item: str, parent: str | None, direction: str | None) -> str | None:
+            calls.append((item, parent, direction))
+            return f"%{len(calls) + 10}"
+
+        layout = PanesLayout()
+        rc = layout.place_providers(
+            spawn_items=["codex"],
+            left_items=["claude", "codex"],
+            right_items=[],
+            anchor_pane_id="%0",
+            start_item=fake_start,
+        )
+        assert rc == 0
+        assert len(calls) == 1
+        assert calls[0] == ("codex", "%0", "bottom")
+
+    def test_linked_sessions_empty(self) -> None:
+        layout = PanesLayout()
+        assert layout.linked_sessions == []
+
+    def test_cleanup_noop(self) -> None:
+        layout = PanesLayout()
+        layout.cleanup()  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# WindowsLayout strategy tests
+# ---------------------------------------------------------------------------
+
+class TestWindowsLayout:
+    @staticmethod
+    def _make_backend(monkeypatch: pytest.MonkeyPatch, session_name: str = "main") -> terminal.TmuxBackend:
+        calls: list[list[str]] = []
+
+        def fake_tmux_run(
+            self: terminal.TmuxBackend, args: list[str], *, check: bool = False,
+            capture: bool = False, input_bytes: bytes | None = None,
+            timeout: float | None = None,
+        ) -> subprocess.CompletedProcess[str]:
+            calls.append(args)
+            if "#{session_name}" in args:
+                return _cp(stdout=f"{session_name}\n")
+            return _cp()
+
+        backend = terminal.TmuxBackend()
+        monkeypatch.setattr(backend, "_tmux_run", fake_tmux_run.__get__(backend, terminal.TmuxBackend))
+        backend._test_calls = calls  # type: ignore[attr-defined]
+        return backend
+
+    def test_captures_session_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        backend = self._make_backend(monkeypatch, "my-session")
+        layout = WindowsLayout(backend, "%0", "claude")
+        assert layout._main_session == "my-session"
+
+    def test_place_providers_creates_windows_and_linked(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        backend = self._make_backend(monkeypatch)
+        layout = WindowsLayout(backend, "%0", "claude")
+
+        started: list[str] = []
+
+        def fake_start(item: str, parent: str | None, direction: str | None) -> str | None:
+            started.append(item)
+            return f"%{len(started) + 20}"
+
+        rc = layout.place_providers(
+            spawn_items=["codex", "gemini"],
+            left_items=[], right_items=[],
+            anchor_pane_id="%0",
+            start_item=fake_start,
+        )
+        assert rc == 0
+        assert started == ["codex", "gemini"]
+        # 2 providers + 1 anchor = 3 linked sessions
+        assert len(layout.linked_sessions) == 3
+
+    def test_cmd_gets_right_direction(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        backend = self._make_backend(monkeypatch)
+        layout = WindowsLayout(backend, "%0", "claude")
+
+        directions: list[str | None] = []
+
+        def fake_start(item: str, parent: str | None, direction: str | None) -> str | None:
+            directions.append(direction)
+            return f"%{len(directions) + 30}"
+
+        layout.place_providers(["cmd", "codex"], [], [], "%0", fake_start)
+        assert directions[0] == "right"   # cmd
+        assert directions[1] is None      # codex (new window)
+
+    def test_cleanup_destroys_linked_sessions(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        backend = self._make_backend(monkeypatch)
+        layout = WindowsLayout(backend, "%0", "claude")
+
+        def fake_start(item: str, parent: str | None, direction: str | None) -> str | None:
+            return "%50"
+
+        layout.place_providers(["codex"], [], [], "%0", fake_start)
+        assert len(layout.linked_sessions) > 0
+
+        layout.cleanup()
+        assert layout.linked_sessions == []
+        # Verify kill-session calls were made
+        kill_calls = [c for c in backend._test_calls if c and c[0] == "kill-session"]  # type: ignore[attr-defined]
+        assert len(kill_calls) > 0
+
+    def test_returns_1_on_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        backend = self._make_backend(monkeypatch)
+        layout = WindowsLayout(backend, "%0", "claude")
+
+        def failing_start(item: str, parent: str | None, direction: str | None) -> str | None:
+            return None
+
+        rc = layout.place_providers(["codex"], [], [], "%0", failing_start)
+        assert rc == 1
 
 
 # ---------------------------------------------------------------------------

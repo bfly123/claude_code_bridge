@@ -561,13 +561,52 @@ class TmuxBackend(TerminalBackend):
             raise RuntimeError(f"tmux split-window did not return pane_id: {pane_id!r}")
         return pane_id
 
-    def new_window(self, session: str = "", window_name: str = "") -> str:
-        """Create a new tmux window and return its pane ID.
+    def get_session_name(self, pane_id: str) -> str:
+        """Return the tmux session name that owns *pane_id*."""
+        if not pane_id:
+            return ""
+        try:
+            cp = self._tmux_run(
+                ["display-message", "-p", "-t", pane_id, "#{session_name}"],
+                capture=True, timeout=1.0,
+            )
+            return (cp.stdout or "").strip()
+        except Exception:
+            return ""
 
-        Linked session creation is handled by the caller (run_up) to ensure
-        the main session name is captured once before any linked sessions
-        pollute the session group.
+    def rename_window(self, pane_id: str, name: str) -> None:
+        """Rename the tmux window that contains *pane_id*."""
+        if not pane_id or not name:
+            return
+        try:
+            self._tmux_run(["rename-window", "-t", pane_id, name], check=False)
+        except Exception:
+            pass
+
+    def create_linked_session(
+        self, target_session: str, linked_name: str, *, select_window: str = "",
+    ) -> bool:
+        """Create a linked tmux session attached to *target_session*.
+
+        Returns True on success.
         """
+        if not target_session or not linked_name:
+            return False
+        try:
+            self._tmux_run(
+                ["new-session", "-d", "-t", target_session, "-s", linked_name],
+                check=True, capture=True,
+            )
+            if select_window:
+                self._tmux_run(
+                    ["select-window", "-t", select_window], check=False,
+                )
+            return True
+        except Exception:
+            return False
+
+    def new_window(self, session: str = "", window_name: str = "") -> str:
+        """Create a new tmux window and return its pane ID."""
         tmux_args = ["new-window", "-P", "-F", "#{pane_id}"]
         if session:
             tmux_args.extend(["-t", session])

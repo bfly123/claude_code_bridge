@@ -39,6 +39,7 @@ from session_utils import (
     safe_write_session,
 )
 from pane_registry import upsert_registry, load_registry_by_project_id, get_layout_mode
+from layout import PanesLayout, WindowsLayout
 from project_id import compute_ccb_project_id
 from providers import CASK_CLIENT_SPEC, GASK_CLIENT_SPEC, OASK_CLIENT_SPEC, LASK_CLIENT_SPEC, DASK_CLIENT_SPEC
 from process_lock import ProviderLock
@@ -589,7 +590,7 @@ class AILauncher:
         self.tmux_panes = {}
         self.wezterm_panes = {}
         self.extra_panes = {}
-        self.linked_sessions: list[str] = []
+        self.layout_strategy = None  # set in run_up()
         self.processes = {}
         self.anchor_provider = None
         self.anchor_pane_id = None
@@ -2651,8 +2652,8 @@ class AILauncher:
             "terminal": terminal if terminal is not None else self.terminal_type,
             "layout_mode": self.layout_mode,
         }
-        if self.linked_sessions:
-            base["linked_sessions"] = list(self.linked_sessions)
+        if self.layout_strategy is not None and self.layout_strategy.linked_sessions:
+            base["linked_sessions"] = self.layout_strategy.linked_sessions
         return base
 
     def _write_codex_session(self, runtime, tmux_session, input_fifo, output_fifo, pane_id=None, pane_title_marker=None, codex_start_cmd=None):
@@ -3216,15 +3217,12 @@ class AILauncher:
         except Exception:
             pass
 
-        # Kill linked tmux sessions (windows mode) before killing panes.
-        if kill_panes and self.linked_sessions:
-            _lb = TmuxBackend()
-            for ls_name in self.linked_sessions:
-                try:
-                    _lb.destroy_linked_session(ls_name)
-                except Exception:
-                    pass
-            self.linked_sessions.clear()
+        # Clean up layout strategy resources (e.g. linked sessions in windows mode).
+        if kill_panes and self.layout_strategy is not None:
+            try:
+                self.layout_strategy.cleanup()
+            except Exception:
+                pass
 
         if kill_panes:
             if self.terminal_type == "wezterm":
@@ -3308,24 +3306,6 @@ class AILauncher:
 
         if not quiet:
             print(f"✅ {t('cleanup_complete')}")
-
-    def _create_linked_session(self, backend, main_sess: str, win_name: str) -> None:
-        """Create a linked tmux session for a provider window (best-effort)."""
-        if not main_sess:
-            return
-        try:
-            linked_name = f"{main_sess}-{win_name}"
-            backend._tmux_run(
-                ["new-session", "-d", "-t", main_sess, "-s", linked_name],
-                check=True, capture=True,
-            )
-            backend._tmux_run(
-                ["select-window", "-t", f"{linked_name}:{win_name}"],
-                check=False,
-            )
-            self.linked_sessions.append(linked_name)
-        except Exception:
-            pass
 
     def run_up(self) -> int:
         git_info = _get_git_info()
@@ -3455,7 +3435,7 @@ class AILauncher:
             except Exception:
                 pass
 
-        def _start_item(item: str, *, parent: str | None, direction: str | None) -> str | None:
+        def _start_item(item: str, parent: str | None, direction: str | None) -> str | None:
             if item == "cmd":
                 # In windows mode, cmd splits inside the anchor window (panes behaviour)
                 # rather than getting its own window.
@@ -3468,72 +3448,14 @@ class AILauncher:
             return pane_id
 
         if self.layout_mode == "windows":
-            # Windows mode: each non-anchor provider gets its own tmux window.
-            # The "cmd" item splits inside the anchor window (panes behaviour).
-            # After creating each window we also create a linked tmux session so
-            # each provider can be independently attached from another terminal.
             _win_backend = TmuxBackend()
-            # Capture main session name ONCE before creating any linked sessions,
-            # because linked sessions join the session group and later queries
-            # of #{session_name} may return a linked name instead of the original.
-            _main_sess = ""
-            try:
-                _ms_cp = _win_backend._tmux_run(
-                    ["display-message", "-p", "-t", self.anchor_pane_id, "#{session_name}"],
-                    capture=True,
-                )
-                _main_sess = (_ms_cp.stdout or "").strip()
-            except Exception:
-                pass
-            for item in spawn_items:
-                if item == "cmd":
-                    pane_id = _start_item(item, parent=self.anchor_pane_id, direction="right")
-                else:
-                    pane_id = _start_item(item, parent=self.anchor_pane_id, direction=None)
-                if not pane_id:
-                    return 1
-                # Label the new tmux window so the user can identify it.
-                if item != "cmd":
-                    win_name = item.capitalize()
-                    try:
-                        _win_backend._tmux_run(
-                            ["rename-window", "-t", pane_id, win_name],
-                            check=False,
-                        )
-                    except Exception:
-                        pass
-                    # Create linked session for this provider window.
-                    self._create_linked_session(_win_backend, _main_sess, win_name)
-            # Also label the anchor window and create its linked session.
-            anchor_win = self.anchor_provider.capitalize()
-            try:
-                _win_backend._tmux_run(
-                    ["rename-window", "-t", self.anchor_pane_id, anchor_win],
-                    check=False,
-                )
-            except Exception:
-                pass
-            self._create_linked_session(_win_backend, _main_sess, anchor_win)
+            self.layout_strategy = WindowsLayout(_win_backend, self.anchor_pane_id, self.anchor_provider)
         else:
-            right_top: str | None = None
-            if right_items:
-                right_top = _start_item(right_items[0], parent=self.anchor_pane_id, direction="right")
-                if not right_top:
-                    return 1
+            self.layout_strategy = PanesLayout()
 
-            last_left = self.anchor_pane_id
-            for item in left_items[1:]:
-                pane_id = _start_item(item, parent=last_left, direction="bottom")
-                if not pane_id:
-                    return 1
-                last_left = pane_id
-
-            last_right = right_top
-            for item in right_items[1:]:
-                pane_id = _start_item(item, parent=last_right, direction="bottom")
-                if not pane_id:
-                    return 1
-                last_right = pane_id
+        rc = self.layout_strategy.place_providers(spawn_items, left_items, right_items, self.anchor_pane_id, _start_item)
+        if rc != 0:
+            return rc
 
         # Optional: start caskd after Codex session file exists (first startup convenience).
         if "codex" in self.providers and self.anchor_provider != "codex":
