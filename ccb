@@ -3532,12 +3532,32 @@ class AILauncher:
                             self.linked_sessions.append(linked_name)
                     except Exception:
                         pass
-            # Also label the anchor window.
+            # Also label the anchor window and create its linked session.
+            anchor_win = self.anchor_provider.capitalize()
             try:
                 _win_backend._tmux_run(
-                    ["rename-window", "-t", self.anchor_pane_id, self.anchor_provider.capitalize()],
+                    ["rename-window", "-t", self.anchor_pane_id, anchor_win],
                     check=False,
                 )
+            except Exception:
+                pass
+            try:
+                sn_cp = _win_backend._tmux_run(
+                    ["display-message", "-p", "-t", self.anchor_pane_id, "#{session_name}"],
+                    capture=True,
+                )
+                main_sess = (sn_cp.stdout or "").strip()
+                if main_sess:
+                    linked_name = f"{main_sess}-{anchor_win}"
+                    _win_backend._tmux_run(
+                        ["new-session", "-d", "-t", main_sess, "-s", linked_name],
+                        check=True, capture=True,
+                    )
+                    _win_backend._tmux_run(
+                        ["select-window", "-t", f"{linked_name}:{anchor_win}"],
+                        check=False,
+                    )
+                    self.linked_sessions.append(linked_name)
             except Exception:
                 pass
         else:
