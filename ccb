@@ -1183,7 +1183,7 @@ class AILauncher:
         )
         return True
 
-    def _start_provider(self, provider: str, *, parent_pane: str | None = None, direction: str | None = None) -> str | None:
+    def _start_provider(self, provider: str, *, parent_pane: str | None = None, direction: str | None = None, layout_mode: str = "panes") -> str | None:
         # Handle case when no terminal detected
         if self.terminal_type is None:
             print(f"❌ {t('no_terminal_backend')}")
@@ -1222,13 +1222,13 @@ class AILauncher:
         print(f"🚀 {t('starting_backend', provider=provider.capitalize(), terminal='tmux')}")
 
         if provider == "codex":
-            return self._start_codex_tmux(parent_pane=parent_pane, direction=direction)
+            return self._start_codex_tmux(parent_pane=parent_pane, direction=direction, layout_mode=layout_mode)
         elif provider == "gemini":
-            return self._start_gemini_tmux(parent_pane=parent_pane, direction=direction)
+            return self._start_gemini_tmux(parent_pane=parent_pane, direction=direction, layout_mode=layout_mode)
         elif provider == "opencode":
-            return self._start_opencode_tmux(parent_pane=parent_pane, direction=direction)
+            return self._start_opencode_tmux(parent_pane=parent_pane, direction=direction, layout_mode=layout_mode)
         elif provider == "droid":
-            return self._start_droid_tmux(parent_pane=parent_pane, direction=direction)
+            return self._start_droid_tmux(parent_pane=parent_pane, direction=direction, layout_mode=layout_mode)
         else:
             print(f"❌ {t('unknown_provider', provider=provider)}")
             return None
@@ -2098,6 +2098,7 @@ class AILauncher:
         *,
         parent_pane: str | None = None,
         direction: str | None = None,
+        layout_mode: str = "panes",
     ) -> str | None:
         runtime = self.runtime_dir / "codex"
         runtime.mkdir(parents=True, exist_ok=True)
@@ -2134,7 +2135,7 @@ class AILauncher:
         except Exception:
             use_parent = None
 
-        pane_id = backend.create_pane("", str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent)
+        pane_id = backend.create_pane("", str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent, layout_mode=layout_mode)
         backend.respawn_pane(pane_id, cmd=start_cmd, cwd=str(Path.cwd()), remain_on_exit=True)
         backend.set_pane_title(pane_id, pane_title_marker)
         backend.set_pane_user_option(pane_id, "@ccb_agent", "Codex")
@@ -2197,6 +2198,7 @@ class AILauncher:
         *,
         parent_pane: str | None = None,
         direction: str | None = None,
+        layout_mode: str = "panes",
     ) -> str | None:
         runtime = self.runtime_dir / "gemini"
         runtime.mkdir(parents=True, exist_ok=True)
@@ -2225,7 +2227,7 @@ class AILauncher:
         except Exception:
             use_parent = None
 
-        pane_id = backend.create_pane("", str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent)
+        pane_id = backend.create_pane("", str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent, layout_mode=layout_mode)
         backend.respawn_pane(pane_id, cmd=start_cmd, cwd=str(Path.cwd()), remain_on_exit=True)
         backend.set_pane_title(pane_id, pane_title_marker)
         backend.set_pane_user_option(pane_id, "@ccb_agent", "Gemini")
@@ -2248,6 +2250,7 @@ class AILauncher:
         *,
         parent_pane: str | None = None,
         direction: str | None = None,
+        layout_mode: str = "panes",
     ) -> str | None:
         runtime = self.runtime_dir / "opencode"
         runtime.mkdir(parents=True, exist_ok=True)
@@ -2279,7 +2282,7 @@ class AILauncher:
         except Exception:
             use_parent = None
 
-        pane_id = backend.create_pane("", str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent)
+        pane_id = backend.create_pane("", str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent, layout_mode=layout_mode)
         backend.respawn_pane(pane_id, cmd=start_cmd, cwd=str(Path.cwd()), remain_on_exit=True)
         backend.set_pane_title(pane_id, pane_title_marker)
         backend.set_pane_user_option(pane_id, "@ccb_agent", "OpenCode")
@@ -2302,6 +2305,7 @@ class AILauncher:
         *,
         parent_pane: str | None = None,
         direction: str | None = None,
+        layout_mode: str = "panes",
     ) -> str | None:
         runtime = self.runtime_dir / "droid"
         runtime.mkdir(parents=True, exist_ok=True)
@@ -2331,7 +2335,7 @@ class AILauncher:
         except Exception:
             use_parent = None
 
-        pane_id = backend.create_pane("", str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent)
+        pane_id = backend.create_pane("", str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent, layout_mode=layout_mode)
         backend.respawn_pane(pane_id, cmd=start_cmd, cwd=str(Path.cwd()), remain_on_exit=True)
         backend.set_pane_title(pane_id, pane_title_marker)
         backend.set_pane_user_option(pane_id, "@ccb_agent", "Droid")
@@ -2355,6 +2359,7 @@ class AILauncher:
         parent_pane: str | None,
         direction: str | None,
         cmd_settings: dict,
+        layout_mode: str = "panes",
     ) -> str | None:
         if not cmd_settings.get("enabled"):
             return None
@@ -2377,7 +2382,7 @@ class AILauncher:
             self.extra_panes["cmd"] = pane_id
         else:
             backend = TmuxBackend()
-            pane_id = backend.create_pane("", str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent)
+            pane_id = backend.create_pane("", str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent, layout_mode=layout_mode)
             backend.respawn_pane(pane_id, cmd=full_cmd, cwd=str(Path.cwd()), remain_on_exit=True)
             backend.set_pane_title(pane_id, title)
             backend.set_pane_user_option(pane_id, "@ccb_agent", "Cmd")
@@ -3134,7 +3139,7 @@ class AILauncher:
             print(f"\n⚠️ {t('user_interrupted')}")
             return 130
 
-    def _start_claude_pane(self, *, parent_pane: str | None, direction: str | None) -> str | None:
+    def _start_claude_pane(self, *, parent_pane: str | None, direction: str | None, layout_mode: str = "panes") -> str | None:
         print(f"🚀 {t('starting_claude')}")
         env_overrides = self._claude_env_overrides()
 
@@ -3167,7 +3172,7 @@ class AILauncher:
             self.wezterm_panes["claude"] = pane_id
         else:
             backend = TmuxBackend()
-            pane_id = backend.create_pane("", run_cwd, direction=use_direction, percent=50, parent_pane=use_parent)
+            pane_id = backend.create_pane("", run_cwd, direction=use_direction, percent=50, parent_pane=use_parent, layout_mode=layout_mode)
             backend.respawn_pane(pane_id, cmd=full_cmd, cwd=run_cwd, remain_on_exit=True)
             backend.set_pane_title(pane_id, "CCB-Claude")
             backend.set_pane_user_option(pane_id, "@ccb_agent", "Claude")
@@ -3340,6 +3345,11 @@ class AILauncher:
             print(f"   - {t('or_set_ccb_terminal')}", file=sys.stderr)
             return 2
 
+        if self.layout_mode == "windows" and self.terminal_type != "tmux":
+            print("Error: --windows layout mode is only supported with tmux.", file=sys.stderr)
+            print("Tip: Run inside a tmux session or omit --windows.", file=sys.stderr)
+            return 2
+
         if not self._require_project_config_dir():
             return 2
 
@@ -3437,33 +3447,64 @@ class AILauncher:
 
         def _start_item(item: str, *, parent: str | None, direction: str | None) -> str | None:
             if item == "cmd":
+                # In windows mode, cmd splits inside the anchor window (panes behaviour)
+                # rather than getting its own window.
                 return self._start_cmd_pane(parent_pane=parent, direction=direction, cmd_settings=cmd_settings)
             if item == "claude":
-                return self._start_claude_pane(parent_pane=parent, direction=direction)
-            pane_id = self._start_provider(item, parent_pane=parent, direction=direction)
+                return self._start_claude_pane(parent_pane=parent, direction=direction, layout_mode=self.layout_mode)
+            pane_id = self._start_provider(item, parent_pane=parent, direction=direction, layout_mode=self.layout_mode)
             if pane_id:
                 self._warmup_provider(item)
             return pane_id
 
-        right_top: str | None = None
-        if right_items:
-            right_top = _start_item(right_items[0], parent=self.anchor_pane_id, direction="right")
-            if not right_top:
-                return 1
+        if self.layout_mode == "windows":
+            # Windows mode: each non-anchor provider gets its own tmux window.
+            # The "cmd" item splits inside the anchor window (panes behaviour).
+            _win_backend = TmuxBackend()
+            for item in spawn_items:
+                if item == "cmd":
+                    pane_id = _start_item(item, parent=self.anchor_pane_id, direction="right")
+                else:
+                    pane_id = _start_item(item, parent=self.anchor_pane_id, direction=None)
+                if not pane_id:
+                    return 1
+                # Label the new tmux window so the user can identify it.
+                if item != "cmd":
+                    try:
+                        _win_backend._tmux_run(
+                            ["rename-window", "-t", pane_id, item.capitalize()],
+                            check=False,
+                        )
+                    except Exception:
+                        pass
+            # Also label the anchor window.
+            try:
+                _win_backend._tmux_run(
+                    ["rename-window", "-t", self.anchor_pane_id, self.anchor_provider.capitalize()],
+                    check=False,
+                )
+            except Exception:
+                pass
+        else:
+            right_top: str | None = None
+            if right_items:
+                right_top = _start_item(right_items[0], parent=self.anchor_pane_id, direction="right")
+                if not right_top:
+                    return 1
 
-        last_left = self.anchor_pane_id
-        for item in left_items[1:]:
-            pane_id = _start_item(item, parent=last_left, direction="bottom")
-            if not pane_id:
-                return 1
-            last_left = pane_id
+            last_left = self.anchor_pane_id
+            for item in left_items[1:]:
+                pane_id = _start_item(item, parent=last_left, direction="bottom")
+                if not pane_id:
+                    return 1
+                last_left = pane_id
 
-        last_right = right_top
-        for item in right_items[1:]:
-            pane_id = _start_item(item, parent=last_right, direction="bottom")
-            if not pane_id:
-                return 1
-            last_right = pane_id
+            last_right = right_top
+            for item in right_items[1:]:
+                pane_id = _start_item(item, parent=last_right, direction="bottom")
+                if not pane_id:
+                    return 1
+                last_right = pane_id
 
         # Optional: start caskd after Codex session file exists (first startup convenience).
         if "codex" in self.providers and self.anchor_provider != "codex":

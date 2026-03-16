@@ -72,6 +72,7 @@ def test_start_codex_tmux_writes_bridge_pid(monkeypatch, tmp_path: Path) -> None
             direction: str = "right",
             percent: int = 50,
             parent_pane: str | None = None,
+            layout_mode: str = "panes",
         ) -> str:
             self._created += 1
             return f"%{10 + self._created}"
