@@ -38,7 +38,7 @@ from session_utils import (
     resolve_project_config_dir,
     safe_write_session,
 )
-from pane_registry import upsert_registry, load_registry_by_project_id
+from pane_registry import upsert_registry, load_registry_by_project_id, get_layout_mode
 from project_id import compute_ccb_project_id
 from providers import CASK_CLIENT_SPEC, GASK_CLIENT_SPEC, OASK_CLIENT_SPEC, LASK_CLIENT_SPEC, DASK_CLIENT_SPEC
 from process_lock import ProviderLock
@@ -1451,6 +1451,7 @@ class AILauncher:
                         "ccb_project_id": compute_ccb_project_id(self.project_root),
                         "work_dir": str(self.project_root),
                         "terminal": terminal or self.terminal_type,
+                        "layout_mode": self.layout_mode,
                         "providers": {
                             "claude": {
                                 "pane_id": pane_id,
@@ -2701,6 +2702,7 @@ class AILauncher:
                 "ccb_project_id": compute_ccb_project_id(self.project_root),
                 "work_dir": str(self.project_root),
                 "terminal": self.terminal_type,
+                "layout_mode": self.layout_mode,
                 "providers": {
                     "codex": {
                         "pane_id": pane_id,
@@ -2724,6 +2726,7 @@ class AILauncher:
             "ccb_project_id": compute_ccb_project_id(self.project_root),
             "work_dir": str(Path.cwd()),
             "terminal": self.terminal_type,
+            "layout_mode": self.layout_mode,
             "providers": {
                 "claude": {"pane_id": claude_pane_id},
                 "codex": {"pane_id": codex_pane_id},
@@ -2778,6 +2781,7 @@ class AILauncher:
                 "ccb_project_id": compute_ccb_project_id(self.project_root),
                 "work_dir": str(self.project_root),
                 "terminal": self.terminal_type,
+                "layout_mode": self.layout_mode,
                 "providers": {
                     "gemini": {
                         "pane_id": pane_id,
@@ -2827,6 +2831,7 @@ class AILauncher:
                 "ccb_project_id": compute_ccb_project_id(self.project_root),
                 "work_dir": str(self.project_root),
                 "terminal": self.terminal_type,
+                "layout_mode": self.layout_mode,
                 "providers": {
                     "opencode": {
                         "pane_id": pane_id,
@@ -2893,6 +2898,7 @@ class AILauncher:
                 "ccb_project_id": compute_ccb_project_id(self.project_root),
                 "work_dir": str(self.project_root),
                 "terminal": self.terminal_type,
+                "layout_mode": self.layout_mode,
                 "providers": {
                     "droid": {
                         "pane_id": pane_id,
@@ -3658,6 +3664,12 @@ def cmd_start(args):
     # Parse explicit provider args early so lock-collision path can reuse an existing pane.
     requested_providers, _requested_cmd_enabled = _parse_providers_with_cmd(args.providers or [])
 
+    # Compute layout_mode early so the lock-collision reuse path can detect mismatches.
+    _early_config = load_start_config(work_dir)
+    _early_config_data = _early_config.data if isinstance(_early_config.data, dict) else {}
+    _early_config_layout = str(_early_config_data.get("layout") or "").strip().lower()
+    _early_layout_mode = "windows" if args.windows else (_early_config_layout if _early_config_layout in ("windows", "panes") else "panes")
+
     def _existing_provider_pane_for_project(project_work_dir: Path, provider: str) -> tuple[dict | None, str]:
         prov = (provider or "").strip().lower()
         if not prov:
@@ -3670,6 +3682,15 @@ def cmd_start(args):
             return None, ""
         record = load_registry_by_project_id(project_id, prov)
         if not isinstance(record, dict):
+            return None, ""
+        # Check layout mode mismatch: if stored session used a different layout,
+        # skip reuse so a fresh launch can use the requested layout.
+        stored_layout = get_layout_mode(record)
+        if stored_layout != _early_layout_mode:
+            print(
+                f"Note: Previous session used '{stored_layout}' layout, current is '{_early_layout_mode}'. Launching fresh.",
+                file=sys.stderr,
+            )
             return None, ""
         providers_map = record.get("providers")
         if not isinstance(providers_map, dict):
@@ -3719,8 +3740,8 @@ def cmd_start(args):
     atexit.register(ccb_lock.release)
 
     providers, cmd_enabled = requested_providers, _requested_cmd_enabled
-    config = load_start_config(work_dir)
-    config_data = config.data if isinstance(config.data, dict) else {}
+    config = _early_config
+    config_data = _early_config_data
 
     if not providers:
         raw_providers = config_data.get("providers")
