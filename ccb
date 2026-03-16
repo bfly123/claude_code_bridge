@@ -3495,6 +3495,18 @@ class AILauncher:
             # After creating each window we also create a linked tmux session so
             # each provider can be independently attached from another terminal.
             _win_backend = TmuxBackend()
+            # Capture main session name ONCE before creating any linked sessions,
+            # because linked sessions join the session group and later queries
+            # of #{session_name} may return a linked name instead of the original.
+            _main_sess = ""
+            try:
+                _ms_cp = _win_backend._tmux_run(
+                    ["display-message", "-p", "-t", self.anchor_pane_id, "#{session_name}"],
+                    capture=True,
+                )
+                _main_sess = (_ms_cp.stdout or "").strip()
+            except Exception:
+                pass
             for item in spawn_items:
                 if item == "cmd":
                     pane_id = _start_item(item, parent=self.anchor_pane_id, direction="right")
@@ -3513,16 +3525,11 @@ class AILauncher:
                     except Exception:
                         pass
                     # Create linked session for this provider window.
-                    try:
-                        sn_cp = _win_backend._tmux_run(
-                            ["display-message", "-p", "-t", pane_id, "#{session_name}"],
-                            capture=True,
-                        )
-                        main_sess = (sn_cp.stdout or "").strip()
-                        if main_sess:
-                            linked_name = f"{main_sess}-{win_name}"
+                    if _main_sess:
+                        try:
+                            linked_name = f"{_main_sess}-{win_name}"
                             _win_backend._tmux_run(
-                                ["new-session", "-d", "-t", main_sess, "-s", linked_name],
+                                ["new-session", "-d", "-t", _main_sess, "-s", linked_name],
                                 check=True, capture=True,
                             )
                             _win_backend._tmux_run(
@@ -3530,8 +3537,8 @@ class AILauncher:
                                 check=False,
                             )
                             self.linked_sessions.append(linked_name)
-                    except Exception:
-                        pass
+                        except Exception:
+                            pass
             # Also label the anchor window and create its linked session.
             anchor_win = self.anchor_provider.capitalize()
             try:
@@ -3541,16 +3548,11 @@ class AILauncher:
                 )
             except Exception:
                 pass
-            try:
-                sn_cp = _win_backend._tmux_run(
-                    ["display-message", "-p", "-t", self.anchor_pane_id, "#{session_name}"],
-                    capture=True,
-                )
-                main_sess = (sn_cp.stdout or "").strip()
-                if main_sess:
-                    linked_name = f"{main_sess}-{anchor_win}"
+            if _main_sess:
+                try:
+                    linked_name = f"{_main_sess}-{anchor_win}"
                     _win_backend._tmux_run(
-                        ["new-session", "-d", "-t", main_sess, "-s", linked_name],
+                        ["new-session", "-d", "-t", _main_sess, "-s", linked_name],
                         check=True, capture=True,
                     )
                     _win_backend._tmux_run(
@@ -3558,8 +3560,8 @@ class AILauncher:
                         check=False,
                     )
                     self.linked_sessions.append(linked_name)
-            except Exception:
-                pass
+                except Exception:
+                    pass
         else:
             right_top: str | None = None
             if right_items:

@@ -293,8 +293,8 @@ class TestNewWindow:
         pane_id = backend.new_window(session="s")
         assert pane_id == ""
 
-    def test_new_window_creates_linked_session(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Verify that new_window() with a window_name creates a linked session."""
+    def test_new_window_does_not_create_linked_session(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Verify new_window() only creates the window; linked sessions are handled by run_up()."""
         calls: list[dict[str, Any]] = []
 
         def fake_tmux_run(
@@ -303,18 +303,8 @@ class TestNewWindow:
             timeout: float | None = None,
         ) -> subprocess.CompletedProcess[str]:
             calls.append({"args": args, "check": check})
-            # new-window
             if args and args[0] == "new-window":
                 return _cp(stdout="%42\n")
-            # session_name lookup
-            if len(args) >= 4 and "#{session_name}" in args:
-                return _cp(stdout="main-sess\n")
-            # new-session (linked)
-            if args and args[0] == "new-session":
-                return _cp()
-            # select-window
-            if args and args[0] == "select-window":
-                return _cp()
             return _cp(stdout="")
 
         backend = terminal.TmuxBackend()
@@ -323,44 +313,11 @@ class TestNewWindow:
         pane_id = backend.new_window(session="main-sess", window_name="Codex")
         assert pane_id == "%42"
 
-        # Should have: new-window, display-message (session_name), new-session, select-window
+        # Should only have the new-window call -- no new-session or display-message
         new_session_calls = [c for c in calls if c["args"] and c["args"][0] == "new-session"]
-        assert len(new_session_calls) == 1
-        ns_args = new_session_calls[0]["args"]
-        assert "-d" in ns_args
-        assert "-t" in ns_args and "main-sess" in ns_args
-        assert "-s" in ns_args and "main-sess-Codex" in ns_args
-
-        # select-window should target the linked session's window
-        sw_calls = [c for c in calls if c["args"] and c["args"][0] == "select-window"]
-        assert len(sw_calls) == 1
-        assert "main-sess-Codex:Codex" in sw_calls[0]["args"]
-
-    def test_new_window_linked_session_failure_nonfatal(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Linked session failure should not prevent new_window from returning the pane_id."""
-        calls: list[list[str]] = []
-
-        def fake_tmux_run(
-            self: terminal.TmuxBackend, args: list[str], *, check: bool = False,
-            capture: bool = False, input_bytes: bytes | None = None,
-            timeout: float | None = None,
-        ) -> subprocess.CompletedProcess[str]:
-            calls.append(args)
-            if args and args[0] == "new-window":
-                return _cp(stdout="%50\n")
-            # Fail the linked session creation
-            if args and args[0] == "new-session":
-                raise subprocess.CalledProcessError(1, ["tmux", *args])
-            if len(args) >= 4 and "#{session_name}" in args:
-                return _cp(stdout="sess\n")
-            return _cp(stdout="")
-
-        backend = terminal.TmuxBackend()
-        monkeypatch.setattr(backend, "_tmux_run", fake_tmux_run.__get__(backend, terminal.TmuxBackend))
-
-        pane_id = backend.new_window(session="sess", window_name="Claude")
-        # The window pane_id should still be returned.
-        assert pane_id == "%50"
+        assert len(new_session_calls) == 0
+        display_calls = [c for c in calls if c["args"] and "#{session_name}" in str(c["args"])]
+        assert len(display_calls) == 0
 
 
 # ---------------------------------------------------------------------------
