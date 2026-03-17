@@ -93,8 +93,8 @@ function Show-Usage {
 
 function Find-Python {
   if (Get-Command py -ErrorAction SilentlyContinue) { return "py -3" }
-  if (Get-Command python -ErrorAction SilentlyContinue) { return "python" }
-  if (Get-Command python3 -ErrorAction SilentlyContinue) { return "python3" }
+  if (Get-Command python -ErrorAction SilentlyContinue) { return (Get-Command python).Source }
+  if (Get-Command python3 -ErrorAction SilentlyContinue) { return (Get-Command python3).Source }
   return $null
 }
 
