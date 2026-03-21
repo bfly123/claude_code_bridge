@@ -178,6 +178,11 @@ def _provider_pane_alive(record: Dict[str, Any], provider: str) -> bool:
         return False
 
 
+def get_layout_mode(record: dict) -> str:
+    """Return the layout mode for a registry record ('panes' or 'windows')."""
+    return record.get("layout_mode", "panes")
+
+
 def load_registry_by_session_id(session_id: str) -> Optional[Dict[str, Any]]:
     if not session_id:
         return None

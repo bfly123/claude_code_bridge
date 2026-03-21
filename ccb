@@ -38,7 +38,8 @@ from session_utils import (
     resolve_project_config_dir,
     safe_write_session,
 )
-from pane_registry import upsert_registry, load_registry_by_project_id
+from pane_registry import upsert_registry, load_registry_by_project_id, get_layout_mode
+from layout import PanesLayout, WindowsLayout
 from project_id import compute_ccb_project_id
 from providers import CASK_CLIENT_SPEC, GASK_CLIENT_SPEC, OASK_CLIENT_SPEC, LASK_CLIENT_SPEC, DASK_CLIENT_SPEC
 from process_lock import ProviderLock
@@ -555,11 +556,13 @@ class AILauncher:
         resume: bool = False,
         auto: bool = False,
         cmd_config: dict | None = None,
+        layout_mode: str = "panes",
     ):
         self.providers = providers or ["codex"]
         self.resume = resume
         self.auto = auto
         self.cmd_config = self._normalize_cmd_config(cmd_config)
+        self.layout_mode = layout_mode
         self.script_dir = Path(__file__).resolve().parent
         self.invocation_dir = Path.cwd()
         # Project root is strictly the current working directory.
@@ -587,6 +590,7 @@ class AILauncher:
         self.tmux_panes = {}
         self.wezterm_panes = {}
         self.extra_panes = {}
+        self.layout_strategy = None  # set in run_up()
         self.processes = {}
         self.anchor_provider = None
         self.anchor_pane_id = None
@@ -1443,23 +1447,17 @@ class AILauncher:
             return
         if pane_id:
             try:
-                upsert_registry(
-                    {
-                        "ccb_session_id": self.session_id,
-                        "ccb_project_id": compute_ccb_project_id(self.project_root),
-                        "work_dir": str(self.project_root),
-                        "terminal": terminal or self.terminal_type,
-                        "providers": {
-                            "claude": {
-                                "pane_id": pane_id,
-                                "pane_title_marker": pane_title_marker,
-                                "session_file": str(path),
-                                "claude_session_id": data.get("claude_session_id"),
-                                "claude_session_path": data.get("claude_session_path"),
-                            }
-                        },
+                _reg = self._registry_base(terminal=terminal or self.terminal_type)
+                _reg["providers"] = {
+                    "claude": {
+                        "pane_id": pane_id,
+                        "pane_title_marker": pane_title_marker,
+                        "session_file": str(path),
+                        "claude_session_id": data.get("claude_session_id"),
+                        "claude_session_path": data.get("claude_session_path"),
                     }
-                )
+                }
+                upsert_registry(_reg)
             except Exception:
                 pass
         self._maybe_start_provider_daemon("claude")
@@ -2132,7 +2130,7 @@ class AILauncher:
         except Exception:
             use_parent = None
 
-        pane_id = backend.create_pane("", str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent)
+        pane_id = backend.create_pane("", str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent, layout_mode=self.layout_mode)
         backend.respawn_pane(pane_id, cmd=start_cmd, cwd=str(Path.cwd()), remain_on_exit=True)
         backend.set_pane_title(pane_id, pane_title_marker)
         backend.set_pane_user_option(pane_id, "@ccb_agent", "Codex")
@@ -2223,7 +2221,7 @@ class AILauncher:
         except Exception:
             use_parent = None
 
-        pane_id = backend.create_pane("", str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent)
+        pane_id = backend.create_pane("", str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent, layout_mode=self.layout_mode)
         backend.respawn_pane(pane_id, cmd=start_cmd, cwd=str(Path.cwd()), remain_on_exit=True)
         backend.set_pane_title(pane_id, pane_title_marker)
         backend.set_pane_user_option(pane_id, "@ccb_agent", "Gemini")
@@ -2277,7 +2275,7 @@ class AILauncher:
         except Exception:
             use_parent = None
 
-        pane_id = backend.create_pane("", str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent)
+        pane_id = backend.create_pane("", str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent, layout_mode=self.layout_mode)
         backend.respawn_pane(pane_id, cmd=start_cmd, cwd=str(Path.cwd()), remain_on_exit=True)
         backend.set_pane_title(pane_id, pane_title_marker)
         backend.set_pane_user_option(pane_id, "@ccb_agent", "OpenCode")
@@ -2329,7 +2327,7 @@ class AILauncher:
         except Exception:
             use_parent = None
 
-        pane_id = backend.create_pane("", str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent)
+        pane_id = backend.create_pane("", str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent, layout_mode=self.layout_mode)
         backend.respawn_pane(pane_id, cmd=start_cmd, cwd=str(Path.cwd()), remain_on_exit=True)
         backend.set_pane_title(pane_id, pane_title_marker)
         backend.set_pane_user_option(pane_id, "@ccb_agent", "Droid")
@@ -2375,7 +2373,7 @@ class AILauncher:
             self.extra_panes["cmd"] = pane_id
         else:
             backend = TmuxBackend()
-            pane_id = backend.create_pane("", str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent)
+            pane_id = backend.create_pane("", str(Path.cwd()), direction=use_direction, percent=50, parent_pane=use_parent, layout_mode="panes")
             backend.respawn_pane(pane_id, cmd=full_cmd, cwd=str(Path.cwd()), remain_on_exit=True)
             backend.set_pane_title(pane_id, title)
             backend.set_pane_user_option(pane_id, "@ccb_agent", "Cmd")
@@ -2645,6 +2643,19 @@ class AILauncher:
         print(f"❌ {t('unknown_provider', provider=provider)}")
         return 1
 
+    def _registry_base(self, *, terminal: str | None = None, work_dir: str | None = None) -> dict:
+        """Return common registry fields shared by all provider upserts."""
+        base = {
+            "ccb_session_id": self.session_id,
+            "ccb_project_id": compute_ccb_project_id(self.project_root),
+            "work_dir": work_dir if work_dir is not None else str(self.project_root),
+            "terminal": terminal if terminal is not None else self.terminal_type,
+            "layout_mode": self.layout_mode,
+        }
+        if self.layout_strategy is not None and self.layout_strategy.linked_sessions:
+            base["linked_sessions"] = self.layout_strategy.linked_sessions
+        return base
+
     def _write_codex_session(self, runtime, tmux_session, input_fifo, output_fifo, pane_id=None, pane_title_marker=None, codex_start_cmd=None):
         session_file = self._project_session_file(".codex-session")
 
@@ -2689,19 +2700,15 @@ class AILauncher:
             print(err, file=sys.stderr)
             return False
         try:
-            upsert_registry({
-                "ccb_session_id": self.session_id,
-                "ccb_project_id": compute_ccb_project_id(self.project_root),
-                "work_dir": str(self.project_root),
-                "terminal": self.terminal_type,
-                "providers": {
-                    "codex": {
-                        "pane_id": pane_id,
-                        "pane_title_marker": pane_title_marker,
-                        "session_file": str(session_file),
-                    }
-                },
-            })
+            _reg = self._registry_base()
+            _reg["providers"] = {
+                "codex": {
+                    "pane_id": pane_id,
+                    "pane_title_marker": pane_title_marker,
+                    "session_file": str(session_file),
+                }
+            }
+            upsert_registry(_reg)
         except Exception:
             pass
         self._maybe_start_provider_daemon("codex")
@@ -2710,17 +2717,12 @@ class AILauncher:
     def _write_cend_registry(self, claude_pane_id: str, codex_pane_id: str | None) -> bool:
         if not claude_pane_id:
             return False
-        record = {
-            "ccb_session_id": self.session_id,
-            "claude_pane_id": claude_pane_id,
-            "codex_pane_id": codex_pane_id,
-            "ccb_project_id": compute_ccb_project_id(self.project_root),
-            "work_dir": str(Path.cwd()),
-            "terminal": self.terminal_type,
-            "providers": {
-                "claude": {"pane_id": claude_pane_id},
-                "codex": {"pane_id": codex_pane_id},
-            },
+        record = self._registry_base(work_dir=str(Path.cwd()))
+        record["claude_pane_id"] = claude_pane_id
+        record["codex_pane_id"] = codex_pane_id
+        record["providers"] = {
+            "claude": {"pane_id": claude_pane_id},
+            "codex": {"pane_id": codex_pane_id},
         }
         ok = upsert_registry(record)
         if not ok:
@@ -2766,19 +2768,15 @@ class AILauncher:
             print(err, file=sys.stderr)
             return False
         try:
-            upsert_registry({
-                "ccb_session_id": self.session_id,
-                "ccb_project_id": compute_ccb_project_id(self.project_root),
-                "work_dir": str(self.project_root),
-                "terminal": self.terminal_type,
-                "providers": {
-                    "gemini": {
-                        "pane_id": pane_id,
-                        "pane_title_marker": pane_title_marker,
-                        "session_file": str(session_file),
-                    }
-                },
-            })
+            _reg = self._registry_base()
+            _reg["providers"] = {
+                "gemini": {
+                    "pane_id": pane_id,
+                    "pane_title_marker": pane_title_marker,
+                    "session_file": str(session_file),
+                }
+            }
+            upsert_registry(_reg)
         except Exception:
             pass
         self._maybe_start_provider_daemon("gemini")
@@ -2815,19 +2813,15 @@ class AILauncher:
             print(err, file=sys.stderr)
             return False
         try:
-            upsert_registry({
-                "ccb_session_id": self.session_id,
-                "ccb_project_id": compute_ccb_project_id(self.project_root),
-                "work_dir": str(self.project_root),
-                "terminal": self.terminal_type,
-                "providers": {
-                    "opencode": {
-                        "pane_id": pane_id,
-                        "pane_title_marker": pane_title_marker,
-                        "session_file": str(session_file),
-                    }
-                },
-            })
+            _reg = self._registry_base()
+            _reg["providers"] = {
+                "opencode": {
+                    "pane_id": pane_id,
+                    "pane_title_marker": pane_title_marker,
+                    "session_file": str(session_file),
+                }
+            }
+            upsert_registry(_reg)
         except Exception:
             pass
         self._maybe_start_provider_daemon("opencode")
@@ -2881,21 +2875,17 @@ class AILauncher:
             print(err, file=sys.stderr)
             return False
         try:
-            upsert_registry({
-                "ccb_session_id": self.session_id,
-                "ccb_project_id": compute_ccb_project_id(self.project_root),
-                "work_dir": str(self.project_root),
-                "terminal": self.terminal_type,
-                "providers": {
-                    "droid": {
-                        "pane_id": pane_id,
-                        "pane_title_marker": pane_title_marker,
-                        "session_file": str(session_file),
-                        "droid_session_id": droid_session_id,
-                        "droid_session_path": droid_session_path,
-                    }
-                },
-            })
+            _reg = self._registry_base()
+            _reg["providers"] = {
+                "droid": {
+                    "pane_id": pane_id,
+                    "pane_title_marker": pane_title_marker,
+                    "session_file": str(session_file),
+                    "droid_session_id": droid_session_id,
+                    "droid_session_path": droid_session_path,
+                }
+            }
+            upsert_registry(_reg)
         except Exception:
             pass
         self._maybe_start_provider_daemon("droid")
@@ -3165,7 +3155,7 @@ class AILauncher:
             self.wezterm_panes["claude"] = pane_id
         else:
             backend = TmuxBackend()
-            pane_id = backend.create_pane("", run_cwd, direction=use_direction, percent=50, parent_pane=use_parent)
+            pane_id = backend.create_pane("", run_cwd, direction=use_direction, percent=50, parent_pane=use_parent, layout_mode=self.layout_mode)
             backend.respawn_pane(pane_id, cmd=full_cmd, cwd=run_cwd, remain_on_exit=True)
             backend.set_pane_title(pane_id, "CCB-Claude")
             backend.set_pane_user_option(pane_id, "@ccb_agent", "Claude")
@@ -3226,6 +3216,13 @@ class AILauncher:
             _shrink_ccb_logs()
         except Exception:
             pass
+
+        # Clean up layout strategy resources (e.g. linked sessions in windows mode).
+        if kill_panes and self.layout_strategy is not None:
+            try:
+                self.layout_strategy.cleanup()
+            except Exception:
+                pass
 
         if kill_panes:
             if self.terminal_type == "wezterm":
@@ -3338,6 +3335,11 @@ class AILauncher:
             print(f"   - {t('or_set_ccb_terminal')}", file=sys.stderr)
             return 2
 
+        if self.layout_mode == "windows" and self.terminal_type != "tmux":
+            print("Error: --windows layout mode is only supported with tmux.", file=sys.stderr)
+            print("Tip: Run inside a tmux session or omit --windows.", file=sys.stderr)
+            return 2
+
         if not self._require_project_config_dir():
             return 2
 
@@ -3433,8 +3435,10 @@ class AILauncher:
             except Exception:
                 pass
 
-        def _start_item(item: str, *, parent: str | None, direction: str | None) -> str | None:
+        def _start_item(item: str, parent: str | None, direction: str | None) -> str | None:
             if item == "cmd":
+                # In windows mode, cmd splits inside the anchor window (panes behaviour)
+                # rather than getting its own window.
                 return self._start_cmd_pane(parent_pane=parent, direction=direction, cmd_settings=cmd_settings)
             if item == "claude":
                 return self._start_claude_pane(parent_pane=parent, direction=direction)
@@ -3443,25 +3447,15 @@ class AILauncher:
                 self._warmup_provider(item)
             return pane_id
 
-        right_top: str | None = None
-        if right_items:
-            right_top = _start_item(right_items[0], parent=self.anchor_pane_id, direction="right")
-            if not right_top:
-                return 1
+        if self.layout_mode == "windows":
+            _win_backend = TmuxBackend()
+            self.layout_strategy = WindowsLayout(_win_backend, self.anchor_pane_id, self.anchor_provider)
+        else:
+            self.layout_strategy = PanesLayout()
 
-        last_left = self.anchor_pane_id
-        for item in left_items[1:]:
-            pane_id = _start_item(item, parent=last_left, direction="bottom")
-            if not pane_id:
-                return 1
-            last_left = pane_id
-
-        last_right = right_top
-        for item in right_items[1:]:
-            pane_id = _start_item(item, parent=last_right, direction="bottom")
-            if not pane_id:
-                return 1
-            last_right = pane_id
+        rc = self.layout_strategy.place_providers(spawn_items, left_items, right_items, self.anchor_pane_id, _start_item)
+        if rc != 0:
+            return rc
 
         # Optional: start caskd after Codex session file exists (first startup convenience).
         if "codex" in self.providers and self.anchor_provider != "codex":
@@ -3615,6 +3609,12 @@ def cmd_start(args):
     # Parse explicit provider args early so lock-collision path can reuse an existing pane.
     requested_providers, _requested_cmd_enabled = _parse_providers_with_cmd(args.providers or [])
 
+    # Compute layout_mode early so the lock-collision reuse path can detect mismatches.
+    _early_config = load_start_config(work_dir)
+    _early_config_data = _early_config.data if isinstance(_early_config.data, dict) else {}
+    _early_config_layout = str(_early_config_data.get("layout") or "").strip().lower()
+    _early_layout_mode = "windows" if args.windows else (_early_config_layout if _early_config_layout in ("windows", "panes") else "panes")
+
     def _existing_provider_pane_for_project(project_work_dir: Path, provider: str) -> tuple[dict | None, str]:
         prov = (provider or "").strip().lower()
         if not prov:
@@ -3627,6 +3627,15 @@ def cmd_start(args):
             return None, ""
         record = load_registry_by_project_id(project_id, prov)
         if not isinstance(record, dict):
+            return None, ""
+        # Check layout mode mismatch: if stored session used a different layout,
+        # skip reuse so a fresh launch can use the requested layout.
+        stored_layout = get_layout_mode(record)
+        if stored_layout != _early_layout_mode:
+            print(
+                f"Note: Previous session used '{stored_layout}' layout, current is '{_early_layout_mode}'. Launching fresh.",
+                file=sys.stderr,
+            )
             return None, ""
         providers_map = record.get("providers")
         if not isinstance(providers_map, dict):
@@ -3676,8 +3685,8 @@ def cmd_start(args):
     atexit.register(ccb_lock.release)
 
     providers, cmd_enabled = requested_providers, _requested_cmd_enabled
-    config = load_start_config(work_dir)
-    config_data = config.data if isinstance(config.data, dict) else {}
+    config = _early_config
+    config_data = _early_config_data
 
     if not providers:
         raw_providers = config_data.get("providers")
@@ -3708,11 +3717,15 @@ def cmd_start(args):
         elif not cmd_config:
             cmd_config = True
 
+    config_layout = str(config_data.get("layout") or "").strip().lower()
+    layout_mode = "windows" if args.windows else (config_layout if config_layout in ("windows", "panes") else "panes")
+
     launcher = AILauncher(
         providers=providers,
         resume=resume,
         auto=auto,
         cmd_config=cmd_config,
+        layout_mode=layout_mode,
     )
     return launcher.run_up()
 
@@ -3893,6 +3906,14 @@ def cmd_kill(args):
                     backend.kill_pane(pane_id)
                 elif pane_id and shutil.which("tmux"):
                     backend = TmuxBackend()
+                    # Best-effort cleanup of linked session for windows mode.
+                    try:
+                        tmux_session_for_linked = str(data.get("tmux_session") or "").strip()
+                        if tmux_session_for_linked and not tmux_session_for_linked.startswith("%"):
+                            linked_name = f"{tmux_session_for_linked}-{provider.capitalize()}"
+                            backend.destroy_linked_session(linked_name)
+                    except Exception:
+                        pass
                     if str(pane_id).startswith("%"):
                         backend.kill_pane(str(pane_id))
                     else:
@@ -4889,6 +4910,7 @@ def main():
     )
     start_parser.add_argument("-r", "--resume", "--restore", action="store_true", help="Resume context")
     start_parser.add_argument("-a", "--auto", action="store_true", help="Full auto permission mode")
+    start_parser.add_argument("-w", "--windows", action="store_true", help="Launch each provider in its own tmux window instead of split panes")
     args = start_parser.parse_args(argv)
     return cmd_start(args)
 

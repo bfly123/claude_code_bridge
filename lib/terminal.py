@@ -561,6 +561,88 @@ class TmuxBackend(TerminalBackend):
             raise RuntimeError(f"tmux split-window did not return pane_id: {pane_id!r}")
         return pane_id
 
+    def get_session_name(self, pane_id: str) -> str:
+        """Return the tmux session name that owns *pane_id*."""
+        if not pane_id:
+            return ""
+        try:
+            cp = self._tmux_run(
+                ["display-message", "-p", "-t", pane_id, "#{session_name}"],
+                capture=True, timeout=1.0,
+            )
+            return (cp.stdout or "").strip()
+        except Exception:
+            return ""
+
+    def rename_window(self, pane_id: str, name: str) -> None:
+        """Rename the tmux window that contains *pane_id*."""
+        if not pane_id or not name:
+            return
+        try:
+            self._tmux_run(["rename-window", "-t", pane_id, name], check=False)
+        except Exception:
+            pass
+
+    def create_linked_session(
+        self, target_session: str, linked_name: str, *, select_window: str = "",
+    ) -> bool:
+        """Create a linked tmux session attached to *target_session*.
+
+        Returns True on success.
+        """
+        if not target_session or not linked_name:
+            return False
+        try:
+            self._tmux_run(
+                ["new-session", "-d", "-t", target_session, "-s", linked_name],
+                check=True, capture=True,
+            )
+            if select_window:
+                self._tmux_run(
+                    ["select-window", "-t", select_window], check=False,
+                )
+            return True
+        except Exception:
+            return False
+
+    def new_window(self, session: str = "", window_name: str = "") -> str:
+        """Create a new tmux window and return its pane ID."""
+        tmux_args = ["new-window", "-P", "-F", "#{pane_id}"]
+        if session:
+            tmux_args.extend(["-t", session])
+        if window_name:
+            tmux_args.extend(["-n", window_name])
+        try:
+            cp = self._tmux_run(tmux_args, check=True, capture=True)
+        except subprocess.CalledProcessError as e:
+            err = (getattr(e, "stderr", "") or "").strip()
+            out = (getattr(e, "stdout", "") or "").strip()
+            msg = err or out
+            import sys
+            print(f"tmux new-window failed (exit {e.returncode}): {msg or 'no stdout/stderr'}", file=sys.stderr)
+            return ""
+        except Exception:
+            return ""
+        pane_id = (cp.stdout or "").strip()
+        if not self._looks_like_pane_id(pane_id):
+            return ""
+        return pane_id
+
+    def destroy_linked_session(self, session_name: str) -> bool:
+        """Kill a linked tmux session by name.
+
+        Returns True on success, False on failure.
+        """
+        if not session_name:
+            return False
+        try:
+            cp = self._tmux_run(
+                ["kill-session", "-t", session_name], check=False, capture=True,
+            )
+            return cp.returncode == 0
+        except Exception:
+            return False
+
     def set_pane_title(self, pane_id: str, title: str) -> None:
         if not pane_id:
             return
@@ -718,6 +800,26 @@ class TmuxBackend(TerminalBackend):
             return
         self._tmux_run(["attach", "-t", pane_id], check=False)
 
+    def focus_pane(self, pane_id: str) -> bool:
+        """Focus a pane, switching to its window first if needed."""
+        if not pane_id:
+            return False
+        try:
+            cp = self._tmux_run(
+                ["display-message", "-p", "-t", pane_id, "#{window_id}"],
+                capture=True, timeout=1.0,
+            )
+            window_id = (cp.stdout or "").strip()
+            if cp.returncode != 0 or not window_id:
+                return False
+            sw = self._tmux_run(["select-window", "-t", window_id], check=False, timeout=1.0)
+            if sw.returncode != 0:
+                return False
+            sp = self._tmux_run(["select-pane", "-t", pane_id], check=False, timeout=1.0)
+            return sp.returncode == 0
+        except Exception:
+            return False
+
     def respawn_pane(self, pane_id: str, *, cmd: str, cwd: str | None = None,
                      stderr_log_path: str | None = None, remain_on_exit: bool = True) -> None:
         """
@@ -797,12 +899,13 @@ class TmuxBackend(TerminalBackend):
         p.write_text(text, encoding="utf-8")
 
     def create_pane(self, cmd: str, cwd: str, direction: str = "right", percent: int = 50,
-                    parent_pane: Optional[str] = None) -> str:
+                    parent_pane: Optional[str] = None, layout_mode: str = "panes") -> str:
         """
         Create a new pane and run `cmd` inside it.
 
         - If `parent_pane` is provided (or we are inside tmux), split that pane.
         - If called outside tmux without `parent_pane`, create a detached session and return its root pane id.
+        - When `layout_mode` is ``"windows"``, create a new tmux window instead of splitting.
         """
         cmd = (cmd or "").strip()
         cwd = (cwd or ".").strip() or "."
@@ -815,7 +918,22 @@ class TmuxBackend(TerminalBackend):
                 base = None
 
         if base:
-            new_pane = self.split_pane(base, direction=direction, percent=percent)
+            if layout_mode == "windows":
+                # Derive the session name from the existing pane so the new window
+                # is created in the same session.
+                try:
+                    cp = self._tmux_run(
+                        ["display-message", "-p", "-t", base, "#{session_name}"],
+                        capture=True, timeout=1.0,
+                    )
+                    session_name = (cp.stdout or "").strip()
+                except Exception:
+                    session_name = ""
+                new_pane = self.new_window(session=session_name)
+                if not new_pane:
+                    raise RuntimeError("tmux new-window failed to create a window")
+            else:
+                new_pane = self.split_pane(base, direction=direction, percent=percent)
             if cmd:
                 self.respawn_pane(new_pane, cmd=cmd, cwd=cwd)
             return new_pane

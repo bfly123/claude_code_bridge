@@ -20,6 +20,7 @@ class StartConfig:
 
 
 _ALLOWED_PROVIDERS = {"codex", "gemini", "opencode", "claude", "droid"}
+_ALLOWED_LAYOUTS = {"panes", "windows"}
 
 
 def _parse_tokens(raw: str) -> list[str]:
@@ -76,6 +77,16 @@ def _parse_config_obj(obj: object) -> dict:
             data["providers"] = providers
             if cmd_enabled and "cmd" not in data:
                 data["cmd"] = True
+
+        raw_layout = data.get("layout")
+        if isinstance(raw_layout, str):
+            normalized = raw_layout.strip().lower()
+            if normalized in _ALLOWED_LAYOUTS:
+                data["layout"] = normalized
+            else:
+                data.pop("layout", None)
+        elif raw_layout is not None:
+            data.pop("layout", None)
         return data
 
     if isinstance(obj, list):

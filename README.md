@@ -407,6 +407,7 @@ tmux tip: CCB's tmux status/pane theming is enabled only while CCB is running.
 tmux tip: press `Ctrl+b` then `Space` to cycle tmux layouts. You can press it repeatedly to keep switching layouts.
 
 Layout rule: the last provider runs in the current pane. Extras are ordered as `[cmd?, reversed providers]`; the first extra goes to the top-right, then the left column fills top-to-bottom, then the right column fills top-to-bottom. Examples: 4 panes = left2/right2, 5 panes = left2/right3.
+Windows mode: use `ccb -w` or set `"layout": "windows"` in config. Each provider gets its own tmux window. Use `Ctrl+B w` to list and switch windows. The `cmd` (shell) pane stays in the anchor window. Windows mode is tmux-only (not supported with WezTerm).
 Note: `ccb up` is removed; use `ccb ...` or configure `ccb.config`.
 ```
 
@@ -415,6 +416,7 @@ Note: `ccb up` is removed; use `ccb ...` or configure `ccb.config`.
 | :--- | :--- | :--- |
 | `-r` | Resume previous session context | `ccb -r` |
 | `-a` | Auto-mode, skip permission prompts | `ccb -a` |
+| `-w, --windows` | Launch each provider in its own tmux window instead of split panes | `ccb -w codex gemini` |
 | `-h` | Show help information | `ccb -h` |
 | `-v` | Show version and check for updates | `ccb -v` |
 
@@ -437,11 +439,14 @@ Advanced JSON (optional, for flags or custom cmd pane):
 ```json
 {
   "providers": ["codex", "gemini", "opencode", "claude"],
+  "layout": "windows",
   "cmd": { "enabled": true, "title": "CCB-Cmd", "start_cmd": "bash" },
   "flags": { "auto": false, "resume": false }
 }
 ```
 Cmd pane participates in the layout as the first extra pane and does not change which AI runs in the current pane.
+
+`layout` accepts `"panes"` (default, split panes) or `"windows"` (one tmux window per provider). CLI flag `--windows` overrides the config value.
 
 ### Update
 ```bash
