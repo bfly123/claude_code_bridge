@@ -146,16 +146,40 @@ def send_via_wezterm(pane_id: str, message: str, session_data: dict) -> bool:
         if not wezterm:
             return False
 
-        # Use stdin to avoid command line length limits on Windows
-        # wezterm cli send-text --pane-id <id> --no-paste reads from stdin if no text arg
+        # Use bracketed paste mode (omit --no-paste) so that intermediate \n characters
+        # in the multi-line response body are treated as literal newlines within the paste
+        # block, not as individual Enter keystrokes. Sending a multi-line message with
+        # --no-paste causes each \n to arrive as a keystroke; raw-mode TUIs like Claude
+        # Code do not submit on \n (LF 0x0A) — they require a real Enter key event.
         result = subprocess.run(
-            [wezterm, "cli", "send-text", "--pane-id", pane_id, "--no-paste"],
+            [wezterm, "cli", "send-text", "--pane-id", pane_id],
             input=message.encode("utf-8"),
             capture_output=True,
             timeout=10
         )
         if result.returncode == 0:
-            # Send Enter after text
+            # Brief pause to let the TUI process the bracketed paste before Enter.
+            import time
+            time.sleep(0.1)
+            # Send a proper Enter key event so raw-mode TUIs (e.g. Claude Code) submit
+            # the pasted content. A bare \r byte is insufficient for many TUIs.
+            # Try both CLI variants across WezTerm versions; fall back to \r byte.
+            for key_variant in ("Enter", "Return"):
+                # Variant A: --key <KeyName>
+                r = subprocess.run(
+                    [wezterm, "cli", "send-key", "--pane-id", pane_id, "--key", key_variant],
+                    capture_output=True, timeout=5
+                )
+                if r.returncode == 0:
+                    return True
+                # Variant B: positional <KeyName>
+                r = subprocess.run(
+                    [wezterm, "cli", "send-key", "--pane-id", pane_id, key_variant],
+                    capture_output=True, timeout=5
+                )
+                if r.returncode == 0:
+                    return True
+            # Final fallback: CR byte (works for readline-based panes)
             subprocess.run(
                 [wezterm, "cli", "send-text", "--pane-id", pane_id, "--no-paste"],
                 input=b"\r",
