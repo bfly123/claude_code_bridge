@@ -52,7 +52,7 @@ backend_env = get_backend_env()
 if backend_env and not os.environ.get("CCB_BACKEND_ENV"):
     os.environ["CCB_BACKEND_ENV"] = backend_env
 
-VERSION = "5.2.8"
+VERSION = "5.2.9"
 GIT_COMMIT = "c539e79"
 GIT_DATE = "2026-02-25"
 
@@ -555,11 +555,15 @@ class AILauncher:
         resume: bool = False,
         auto: bool = False,
         cmd_config: dict | None = None,
+        launch_args: dict | None = None,
+        launch_env: dict | None = None,
     ):
         self.providers = providers or ["codex"]
         self.resume = resume
         self.auto = auto
         self.cmd_config = self._normalize_cmd_config(cmd_config)
+        self.launch_args = launch_args if isinstance(launch_args, dict) else {}
+        self.launch_env = launch_env if isinstance(launch_env, dict) else {}
         self.script_dir = Path(__file__).resolve().parent
         self.invocation_dir = Path.cwd()
         # Project root is strictly the current working directory.
@@ -610,6 +614,12 @@ class AILauncher:
         prov = (provider or "").strip().lower()
         if prov in {"claude", "codex", "gemini", "opencode", "droid", "email", "manual"}:
             env["CCB_CALLER"] = prov
+        # Merge per-provider launch_env from config.
+        extra = self.launch_env.get(prov)
+        if isinstance(extra, dict):
+            for k, v in extra.items():
+                if isinstance(k, str) and k.strip():
+                    env[k.strip()] = str(v)
         return env
 
     def _project_config_dir(self) -> Path:
@@ -1897,14 +1907,20 @@ class AILauncher:
         if provider == "codex":
             # NOTE: Codex TUI has paste-burst detection; terminal injection (wezterm send-text/tmux paste-buffer)
             # is often detected as "paste", causing Enter to only line-break not submit. Disable detection by default.
-            return self._build_codex_start_cmd()
+            cmd = self._build_codex_start_cmd()
         elif provider == "gemini":
-            return self._build_gemini_start_cmd()
+            cmd = self._build_gemini_start_cmd()
         elif provider == "opencode":
-            return self._build_opencode_start_cmd()
+            cmd = self._build_opencode_start_cmd()
         elif provider == "droid":
-            return self._build_droid_start_cmd()
-        return ""
+            cmd = self._build_droid_start_cmd()
+        else:
+            cmd = ""
+        # Append per-provider launch_args from config.
+        extra = self.launch_args.get(provider)
+        if isinstance(extra, str) and extra.strip():
+            cmd = f"{cmd} {extra.strip()}" if cmd else extra.strip()
+        return cmd
 
     def _opencode_resume_allowed(self) -> bool:
         try:
@@ -3086,6 +3102,10 @@ class AILauncher:
             _, has_history, resume_dir = self._get_latest_claude_session_id()
             if has_history:
                 cmd.append("--continue")
+        # Append per-provider launch_args from config.
+        extra = self.launch_args.get("claude")
+        if isinstance(extra, str) and extra.strip():
+            cmd.extend(shlex.split(extra.strip()))
         run_cwd = str(self.project_root) if self.resume else str(Path.cwd())
         if self.resume and has_history and resume_dir:
             run_cwd = str(resume_dir)
@@ -3708,11 +3728,18 @@ def cmd_start(args):
         elif not cmd_config:
             cmd_config = True
 
+    raw_launch_args = config_data.get("launch_args")
+    launch_args = raw_launch_args if isinstance(raw_launch_args, dict) else None
+    raw_launch_env = config_data.get("launch_env")
+    launch_env = raw_launch_env if isinstance(raw_launch_env, dict) else None
+
     launcher = AILauncher(
         providers=providers,
         resume=resume,
         auto=auto,
         cmd_config=cmd_config,
+        launch_args=launch_args,
+        launch_env=launch_env,
     )
     return launcher.run_up()
 
