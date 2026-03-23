@@ -32,7 +32,7 @@ THREADS_FILE = "threads.json"
 CURRENT_CONFIG_VERSION = 3
 
 # Supported AI providers
-SUPPORTED_PROVIDERS = ["claude", "codex", "gemini", "opencode", "droid"]
+SUPPORTED_PROVIDERS = ["claude", "codex", "gemini", "opencode", "droid", "copilot", "codebuddy", "qwen"]
 
 # Notification modes
 NotifyMode = Literal["on_completion", "realtime", "periodic", "on_request"]

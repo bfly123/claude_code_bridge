@@ -132,7 +132,7 @@ def _get_providers_map(data: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
 
     # Legacy flat format: derive providers on demand (no persistence here).
     out = {}
-    for p in ("codex", "gemini", "opencode", "claude"):
+    for p in ("codex", "gemini", "opencode", "claude", "droid", "copilot", "codebuddy", "qwen"):
         entry = _provider_entry_from_legacy(data, p)
         if entry:
             out[p] = entry
@@ -327,7 +327,7 @@ def upsert_registry(record: Dict[str, Any]) -> bool:
                 providers[p][k] = v
 
     # Migrate legacy flat fields into providers.
-    for p in ("codex", "gemini", "opencode", "claude"):
+    for p in ("codex", "gemini", "opencode", "claude", "droid", "copilot", "codebuddy", "qwen"):
         legacy_entry = _provider_entry_from_legacy(record, p)
         if legacy_entry:
             providers.setdefault(p, {})
