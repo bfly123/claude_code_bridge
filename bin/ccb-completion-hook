@@ -25,6 +25,8 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
+from datetime import datetime
 from pathlib import Path
 
 # Add lib directory to path for imports
@@ -59,6 +61,32 @@ def env_float(name: str, default: float) -> float:
         return float(val)
     except ValueError:
         return default
+
+
+def _debug_enabled() -> bool:
+    return env_bool("CCB_COMPLETION_HOOK_DEBUG", True)
+
+
+def _debug_log_path() -> Path:
+    raw = os.environ.get("CCB_COMPLETION_HOOK_DEBUG_LOG", "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    return Path(tempfile.gettempdir()) / "ccb-completion-hook.debug.log"
+
+
+def _debug_log(message: str) -> None:
+    if not _debug_enabled():
+        return
+    try:
+        path = _debug_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f%z")
+        line = f"{ts} pid={os.getpid()} {message}\n"
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(line)
+        print(f"[completion-hook-debug] {message}", file=sys.stderr)
+    except Exception:
+        pass
 
 
 def load_session_file(session_path: Path) -> dict:
@@ -139,31 +167,91 @@ def find_wezterm_cli() -> str | None:
     return None
 
 
+def _env_true(name: str) -> bool:
+    return (os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"})
+
+
+def _wezterm_cli_base_args(wezterm_bin: str) -> list[str]:
+    args = [wezterm_bin, "cli"]
+    wezterm_class = (os.environ.get("CODEX_WEZTERM_CLASS") or os.environ.get("WEZTERM_CLASS") or "").strip()
+    if wezterm_class:
+        args.extend(["--class", wezterm_class])
+    if _env_true("CODEX_WEZTERM_PREFER_MUX"):
+        args.append("--prefer-mux")
+    if _env_true("CODEX_WEZTERM_NO_AUTO_START"):
+        args.append("--no-auto-start")
+    return args
+
+
+def _send_wezterm_enter(base_args: list[str], pane_id: str) -> bool:
+    variants = ["Enter", "Return", "enter"]
+    for variant in variants:
+        result = subprocess.run(
+            [*base_args, "send-key", "--pane-id", pane_id, "--key", variant],
+            capture_output=True,
+            timeout=2,
+        )
+        if result.returncode == 0:
+            return True
+        result = subprocess.run(
+            [*base_args, "send-key", "--pane-id", pane_id, variant],
+            capture_output=True,
+            timeout=2,
+        )
+        if result.returncode == 0:
+            return True
+    return False
+
+
 def send_via_wezterm(pane_id: str, message: str, session_data: dict) -> bool:
-    """Send message to WezTerm pane using wezterm cli with stdin for large payloads."""
+    """Send message to WezTerm pane and auto-submit reliably."""
     try:
         wezterm = find_wezterm_cli()
         if not wezterm:
             return False
 
-        # Use stdin to avoid command line length limits on Windows
-        # wezterm cli send-text --pane-id <id> --no-paste reads from stdin if no text arg
+        import time
+
+        base_args = _wezterm_cli_base_args(wezterm)
+        payload = message.replace("\r", "").rstrip("\n")
+        if not payload:
+            return False
+
+        # Preferred path: paste full content, then send an explicit Enter key event.
+        # Some TUIs don't treat pasted newlines as submit.
         result = subprocess.run(
-            [wezterm, "cli", "send-text", "--pane-id", pane_id, "--no-paste"],
-            input=message.encode("utf-8"),
+            [*base_args, "send-text", "--pane-id", pane_id],
+            input=payload.encode("utf-8"),
             capture_output=True,
             timeout=10
         )
+        _debug_log(f"wezterm send-text pane={pane_id!r} rc={result.returncode}")
         if result.returncode == 0:
-            # Send Enter after text
-            subprocess.run(
-                [wezterm, "cli", "send-text", "--pane-id", pane_id, "--no-paste"],
+            if _send_wezterm_enter(base_args, pane_id):
+                _debug_log(f"wezterm submit via send-key pane={pane_id!r} rc=0")
+                return True
+            # Older wezterm may lack send-key; fallback to sending CR byte.
+            submit = subprocess.run(
+                [*base_args, "send-text", "--pane-id", pane_id, "--no-paste"],
                 input=b"\r",
                 capture_output=True,
-                timeout=5
+                timeout=5,
             )
-            return True
+            _debug_log(f"wezterm submit via no-paste pane={pane_id!r} rc={submit.returncode}")
+            return submit.returncode == 0
+
+        # Fallback: no-paste with trailing CR for non-TUI panes.
+        time.sleep(0.1)
+        fallback = subprocess.run(
+            [*base_args, "send-text", "--pane-id", pane_id, "--no-paste"],
+            input=(payload + "\r").encode("utf-8"),
+            capture_output=True,
+            timeout=5
+        )
+        _debug_log(f"wezterm fallback no-paste pane={pane_id!r} rc={fallback.returncode}")
+        return fallback.returncode == 0
     except Exception:
+        _debug_log(f"wezterm exception pane={pane_id!r}")
         pass
     return False
 
@@ -172,6 +260,27 @@ def send_via_tmux(pane_id: str, message: str) -> bool:
     """Send message to tmux pane using load-buffer + paste-buffer."""
     try:
         import time
+
+        def _send_enter() -> bool:
+            key_variants = ("Enter", "Return", "C-m")
+            max_retries = 3
+            enter_delay = env_float("CCB_TMUX_ENTER_DELAY", 0.5)
+            retry_delay = env_float("CCB_TMUX_ENTER_RETRY_DELAY", 0.08)
+            for attempt in range(max_retries):
+                if enter_delay:
+                    time.sleep(enter_delay)
+                for key in key_variants:
+                    key_result = subprocess.run(
+                        ["tmux", "send-keys", "-t", pane_id, key],
+                        capture_output=True,
+                        timeout=5,
+                    )
+                    _debug_log(f"tmux send-keys pane={pane_id!r} key={key!r} rc={key_result.returncode}")
+                    if key_result.returncode == 0:
+                        return True
+                if retry_delay and attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+            return False
 
         # Ensure pane is not in copy mode
         try:
@@ -198,6 +307,7 @@ def send_via_tmux(pane_id: str, message: str) -> bool:
             capture_output=True,
             timeout=5
         )
+        _debug_log(f"tmux load-buffer pane={pane_id!r} rc={load_result.returncode}")
         if load_result.returncode != 0:
             return False
         try:
@@ -207,15 +317,10 @@ def send_via_tmux(pane_id: str, message: str) -> bool:
                 capture_output=True,
                 timeout=5
             )
+            _debug_log(f"tmux paste-buffer pane={pane_id!r} rc={paste_result.returncode}")
             if paste_result.returncode == 0:
-                # Send Enter after paste (wait 1s for stability)
-                time.sleep(1.0)
-                subprocess.run(
-                    ["tmux", "send-keys", "-t", pane_id, "Enter"],
-                    capture_output=True,
-                    timeout=5
-                )
-                return True
+                # Send Enter after paste to submit automatically.
+                return _send_enter()
         finally:
             # Clean up buffer
             subprocess.run(
@@ -224,6 +329,7 @@ def send_via_tmux(pane_id: str, message: str) -> bool:
                 timeout=2
             )
     except Exception:
+        _debug_log(f"tmux exception pane={pane_id!r}")
         pass
     return False
 
@@ -398,6 +504,11 @@ def main() -> int:
         reply_content = args.reply or ""
     done_seen = env_bool("CCB_DONE_SEEN", True)
     status = normalize_completion_status(os.environ.get("CCB_COMPLETION_STATUS", ""), done_seen=done_seen)
+    _debug_log(
+        "start "
+        f"provider={provider} caller={caller} req_id={args.req_id or 'unknown'} "
+        f"status={status} done_seen={done_seen}"
+    )
     if not reply_content:
         reply_content = default_reply_for_status(status, done_seen=done_seen)
 
@@ -428,84 +539,98 @@ def main() -> int:
         status=status,
     )
 
-    # Find caller's pane_id from session file
-    session_files = {
-        "claude": ".claude-session",
-        "codex": ".codex-session",
-        "gemini": ".gemini-session",
-        "opencode": ".opencode-session",
-        "droid": ".droid-session",
-    }
-    session_filename = session_files.get(caller, ".claude-session")
-
-    # Search for session file in multiple locations (order matters - most specific first)
-    work_dir = os.environ.get("CCB_WORK_DIR", "")
-    search_paths: list[Path] = []
-    seen_paths: set[str] = set()
-    config_dirnames = (".ccb", ".ccb_config")
-
-    def add_search_path(path: Path | None) -> None:
-        if not path:
-            return
-        p = Path(path)
-        key = str(p)
-        if key in seen_paths:
-            return
-        seen_paths.add(key)
-        search_paths.append(p)
-
-    # 1. Request's work_dir (most specific), with upward lookup for nested dirs.
-    if work_dir:
-        try:
-            add_search_path(find_project_session_file(Path(work_dir), session_filename))
-        except Exception:
-            pass
-
-    # 2. Current working directory (fallback), with upward lookup.
-    cwd = os.getcwd()
-    if cwd != work_dir:
-        try:
-            add_search_path(find_project_session_file(Path(cwd), session_filename))
-        except Exception:
-            pass
-
-    # 3. User's home-based locations
-    for dirname in config_dirnames:
-        add_search_path(Path.home() / ".local" / "share" / "codex-dual" / dirname / session_filename)
-
-    # 4. On Windows, also check LOCALAPPDATA
-    if os.name == "nt":
-        localappdata = os.environ.get("LOCALAPPDATA", "")
-        if localappdata:
-            for dirname in reversed(config_dirnames):
-                p = Path(localappdata) / "codex-dual" / dirname / session_filename
-                key = str(p)
-                if key in seen_paths:
-                    continue
-                seen_paths.add(key)
-                search_paths.insert(0, p)
+    # Direct pane routing: when the caller's pane ID was captured at ask-time and
+    # threaded through the chain, use it directly. This is necessary because multiple
+    # Claude Code instances in the same project share one session file, so the session
+    # file lookup would route to whichever instance wrote last — not the one that asked.
+    direct_pane_id = os.environ.get("CCB_CALLER_PANE_ID", "").strip()
+    direct_terminal = os.environ.get("CCB_CALLER_TERMINAL", "").strip()
 
     pane_id = None
     terminal = "tmux"  # default
     session_data = {}
-    found_session_path = None
 
-    for session_path in search_paths:
-        if session_path.exists():
-            session_data = load_session_file(session_path)
-            pane_id = session_data.get("pane_id")
-            terminal = session_data.get("terminal", "tmux")
-            if pane_id:
-                found_session_path = session_path
-                # Validate: check if session's work_dir matches request's work_dir
-                session_work_dir = session_data.get("work_dir", "")
-                if work_dir and session_work_dir and not _work_dirs_compatible(str(session_work_dir), str(work_dir)):
-                    # Session file is for a different project, skip it
-                    pane_id = None
-                    continue
-                break
+    if direct_pane_id:
+        pane_id = direct_pane_id
+        terminal = direct_terminal or "tmux"
+        _debug_log(f"routing direct pane={pane_id!r} terminal={terminal}")
+    else:
+        # Fallback: find caller's pane_id from session file
+        session_files = {
+            "claude": ".claude-session",
+            "codex": ".codex-session",
+            "gemini": ".gemini-session",
+            "opencode": ".opencode-session",
+            "droid": ".droid-session",
+        }
+        session_filename = session_files.get(caller, ".claude-session")
+
+        work_dir = os.environ.get("CCB_WORK_DIR", "")
+        search_paths: list[Path] = []
+        seen_paths: set[str] = set()
+        config_dirnames = (".ccb", ".ccb_config")
+
+        def add_search_path(path: Path | None) -> None:
+            if not path:
+                return
+            p = Path(path)
+            key = str(p)
+            if key in seen_paths:
+                return
+            seen_paths.add(key)
+            search_paths.append(p)
+
+        # 1. Request's work_dir (most specific), with upward lookup for nested dirs.
+        if work_dir:
+            try:
+                add_search_path(find_project_session_file(Path(work_dir), session_filename))
+            except Exception:
+                pass
+
+        # 2. Current working directory (fallback), with upward lookup.
+        cwd = os.getcwd()
+        if cwd != work_dir:
+            try:
+                add_search_path(find_project_session_file(Path(cwd), session_filename))
+            except Exception:
+                pass
+
+        # 3. User's home-based locations
+        for dirname in config_dirnames:
+            add_search_path(Path.home() / ".local" / "share" / "codex-dual" / dirname / session_filename)
+
+        # 4. On Windows, also check LOCALAPPDATA
+        if os.name == "nt":
+            localappdata = os.environ.get("LOCALAPPDATA", "")
+            if localappdata:
+                for dirname in reversed(config_dirnames):
+                    p = Path(localappdata) / "codex-dual" / dirname / session_filename
+                    key = str(p)
+                    if key in seen_paths:
+                        continue
+                    seen_paths.add(key)
+                    search_paths.insert(0, p)
+
+        for session_path in search_paths:
+            if session_path.exists():
+                session_data = load_session_file(session_path)
+                pane_id = session_data.get("pane_id")
+                terminal = session_data.get("terminal", "tmux")
+                if pane_id:
+                    # Validate: check if session's work_dir matches request's work_dir
+                    session_work_dir = session_data.get("work_dir", "")
+                    if work_dir and session_work_dir and not _work_dirs_compatible(str(session_work_dir), str(work_dir)):
+                        pane_id = None
+                        _debug_log(
+                            "session mismatch "
+                            f"session={session_path} session_work_dir={session_work_dir!r} request_work_dir={work_dir!r}"
+                        )
+                        continue
+                    _debug_log(f"routing session pane={pane_id!r} terminal={terminal} session={session_path}")
+                    break
 
     if not pane_id:
+        _debug_log("no pane found, falling back to ask --notify")
         # No pane_id found, try ask command
         timeout = env_float("CCB_COMPLETION_HOOK_TIMEOUT", 10.0)
         ask_cmd = find_ask_command()
@@ -532,12 +657,16 @@ def main() -> int:
                     timeout=timeout,
                     env=env,
                 )
+            _debug_log(f"ask --notify fallback rc={result.returncode}")
             return result.returncode
         except Exception:
+            _debug_log("ask --notify fallback exception")
             return 0
 
     # Send directly via terminal backend
-    if send_via_terminal(pane_id, message, terminal, session_data):
+    terminal_ok = send_via_terminal(pane_id, message, terminal, session_data)
+    _debug_log(f"direct terminal send pane={pane_id!r} terminal={terminal} ok={terminal_ok}")
+    if terminal_ok:
         return 0
 
     # Fallback to ask command if terminal send failed
@@ -558,14 +687,16 @@ def main() -> int:
                 env=env,
             )
         else:
-            subprocess.run(
+            fallback_result = subprocess.run(
                 [ask_cmd, caller, "--notify", "--no-wrap", message],
                 capture_output=True,
                 text=True,
                 timeout=timeout,
                 env=env,
             )
+        _debug_log(f"post-failure ask --notify rc={fallback_result.returncode if 'fallback_result' in locals() else 'n/a'}")
     except Exception:
+        _debug_log("post-failure ask --notify exception")
         pass
     return 0
 

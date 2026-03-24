@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import threading
+from types import SimpleNamespace
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
@@ -51,6 +52,82 @@ def test_completion_hook_manual_caller_is_noop(monkeypatch) -> None:
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
 
     assert hook.main() == 0
+
+
+def test_completion_hook_wezterm_fallback_honors_send_failure(monkeypatch) -> None:
+    hook = _load_script_module("ccb_completion_hook_wezterm", REPO_ROOT / "bin" / "ccb-completion-hook")
+
+    monkeypatch.setattr(hook, "find_wezterm_cli", lambda: "wezterm")
+
+    calls: list[list[str]] = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return SimpleNamespace(returncode=1, stdout="", stderr="err")
+
+    monkeypatch.setattr(hook.subprocess, "run", _fake_run)
+
+    ok = hook.send_via_wezterm("pane-1", "hello", {})
+
+    assert ok is False
+    assert len(calls) == 2
+    assert "send-text" in calls[0]
+    assert "--no-paste" in calls[1]
+
+
+def test_completion_hook_wezterm_send_key_fallbacks_to_cr(monkeypatch) -> None:
+    hook = _load_script_module("ccb_completion_hook_wezterm_submit", REPO_ROOT / "bin" / "ccb-completion-hook")
+
+    monkeypatch.setattr(hook, "find_wezterm_cli", lambda: "wezterm")
+
+    calls: list[list[str]] = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if "send-key" in cmd:
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
+        if "--no-paste" in cmd and kwargs.get("input") == b"\r":
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(hook.subprocess, "run", _fake_run)
+
+    ok = hook.send_via_wezterm("pane-1", "hello", {})
+
+    assert ok is True
+    assert any("send-key" in call for call in calls)
+    assert any("--no-paste" in call for call in calls)
+
+
+def test_completion_hook_tmux_enter_retries_with_variants(monkeypatch) -> None:
+    hook = _load_script_module("ccb_completion_hook_tmux", REPO_ROOT / "bin" / "ccb-completion-hook")
+
+    key_calls: list[str] = []
+
+    def _fake_run(cmd, **kwargs):
+        if cmd[:3] == ["tmux", "display-message", "-p"]:
+            return SimpleNamespace(returncode=0, stdout="0", stderr="")
+        if cmd[:3] == ["tmux", "load-buffer", "-b"]:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if cmd[:3] == ["tmux", "paste-buffer", "-p"]:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if cmd[:3] == ["tmux", "send-keys", "-t"]:
+            key = cmd[-1]
+            key_calls.append(key)
+            rc = 0 if key == "Return" else 1
+            return SimpleNamespace(returncode=rc, stdout="", stderr="")
+        if cmd[:3] == ["tmux", "delete-buffer", "-b"]:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(hook.subprocess, "run", _fake_run)
+    monkeypatch.setenv("CCB_TMUX_ENTER_DELAY", "0")
+    monkeypatch.setenv("CCB_TMUX_ENTER_RETRY_DELAY", "0")
+
+    ok = hook.send_via_tmux("%1", "hello")
+
+    assert ok is True
+    assert key_calls[:2] == ["Enter", "Return"]
 
 
 def test_maybe_start_unified_daemon_honors_autostart_opt_out(monkeypatch, tmp_path: Path) -> None:

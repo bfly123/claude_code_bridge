@@ -30,6 +30,9 @@ class ProviderRequest:
     email_from: str = ""
     # Multi-instance support: optional instance identifier (e.g., 'auth', 'payment')
     instance: Optional[str] = None
+    # Caller pane ID for direct routing back to the originating terminal pane
+    caller_pane_id: str = ""
+    caller_terminal: str = ""
 
 
 @dataclass

@@ -224,6 +224,8 @@ class DroidAdapter(BaseProviderAdapter):
             email_msg_id=req.email_msg_id,
             email_from=req.email_from,
             work_dir=req.work_dir,
+            caller_pane_id=req.caller_pane_id,
+            caller_terminal=req.caller_terminal,
         )
 
         result = ProviderResult(
