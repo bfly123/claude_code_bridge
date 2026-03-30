@@ -3383,6 +3383,8 @@ class AILauncher:
         atexit.register(lambda: self.cleanup(**cleanup_kwargs))
         signal.signal(signal.SIGINT, lambda s, f: (self.cleanup(**cleanup_kwargs), sys.exit(0)))
         signal.signal(signal.SIGTERM, lambda s, f: (self.cleanup(**cleanup_kwargs), sys.exit(0)))
+        if hasattr(signal, "SIGHUP"):
+            signal.signal(signal.SIGHUP, lambda s, f: (self.cleanup(**cleanup_kwargs), sys.exit(0)))
 
         # Best-effort cleanup of leftover `tmpclaude-*-cwd` artifacts (can be disabled via env).
         try:
