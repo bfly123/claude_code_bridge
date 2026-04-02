@@ -213,6 +213,10 @@ def try_daemon_request(
     read_state = getattr(daemon_module, "read_state")
 
     st = read_state(state_file=state_file)
+    # Track whether state came from the default unified daemon (askd.json).
+    # Only use unified protocol when we know we're talking to the unified daemon,
+    # not a standalone daemon found via custom state file or CCB_RUN_DIR fallback.
+    using_unified_state = state_file is None and st is not None
 
     # If state not found and CCB_RUN_DIR is set, try project-specific state file
     # This fixes background mode where env vars may not be inherited
@@ -238,7 +242,7 @@ def try_daemon_request(
         # Use unified askd protocol when targeting the unified daemon.
         # Maps protocol_prefix to the provider key the daemon expects.
         unified_provider = _UNIFIED_PROVIDER_MAP.get(spec.protocol_prefix)
-        if spec.daemon_module == "askd.daemon" and unified_provider:
+        if using_unified_state and spec.daemon_module == "askd.daemon" and unified_provider:
             msg_type = "ask.request"
         else:
             msg_type = f"{spec.protocol_prefix}.request"
@@ -265,7 +269,7 @@ def try_daemon_request(
             payload["no_wrap"] = True
         caller = os.environ.get("CCB_CALLER", "").strip()
         if not caller and unified_provider:
-            caller = unified_provider.split(":")[0]
+            caller = "manual"
         if caller:
             payload["caller"] = caller
         connect_timeout = min(1.0, max(0.1, float(timeout)))
