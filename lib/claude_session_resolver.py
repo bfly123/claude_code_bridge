@@ -240,7 +240,7 @@ def _load_registry_by_project_id_unfiltered(ccb_project_id: str, work_dir: Path)
     return best
 
 
-def resolve_claude_session(work_dir: Path) -> Optional[ClaudeSessionResolution]:
+def resolve_claude_session(work_dir: Path, provider: str = "claude") -> Optional[ClaudeSessionResolution]:
     best_fallback: Optional[ClaudeSessionResolution] = None
     try:
         current_pid = compute_ccb_project_id(work_dir)
@@ -289,7 +289,8 @@ def resolve_claude_session(work_dir: Path) -> Optional[ClaudeSessionResolution]:
             if not record_pid or (current_pid and record_pid != current_pid):
                 continue
         data = _data_from_registry(record, work_dir)
-        session_file = _session_file_from_record(record) or find_project_session_file(work_dir, ".claude-session")
+        _sfn = {"claude": ".claude-session", "claude-opus": ".claude-opus-session", "claude-sonnet": ".claude-sonnet-session"}.get(provider, ".claude-session")
+        session_file = _session_file_from_record(record) or find_project_session_file(work_dir, _sfn)
         candidate = _select_resolution(data, session_file, record, f"registry:{key}")
         resolved = consider(candidate)
         if resolved:
@@ -302,10 +303,10 @@ def resolve_claude_session(work_dir: Path) -> Optional[ClaudeSessionResolution]:
     except Exception:
         pid = ""
     if pid:
-        record = load_registry_by_project_id(pid, "claude")
+        record = load_registry_by_project_id(pid, provider)
         if isinstance(record, dict):
             data = _data_from_registry(record, work_dir)
-            session_file = _session_file_from_record(record) or find_project_session_file(work_dir, ".claude-session")
+            session_file = _session_file_from_record(record) or find_project_session_file(work_dir, _sfn)
             candidate = _select_resolution(data, session_file, record, "registry:project")
             resolved = consider(candidate)
             if resolved:
@@ -315,14 +316,14 @@ def resolve_claude_session(work_dir: Path) -> Optional[ClaudeSessionResolution]:
         unfiltered = _load_registry_by_project_id_unfiltered(pid, work_dir)
         if isinstance(unfiltered, dict):
             data = _data_from_registry(unfiltered, work_dir)
-            session_file = _session_file_from_record(unfiltered) or find_project_session_file(work_dir, ".claude-session")
+            session_file = _session_file_from_record(unfiltered) or find_project_session_file(work_dir, _sfn)
             candidate = _select_resolution(data, session_file, unfiltered, "registry:project_unfiltered")
             resolved = consider(candidate)
             if resolved:
                 return resolved
 
-    # 3) .claude-session file
-    session_file = find_project_session_file(work_dir, ".claude-session")
+    # 3) Session file
+    session_file = find_project_session_file(work_dir, _sfn)
     if session_file:
         data = _read_json(session_file)
         if data:
@@ -344,7 +345,7 @@ def resolve_claude_session(work_dir: Path) -> Optional[ClaudeSessionResolution]:
                     record = None
             if record:
                 data = _data_from_registry(record, work_dir)
-                session_file = _session_file_from_record(record) or find_project_session_file(work_dir, ".claude-session")
+                session_file = _session_file_from_record(record) or find_project_session_file(work_dir, _sfn)
                 candidate = _select_resolution(data, session_file, record, "registry:pane")
                 resolved = consider(candidate)
                 if resolved:

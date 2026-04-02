@@ -559,6 +559,8 @@ def main() -> int:
         # Fallback: find caller's pane_id from session file
         session_files = {
             "claude": ".claude-session",
+            "claude-opus": ".claude-opus-session",
+            "claude-sonnet": ".claude-sonnet-session",
             "codex": ".codex-session",
             "gemini": ".gemini-session",
             "opencode": ".opencode-session",

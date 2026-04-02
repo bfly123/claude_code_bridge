@@ -27,6 +27,8 @@ PROVIDER_PENDS = {
     "opencode": "opend",
     "droid": "dpend",
     "claude": "lpend",
+    "claude-opus": "lopend",
+    "claude-sonnet": "lspend",
 }
 
 
@@ -34,7 +36,7 @@ def _usage():
     print("Usage: pend <provider> [N] [--session-file FILE]", file=sys.stderr)
     print("", file=sys.stderr)
     print("Providers:", file=sys.stderr)
-    print("  gemini, codex, opencode, droid, claude", file=sys.stderr)
+    print("  gemini, codex, opencode, droid, claude, claude-opus, claude-sonnet", file=sys.stderr)
     print("", file=sys.stderr)
     print("Arguments:", file=sys.stderr)
     print("  N    Show the latest N conversations (default: 1)", file=sys.stderr)

@@ -19,7 +19,7 @@ class StartConfig:
     path: Optional[Path] = None
 
 
-_ALLOWED_PROVIDERS = {"codex", "gemini", "opencode", "claude", "droid"}
+_ALLOWED_PROVIDERS = {"codex", "gemini", "opencode", "claude", "claude-opus", "claude-sonnet", "droid"}
 
 
 def _parse_tokens(raw: str) -> list[str]:

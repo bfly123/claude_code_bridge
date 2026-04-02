@@ -6,7 +6,7 @@ Usage:
     ask <provider> [options] <message>
 
 Providers:
-    gemini, codex, opencode, droid, claude, copilot, codebuddy, qwen
+    gemini, codex, opencode, droid, claude, claude-opus, claude-sonnet, copilot, codebuddy, qwen
 
 Modes:
     Default (async):  Background task with hook callback
@@ -32,6 +32,8 @@ from pathlib import Path
 
 PROVIDER_DISPLAY = {
     "opencode": "OpenCode",
+    "claude-opus": "Claude-Opus",
+    "claude-sonnet": "Claude-Sonnet",
 }
 
 
@@ -57,6 +59,8 @@ PROVIDER_DAEMONS = {
     "opencode": "oask",
     "droid": "dask",
     "claude": "lask",
+    "claude-opus": "loask",
+    "claude-sonnet": "lsask",
     "copilot": "hask",
     "codebuddy": "bask",
     "qwen": "qask",
@@ -64,6 +68,8 @@ PROVIDER_DAEMONS = {
 
 CALLER_SESSION_FILES = {
     "claude": ".claude-session",
+    "claude-opus": ".claude-opus-session",
+    "claude-sonnet": ".claude-sonnet-session",
     "codex": ".codex-session",
     "gemini": ".gemini-session",
     "opencode": ".opencode-session",
@@ -77,6 +83,8 @@ CALLER_PANE_ENV_HINTS = {
     "codex": ("CODEX_TMUX_SESSION", "CODEX_WEZTERM_PANE"),
     "gemini": ("GEMINI_TMUX_SESSION", "GEMINI_WEZTERM_PANE"),
     "opencode": ("OPENCODE_TMUX_SESSION", "OPENCODE_WEZTERM_PANE"),
+    "claude-opus": ("CLAUDE_OPUS_TMUX_SESSION", "CLAUDE_OPUS_WEZTERM_PANE"),
+    "claude-sonnet": ("CLAUDE_SONNET_TMUX_SESSION", "CLAUDE_SONNET_WEZTERM_PANE"),
     "droid": ("DROID_TMUX_SESSION", "DROID_WEZTERM_PANE"),
     "copilot": ("COPILOT_TMUX_SESSION", "COPILOT_WEZTERM_PANE"),
     "codebuddy": ("CODEBUDDY_TMUX_SESSION", "CODEBUDDY_WEZTERM_PANE"),
@@ -87,6 +95,8 @@ CALLER_ENV_HINTS = {
     "codex": ("CODEX_SESSION_ID", "CODEX_RUNTIME_DIR"),
     "gemini": ("GEMINI_SESSION_ID", "GEMINI_RUNTIME_DIR"),
     "opencode": ("OPENCODE_SESSION_ID", "OPENCODE_RUNTIME_DIR"),
+    "claude-opus": ("CLAUDE_OPUS_SESSION_ID", "CLAUDE_OPUS_RUNTIME_DIR"),
+    "claude-sonnet": ("CLAUDE_SONNET_SESSION_ID", "CLAUDE_SONNET_RUNTIME_DIR"),
     "droid": ("DROID_SESSION_ID", "DROID_RUNTIME_DIR"),
     "copilot": ("COPILOT_SESSION_ID", "COPILOT_RUNTIME_DIR"),
     "codebuddy": ("CODEBUDDY_SESSION_ID", "CODEBUDDY_RUNTIME_DIR"),
@@ -499,7 +509,7 @@ def _usage() -> None:
     print("Usage: ask <provider> [options] <message>", file=sys.stderr)
     print("", file=sys.stderr)
     print("Providers:", file=sys.stderr)
-    print("  gemini, codex, opencode, droid, claude, copilot, codebuddy, qwen", file=sys.stderr)
+    print("  gemini, codex, opencode, droid, claude, claude-opus, claude-sonnet, copilot, codebuddy, qwen", file=sys.stderr)
     print("", file=sys.stderr)
     print("Options:", file=sys.stderr)
     print("  -h, --help              Show this help message", file=sys.stderr)
