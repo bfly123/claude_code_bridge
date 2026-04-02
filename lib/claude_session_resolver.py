@@ -17,6 +17,8 @@ SESSION_ENV_KEYS = (
     "CODEX_SESSION_ID",
     "GEMINI_SESSION_ID",
     "OPENCODE_SESSION_ID",
+    "CLAUDE_OPUS_SESSION_ID",
+    "CLAUDE_SONNET_SESSION_ID",
 )
 
 
@@ -56,9 +58,9 @@ def _pane_from_data(data: dict) -> str:
     return ""
 
 
-def _session_file_from_record(record: dict) -> Optional[Path]:
+def _session_file_from_record(record: dict, provider: str = "claude") -> Optional[Path]:
     providers = record.get("providers") if isinstance(record.get("providers"), dict) else {}
-    claude = providers.get("claude") if isinstance(providers, dict) else None
+    claude = providers.get(provider) if isinstance(providers, dict) else None
     path_str = None
     if isinstance(claude, dict):
         path_str = claude.get("session_file")
@@ -72,7 +74,7 @@ def _session_file_from_record(record: dict) -> Optional[Path]:
         return None
 
 
-def _data_from_registry(record: dict, fallback_work_dir: Path) -> dict:
+def _data_from_registry(record: dict, fallback_work_dir: Path, provider: str = "claude") -> dict:
     data: dict = {}
     if not isinstance(record, dict):
         return data
@@ -82,7 +84,7 @@ def _data_from_registry(record: dict, fallback_work_dir: Path) -> dict:
     data["terminal"] = record.get("terminal")
 
     providers = record.get("providers") if isinstance(record.get("providers"), dict) else {}
-    claude = providers.get("claude") if isinstance(providers, dict) else None
+    claude = providers.get(provider) if isinstance(providers, dict) else None
     if isinstance(claude, dict):
         pane_id = claude.get("pane_id")
         if pane_id:
@@ -114,12 +116,12 @@ def _select_resolution(data: dict, session_file: Optional[Path], record: Optiona
     )
 
 
-def _candidate_default_session_file(work_dir: Path) -> Optional[Path]:
+def _candidate_default_session_file(work_dir: Path, session_filename: str = ".claude-session") -> Optional[Path]:
     try:
         cfg = resolve_project_config_dir(work_dir)
     except Exception:
         return None
-    return cfg / ".claude-session"
+    return cfg / session_filename
 
 
 def _registry_run_dir() -> Path:
@@ -247,6 +249,7 @@ def resolve_claude_session(work_dir: Path, provider: str = "claude") -> Optional
     except Exception:
         current_pid = ""
     strict_project = resolve_project_config_dir(work_dir).is_dir()
+    _sfn = {"claude": ".claude-session", "claude-opus": ".claude-opus-session", "claude-sonnet": ".claude-sonnet-session"}.get(provider, ".claude-session")
     allow_cross = os.environ.get("CCB_ALLOW_CROSS_PROJECT_SESSION") in ("1", "true", "yes")
     if not strict_project and not allow_cross:
         return None
@@ -288,9 +291,8 @@ def resolve_claude_session(work_dir: Path, provider: str = "claude") -> Optional
             record_pid = _record_project_id(record)
             if not record_pid or (current_pid and record_pid != current_pid):
                 continue
-        data = _data_from_registry(record, work_dir)
-        _sfn = {"claude": ".claude-session", "claude-opus": ".claude-opus-session", "claude-sonnet": ".claude-sonnet-session"}.get(provider, ".claude-session")
-        session_file = _session_file_from_record(record) or find_project_session_file(work_dir, _sfn)
+        data = _data_from_registry(record, work_dir, provider)
+        session_file = _session_file_from_record(record, provider) or find_project_session_file(work_dir, _sfn)
         candidate = _select_resolution(data, session_file, record, f"registry:{key}")
         resolved = consider(candidate)
         if resolved:
@@ -305,8 +307,8 @@ def resolve_claude_session(work_dir: Path, provider: str = "claude") -> Optional
     if pid:
         record = load_registry_by_project_id(pid, provider)
         if isinstance(record, dict):
-            data = _data_from_registry(record, work_dir)
-            session_file = _session_file_from_record(record) or find_project_session_file(work_dir, _sfn)
+            data = _data_from_registry(record, work_dir, provider)
+            session_file = _session_file_from_record(record, provider) or find_project_session_file(work_dir, _sfn)
             candidate = _select_resolution(data, session_file, record, "registry:project")
             resolved = consider(candidate)
             if resolved:
@@ -315,8 +317,8 @@ def resolve_claude_session(work_dir: Path, provider: str = "claude") -> Optional
         # Fallback: accept latest registry record even if pane liveness can't be verified.
         unfiltered = _load_registry_by_project_id_unfiltered(pid, work_dir)
         if isinstance(unfiltered, dict):
-            data = _data_from_registry(unfiltered, work_dir)
-            session_file = _session_file_from_record(unfiltered) or find_project_session_file(work_dir, _sfn)
+            data = _data_from_registry(unfiltered, work_dir, provider)
+            session_file = _session_file_from_record(unfiltered, provider) or find_project_session_file(work_dir, _sfn)
             candidate = _select_resolution(data, session_file, unfiltered, "registry:project_unfiltered")
             resolved = consider(candidate)
             if resolved:
@@ -344,8 +346,8 @@ def resolve_claude_session(work_dir: Path, provider: str = "claude") -> Optional
                 if not record_pid or (current_pid and record_pid != current_pid):
                     record = None
             if record:
-                data = _data_from_registry(record, work_dir)
-                session_file = _session_file_from_record(record) or find_project_session_file(work_dir, _sfn)
+                data = _data_from_registry(record, work_dir, provider)
+                session_file = _session_file_from_record(record, provider) or find_project_session_file(work_dir, _sfn)
                 candidate = _select_resolution(data, session_file, record, "registry:pane")
                 resolved = consider(candidate)
                 if resolved:
@@ -353,7 +355,7 @@ def resolve_claude_session(work_dir: Path, provider: str = "claude") -> Optional
 
     if best_fallback:
         if not best_fallback.session_file:
-            best_fallback.session_file = _candidate_default_session_file(work_dir)
+            best_fallback.session_file = _candidate_default_session_file(work_dir, _sfn)
         return best_fallback
 
     return None

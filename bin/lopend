@@ -47,7 +47,7 @@ def _load_session_log_path(work_dir: Path, explicit_session_file: Path | None) -
         if path_str:
             return Path(path_str).expanduser(), session_id
     except Exception as exc:
-        _debug(f"Failed to read .claude-session ({session_file}): {exc}")
+        _debug(f"Failed to read .claude-opus-session ({session_file}): {exc}")
     return None, None
 
 

@@ -22,6 +22,22 @@ from project_id import compute_ccb_project_id
 from pane_registry import load_registry_by_project_id
 
 
+# Maps protocol_prefix → unified daemon provider key.
+# Entries with ":" use the instance mechanism (e.g., "claude:opus" → base="claude", instance="opus").
+_UNIFIED_PROVIDER_MAP = {
+    "cask": "codex",
+    "gask": "gemini",
+    "oask": "opencode",
+    "dask": "droid",
+    "lask": "claude",
+    "loask": "claude:opus",
+    "lsask": "claude:sonnet",
+    "hask": "copilot",
+    "bask": "codebuddy",
+    "qask": "qwen",
+}
+
+
 def resolve_work_dir(
     spec: ProviderClientSpec,
     *,
@@ -219,8 +235,16 @@ def try_daemon_request(
         return None
 
     try:
+        # Use unified askd protocol when targeting the unified daemon.
+        # Maps protocol_prefix to the provider key the daemon expects.
+        unified_provider = _UNIFIED_PROVIDER_MAP.get(spec.protocol_prefix)
+        if spec.daemon_module == "askd.daemon" and unified_provider:
+            msg_type = "ask.request"
+        else:
+            msg_type = f"{spec.protocol_prefix}.request"
+
         payload = {
-            "type": f"{spec.protocol_prefix}.request",
+            "type": msg_type,
             "v": 1,
             "id": f"{spec.protocol_prefix}-{os.getpid()}-{int(time.time() * 1000)}",
             "token": token,
@@ -229,6 +253,8 @@ def try_daemon_request(
             "quiet": bool(quiet),
             "message": message,
         }
+        if unified_provider:
+            payload["provider"] = unified_provider
         if output_path:
             payload["output_path"] = str(output_path)
         req_id = os.environ.get("CCB_REQ_ID", "").strip()
@@ -238,6 +264,8 @@ def try_daemon_request(
         if no_wrap in ("1", "true", "yes"):
             payload["no_wrap"] = True
         caller = os.environ.get("CCB_CALLER", "").strip()
+        if not caller and unified_provider:
+            caller = unified_provider.split(":")[0]
         if caller:
             payload["caller"] = caller
         connect_timeout = min(1.0, max(0.1, float(timeout)))
@@ -258,7 +286,7 @@ def try_daemon_request(
                 return None
             line = buf.split(b"\n", 1)[0].decode("utf-8", errors="replace")
             resp = json.loads(line)
-            if resp.get("type") != f"{spec.protocol_prefix}.response":
+            if resp.get("type") not in ("ask.response", f"{spec.protocol_prefix}.response"):
                 return None
             reply = str(resp.get("reply") or "")
             exit_code = int(resp.get("exit_code", 1))
