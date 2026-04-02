@@ -659,7 +659,10 @@ def main(argv: list[str]) -> int:
 
     # Platform-specific background execution
     if os.name == "nt":
-        # Windows: use PowerShell script
+        # Windows: spawn the foreground ask path directly with the current Python
+        # interpreter. The detached PowerShell wrapper can fail to start cleanly
+        # under WezTerm/Claude on native Windows, which leaves tasks stuck at
+        # "submitted" without ever reaching the provider pane.
         DETACHED_PROCESS = 0x00000008
         CREATE_NO_WINDOW = 0x08000000
         CREATE_NEW_PROCESS_GROUP = 0x00000200
@@ -667,61 +670,35 @@ def main(argv: list[str]) -> int:
         # Write message to temp file to avoid escaping issues
         msg_file = log_dir / f"ask-{provider}-{task_id}.msg"
         msg_file.write_text(message, encoding="utf-8")
+        child_env = os.environ.copy()
+        child_env["PYTHONIOENCODING"] = "utf-8"
+        child_env["CCB_REQ_ID"] = task_id
+        child_env["CCB_CALLER"] = caller
+        child_env["CCB_WORK_DIR"] = os.getcwd()
 
-        # Write PowerShell script - call ask --foreground to use unified daemon
-        script_file = log_dir / f"ask-{provider}-{task_id}.ps1"
-        status_file_win = str(status_file).replace('"', '`"')
-        log_file_win = str(log_file).replace('"', '`"')
-
-        # Pass CCB_RUN_DIR so background script can find askd state file
         ccb_run_dir = os.environ.get("CCB_RUN_DIR", "")
-        run_dir_line = f'$env:CCB_RUN_DIR = "{ccb_run_dir}"\n' if ccb_run_dir else ""
+        if ccb_run_dir:
+            child_env["CCB_RUN_DIR"] = ccb_run_dir
 
-        # Collect CCB_EMAIL_* env vars for email caller
-        email_env_lines = ""
         if caller == "email":
             for key in ("CCB_EMAIL_REQ_ID", "CCB_EMAIL_MSG_ID", "CCB_EMAIL_FROM"):
                 val = os.environ.get(key, "")
                 if val:
-                    email_env_lines += f'$env:{key} = "{val}"\n'
+                    child_env[key] = val
 
         win_caller_pane_id, win_caller_terminal = _caller_pane_info()
-        win_pane_env_lines = ""
         if win_caller_pane_id:
-            win_pane_env_lines += f'$env:CCB_CALLER_PANE_ID = "{win_caller_pane_id}"\n'
+            child_env["CCB_CALLER_PANE_ID"] = win_caller_pane_id
         if win_caller_terminal:
-            win_pane_env_lines += f'$env:CCB_CALLER_TERMINAL = "{win_caller_terminal}"\n'
+            child_env["CCB_CALLER_TERMINAL"] = win_caller_terminal
 
-        script_content = f'''$ErrorActionPreference = "SilentlyContinue"
-$OutputEncoding = [System.Text.Encoding]::UTF8
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-[Console]::InputEncoding = [System.Text.Encoding]::UTF8
-$env:PYTHONIOENCODING = "utf-8"
-$env:CCB_REQ_ID = "{task_id}"
-$env:CCB_CALLER = "{caller}"
-$env:CCB_WORK_DIR = "{os.getcwd()}"
-{run_dir_line}{email_env_lines}{win_pane_env_lines}$statusFile = "{status_file_win}"
-$logFile = "{log_file_win}"
-function Write-CcbStatus([string]$line) {{
-  Add-Content -Path $statusFile -Value ("{{0}} {{1}}" -f (Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"), $line) -Encoding UTF8
-}}
-Write-CcbStatus "running pid=$PID"
-Get-Content -Path "{msg_file}" -Encoding UTF8 | python "{ask_cmd}" {provider} --foreground --timeout {timeout}
-$rc = $LASTEXITCODE
-Write-CcbStatus "finished exit_code=$rc"
-if ($rc -ne 0) {{
-  Write-CcbStatus "failed exit_code=$rc"
-}}
-exit $rc
-'''
-        script_file.write_text(script_content, encoding="utf-8")
-
-        with log_file.open("a", encoding="utf-8") as log_handle:
+        with msg_file.open("rb") as msg_handle, log_file.open("a", encoding="utf-8") as log_handle:
             proc = subprocess.Popen(
-                ["powershell", "-ExecutionPolicy", "Bypass", "-NoProfile", "-File", str(script_file)],
-                stdin=subprocess.DEVNULL,
+                [sys.executable, ask_cmd, provider, "--foreground", "--timeout", str(timeout)],
+                stdin=msg_handle,
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
+                env=child_env,
                 creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP,
             )
         bg_pid = proc.pid
