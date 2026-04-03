@@ -21,7 +21,7 @@ try:
     from cli_output import EXIT_ERROR, EXIT_NO_REPLY, EXIT_OK
     from gemini_comm import GeminiLogReader
     from askd_client import resolve_work_dir_with_registry
-    from providers import GASK_CLIENT_SPEC
+    from providers import GASK_CLIENT_SPEC, session_filename_for_instance
     from session_utils import find_project_session_file
     from project_id import compute_ccb_project_id
     from pane_registry import load_registry_by_project_id
@@ -40,9 +40,13 @@ def _debug(message: str) -> None:
     print(f"[DEBUG] {message}", file=sys.stderr)
 
 
+def _session_filename() -> str:
+    return session_filename_for_instance(".gemini-session", os.environ.get("CCB_SESSION_NAME", "").strip() or None)
+
+
 def _load_session_path(work_dir: Path) -> Path | None:
     """Load gemini_session_path from .gemini-session (or .ccb/.gemini-session) if exists"""
-    session_file = find_project_session_file(work_dir, ".gemini-session")
+    session_file = find_project_session_file(work_dir, _session_filename())
     if not session_file:
         return None
     try:
@@ -58,7 +62,7 @@ def _load_session_path(work_dir: Path) -> Path | None:
 
 def _update_session_file(work_dir: Path, actual_session: Path) -> None:
     """Update .gemini-session with actual session path if different"""
-    session_file = find_project_session_file(work_dir, ".gemini-session")
+    session_file = find_project_session_file(work_dir, _session_filename())
     if not session_file:
         return
     try:

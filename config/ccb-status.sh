@@ -32,13 +32,17 @@ check_daemon() {
 check_session() {
     local name="$1"
     local session_file
+    local suffix=""
+    if [[ -n "$CCB_SESSION_NAME" ]]; then
+        suffix="-${CCB_SESSION_NAME}"
+    fi
 
     case "$name" in
-        claude)  session_file="$PWD/.ccb/.claude-session" ;;
-        codex)   session_file="$PWD/.ccb/.codex-session" ;;
-        gemini)  session_file="$PWD/.ccb/.gemini-session" ;;
-        opencode) session_file="$PWD/.ccb/.opencode-session" ;;
-        droid)   session_file="$PWD/.ccb/.droid-session" ;;
+        claude)  session_file="$PWD/.ccb/.claude${suffix}-session" ;;
+        codex)   session_file="$PWD/.ccb/.codex${suffix}-session" ;;
+        gemini)  session_file="$PWD/.ccb/.gemini${suffix}-session" ;;
+        opencode) session_file="$PWD/.ccb/.opencode${suffix}-session" ;;
+        droid)   session_file="$PWD/.ccb/.droid${suffix}-session" ;;
     esac
 
     # Backwards compatibility: legacy config dir or root-level session file.

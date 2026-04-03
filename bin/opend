@@ -25,9 +25,12 @@ def _load_session_id_filter(work_dir: Path, explicit_session_file: Path | None) 
     if session_file is None:
         try:
             from session_utils import find_project_session_file
+            from providers import session_filename_for_instance
         except Exception:
             find_project_session_file = None
-        session_file = find_project_session_file(work_dir, ".opencode-session") if find_project_session_file else (work_dir / ".opencode-session")
+            session_filename_for_instance = None
+        _sfn = session_filename_for_instance(".opencode-session", os.environ.get("CCB_SESSION_NAME", "").strip() or None) if session_filename_for_instance else ".opencode-session"
+        session_file = find_project_session_file(work_dir, _sfn) if find_project_session_file else (work_dir / _sfn)
 
     if session_file and session_file.exists():
         try:

@@ -21,7 +21,7 @@ from ccb_protocol import strip_trailing_markers
 from pane_registry import load_registry_by_session_id, load_registry_by_claude_pane, load_registry_by_project_id, upsert_registry
 from session_utils import find_project_session_file
 from askd_client import resolve_work_dir_with_registry
-from providers import LOASK_CLIENT_SPEC as LASK_CLIENT_SPEC
+from providers import LOASK_CLIENT_SPEC as LASK_CLIENT_SPEC, session_filename_for_instance
 from project_id import compute_ccb_project_id
 
 
@@ -36,7 +36,8 @@ def _debug(message: str) -> None:
 
 
 def _load_session_log_path(work_dir: Path, explicit_session_file: Path | None) -> tuple[Path | None, str | None]:
-    session_file = explicit_session_file or find_project_session_file(work_dir, ".claude-opus-session")
+    _sfn = session_filename_for_instance(".claude-opus-session", os.environ.get("CCB_SESSION_NAME", "").strip() or None)
+    session_file = explicit_session_file or find_project_session_file(work_dir, _sfn)
     if not session_file:
         return None, None
     try:

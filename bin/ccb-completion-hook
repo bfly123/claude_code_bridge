@@ -41,6 +41,7 @@ from completion_hook import (
     default_reply_for_status,
     normalize_completion_status,
 )
+from providers import session_filename_for_instance
 from session_utils import find_project_session_file
 
 setup_windows_encoding()
@@ -566,7 +567,9 @@ def main() -> int:
             "opencode": ".opencode-session",
             "droid": ".droid-session",
         }
-        session_filename = session_files.get(caller, ".claude-session")
+        base_session_filename = session_files.get(caller, ".claude-session")
+        ccb_session_name = os.environ.get("CCB_SESSION_NAME", "").strip()
+        session_filename = session_filename_for_instance(base_session_filename, ccb_session_name or None)
 
         work_dir = os.environ.get("CCB_WORK_DIR", "")
         search_paths: list[Path] = []

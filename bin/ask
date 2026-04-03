@@ -48,7 +48,7 @@ from compat import read_stdin_text, setup_windows_encoding
 setup_windows_encoding()
 
 from cli_output import EXIT_ERROR, EXIT_OK
-from providers import parse_qualified_provider
+from providers import parse_qualified_provider, make_qualified_key
 from session_utils import find_project_session_file
 
 
@@ -534,13 +534,19 @@ def main(argv: list[str]) -> int:
 
     base_provider, instance = parse_qualified_provider(raw_provider)
 
+    # When running inside a named CCB session, qualify the provider so the daemon
+    # routes to the session-specific provider pane and session file.
+    session_name = os.environ.get("CCB_SESSION_NAME", "").strip()
+    if not instance and session_name:
+        instance = session_name
+
     if base_provider not in PROVIDER_DAEMONS:
         print(f"[ERROR] Unknown provider: {base_provider}", file=sys.stderr)
         print(f"[ERROR] Available: {', '.join(PROVIDER_DAEMONS.keys())}", file=sys.stderr)
         return EXIT_ERROR
 
     daemon_cmd = PROVIDER_DAEMONS[base_provider]
-    provider = raw_provider  # keep full qualified key for daemon routing
+    provider = make_qualified_key(base_provider, instance)
 
     # Parse remaining arguments
     timeout: float = 3600.0
@@ -701,6 +707,8 @@ def main(argv: list[str]) -> int:
             win_pane_env_lines += f'$env:CCB_CALLER_PANE_ID = "{win_caller_pane_id}"\n'
         if win_caller_terminal:
             win_pane_env_lines += f'$env:CCB_CALLER_TERMINAL = "{win_caller_terminal}"\n'
+        if session_name:
+            win_pane_env_lines += f'$env:CCB_SESSION_NAME = "{session_name}"\n'
 
         script_content = f'''$ErrorActionPreference = "SilentlyContinue"
 $OutputEncoding = [System.Text.Encoding]::UTF8
@@ -755,6 +763,8 @@ exit $rc
             pane_env_lines += f'export CCB_CALLER_PANE_ID="{bg_pane_id}"\n'
         if bg_terminal:
             pane_env_lines += f'export CCB_CALLER_TERMINAL="{bg_terminal}"\n'
+        if session_name:
+            pane_env_lines += f'export CCB_SESSION_NAME="{session_name}"\n'
 
         quoted_status = shlex.quote(str(status_file))
         quoted_ask_cmd = shlex.quote(ask_cmd)

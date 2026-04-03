@@ -9,6 +9,7 @@ from typing import Optional
 
 from pane_registry import load_registry_by_claude_pane, load_registry_by_project_id, load_registry_by_session_id
 from project_id import compute_ccb_project_id
+from providers import session_filename_for_instance
 from session_utils import find_project_session_file, resolve_project_config_dir
 
 
@@ -242,14 +243,15 @@ def _load_registry_by_project_id_unfiltered(ccb_project_id: str, work_dir: Path)
     return best
 
 
-def resolve_claude_session(work_dir: Path, provider: str = "claude") -> Optional[ClaudeSessionResolution]:
+def resolve_claude_session(work_dir: Path, provider: str = "claude", instance: Optional[str] = None) -> Optional[ClaudeSessionResolution]:
     best_fallback: Optional[ClaudeSessionResolution] = None
     try:
         current_pid = compute_ccb_project_id(work_dir)
     except Exception:
         current_pid = ""
     strict_project = resolve_project_config_dir(work_dir).is_dir()
-    _sfn = {"claude": ".claude-session", "claude-opus": ".claude-opus-session", "claude-sonnet": ".claude-sonnet-session"}.get(provider, ".claude-session")
+    _base_sfn = {"claude": ".claude-session", "claude-opus": ".claude-opus-session", "claude-sonnet": ".claude-sonnet-session"}.get(provider, ".claude-session")
+    _sfn = session_filename_for_instance(_base_sfn, instance)
     allow_cross = os.environ.get("CCB_ALLOW_CROSS_PROJECT_SESSION") in ("1", "true", "yes")
     if not strict_project and not allow_cross:
         return None

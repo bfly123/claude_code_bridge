@@ -13,6 +13,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import os
+
+from providers import session_filename_for_instance
 from session_utils import find_project_session_file, legacy_project_config_dir, project_config_dir, resolve_project_config_dir
 from .types import ConversationEntry, TransferContext, SessionNotFoundError, SessionStats
 from .session_parser import ClaudeSessionParser
@@ -54,6 +57,7 @@ class ContextTransfer:
         filename = self.SOURCE_SESSION_FILES.get(provider)
         if not filename:
             return None, {}
+        filename = session_filename_for_instance(filename, os.environ.get("CCB_SESSION_NAME", "").strip() or None)
         session_file = find_project_session_file(self.work_dir, filename)
         if not session_file or not session_file.exists():
             return None, {}
@@ -68,10 +72,12 @@ class ContextTransfer:
 
     def _auto_source_candidates(self) -> list[str]:
         candidates: list[tuple[float, str]] = []
+        _inst = os.environ.get("CCB_SESSION_NAME", "").strip() or None
         for provider in self.DEFAULT_SOURCE_ORDER:
             filename = self.SOURCE_SESSION_FILES.get(provider)
             if not filename:
                 continue
+            filename = session_filename_for_instance(filename, _inst)
             session_file = find_project_session_file(self.work_dir, filename)
             if not session_file or not session_file.exists():
                 continue

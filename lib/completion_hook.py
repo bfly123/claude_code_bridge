@@ -91,6 +91,7 @@ def _run_hook_async(
     status: str = COMPLETION_STATUS_COMPLETED,
     caller_pane_id: str = "",
     caller_terminal: str = "",
+    session_name: str = "",
 ) -> None:
     """Run the completion hook in a background thread."""
     if not env_bool("CCB_COMPLETION_HOOK_ENABLED", True):
@@ -149,6 +150,8 @@ def _run_hook_async(
                 env["CCB_CALLER_PANE_ID"] = caller_pane_id
             if caller_terminal:
                 env["CCB_CALLER_TERMINAL"] = caller_terminal
+            if session_name:
+                env["CCB_SESSION_NAME"] = session_name
 
             # Pass reply via stdin to avoid command line length limits
             # Use longer timeout for SMTP retries (3 retries * 8s max backoff + send time)
@@ -182,6 +185,7 @@ def notify_completion(
     status: str | None = None,
     caller_pane_id: str = "",
     caller_terminal: str = "",
+    session_name: str = "",
 ) -> None:
     """
     Notify the caller that a CCB delegation task has completed.
@@ -214,4 +218,5 @@ def notify_completion(
         normalized_status,
         caller_pane_id,
         caller_terminal,
+        session_name,
     )

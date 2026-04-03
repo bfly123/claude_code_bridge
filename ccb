@@ -40,7 +40,7 @@ from session_utils import (
 )
 from pane_registry import upsert_registry, load_registry_by_project_id
 from project_id import compute_ccb_project_id
-from providers import CASK_CLIENT_SPEC, GASK_CLIENT_SPEC, OASK_CLIENT_SPEC, LASK_CLIENT_SPEC, LOASK_CLIENT_SPEC, LSASK_CLIENT_SPEC, DASK_CLIENT_SPEC
+from providers import CASK_CLIENT_SPEC, GASK_CLIENT_SPEC, OASK_CLIENT_SPEC, LASK_CLIENT_SPEC, LOASK_CLIENT_SPEC, LSASK_CLIENT_SPEC, DASK_CLIENT_SPEC, session_filename_for_instance
 from process_lock import ProviderLock
 from askd_rpc import shutdown_daemon, read_state
 from askd_runtime import state_file_path
@@ -557,10 +557,12 @@ class AILauncher:
         cmd_config: dict | None = None,
         launch_args: dict | None = None,
         launch_env: dict | None = None,
+        session_name: str = "",
     ):
         self.providers = providers or ["codex"]
         self.resume = resume
         self.auto = auto
+        self.session_name = (session_name or "").strip()
         self.cmd_config = self._normalize_cmd_config(cmd_config)
         self.launch_args = launch_args if isinstance(launch_args, dict) else {}
         self.launch_env = launch_env if isinstance(launch_env, dict) else {}
@@ -572,7 +574,8 @@ class AILauncher:
             self.project_root = self.invocation_dir.resolve()
         except Exception:
             self.project_root = self.invocation_dir.absolute()
-        self.session_id = f"ai-{int(time.time())}-{os.getpid()}"
+        session_suffix = f"-{self.session_name}" if self.session_name else ""
+        self.session_id = f"ai-{int(time.time())}-{os.getpid()}{session_suffix}"
         self.ccb_pid = os.getpid()
         self.project_id = compute_ccb_project_id(self.project_root)
         project_hash = (self.project_id or "")[:16] or "unknown"
@@ -606,6 +609,8 @@ class AILauncher:
         }
         if os.environ.get("CCB_RUN_DIR"):
             env["CCB_RUN_DIR"] = os.environ["CCB_RUN_DIR"]
+        if self.session_name:
+            env["CCB_SESSION_NAME"] = self.session_name
         return env
 
     def _provider_env_overrides(self, provider: str) -> dict:
@@ -627,7 +632,7 @@ class AILauncher:
 
     def _project_session_file(self, filename: str) -> Path:
         cfg = self._project_config_dir()
-        return cfg / filename
+        return cfg / session_filename_for_instance(filename, self.session_name or None)
 
     def _migrate_legacy_project_files(self) -> None:
         """
@@ -3212,7 +3217,7 @@ class AILauncher:
                 print(f"ℹ️ {t('no_claude_session')}")
 
         pane_title = f"CCB-{label}-{self.project_id[:8]}"
-        start_cmd = " ".join(cmd_parts)
+        start_cmd = " ".join(shlex.quote(p) for p in cmd_parts)
         full_cmd = (
             _build_pane_title_cmd(pane_title)
             + self._build_env_prefix(env_overrides)
@@ -3710,9 +3715,11 @@ def cmd_start(args):
         pane_id = str(entry.get("pane_id") or "").strip()
         return record, pane_id
 
-    # Enforce single ccb instance per directory.
+    # Enforce single ccb instance per directory (or per directory+session if --session is given).
+    session_name = (getattr(args, "session", "") or "").strip()
     lock_cwd = str(Path.cwd().resolve())
-    ccb_lock = ProviderLock("ccb", timeout=0.1, cwd=lock_cwd)
+    lock_key = f"ccb-{session_name}" if session_name else "ccb"
+    ccb_lock = ProviderLock(lock_key, timeout=0.1, cwd=lock_cwd)
     if not ccb_lock.try_acquire():
         pid = ""
         try:
@@ -3793,6 +3800,7 @@ def cmd_start(args):
         cmd_config=cmd_config,
         launch_args=launch_args,
         launch_env=launch_env,
+        session_name=session_name,
     )
     return launcher.run_up()
 
@@ -3961,10 +3969,45 @@ def cmd_kill(args):
         "droid": DASK_CLIENT_SPEC,
     }
 
+    _variant_providers = {"claude-opus", "claude-sonnet"}
+
+    def _safe_mtime(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    def _collect_session_files(cfg: Path, prov: str) -> list[Path]:
+        """Collect default + named-instance session files for a provider."""
+        if not cfg.is_dir():
+            return []
+        results: list[Path] = []
+        default = cfg / f".{prov}-session"
+        if default.exists():
+            results.append(default)
+        for p in cfg.glob(f".{prov}-*-session"):
+            # When killing base 'claude', skip variant-provider files
+            # (e.g. .claude-opus-bar-session belongs to claude-opus).
+            if prov not in _variant_providers and any(p.name == f".{vp}-session" or p.name.startswith(f".{vp}-") for vp in _variant_providers):
+                continue
+            if p not in results:
+                results.append(p)
+        results.sort(key=_safe_mtime, reverse=True)
+        return results
+
+    cfg_dir = resolve_project_config_dir(Path.cwd())
+
     for provider in providers:
         # 1. Kill UI sessions (tmux/wezterm)
-        session_file = find_project_session_file(Path.cwd(), f".{provider}-session")
-        if session_file and session_file.exists():
+        all_session_files = _collect_session_files(cfg_dir, provider)
+        if not all_session_files:
+            sf = find_project_session_file(Path.cwd(), f".{provider}-session")
+            if sf:
+                all_session_files = [sf]
+        killed_any = False
+        for session_file in all_session_files:
+            if not session_file.exists():
+                continue
             try:
                 data = json.loads(session_file.read_text(encoding="utf-8-sig"))
                 terminal = data.get("terminal", "tmux")
@@ -3988,10 +4031,11 @@ def cmd_kill(args):
                 data["active"] = False
                 data["ended_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
                 safe_write_session(session_file, json.dumps(data, ensure_ascii=False, indent=2))
-                print(f"✅ {provider.capitalize()} session terminated")
+                print(f"✅ {provider.capitalize()} session terminated ({session_file.name})")
+                killed_any = True
             except Exception as e:
                 print(f"❌ {provider}: {e}")
-        else:
+        if not killed_any:
              print(f"ℹ️  {provider}: No active session file found")
 
         # 2. Kill background daemon (graceful shutdown, then force kill)
@@ -4971,6 +5015,7 @@ def main():
     )
     start_parser.add_argument("-r", "--resume", "--restore", action="store_true", help="Resume context")
     start_parser.add_argument("-a", "--auto", action="store_true", help="Full auto permission mode")
+    start_parser.add_argument("-s", "--session", default="", help="Named session (allows multiple CCB instances in the same directory)")
     args = start_parser.parse_args(argv)
     return cmd_start(args)
 

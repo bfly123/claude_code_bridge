@@ -853,8 +853,57 @@ class LaskdSessionRegistry:
             return False
         return False
 
-    def _find_claude_session_file(self, work_dir: Path) -> Optional[Path]:
-        return find_project_session_file(work_dir, ".claude-session") or (resolve_project_config_dir(work_dir) / ".claude-session")
+    @staticmethod
+    def _safe_mtime(p: Path) -> float:
+        try:
+            return p.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    def _find_claude_session_file(self, work_dir: Path, session_id: str = "") -> Optional[Path]:
+        """Find the session file matching session_id, checking instance variants.
+
+        Only considers base-claude session files (.claude-session and named
+        instances like .claude-foo-session).  Does NOT match variant-provider
+        files (.claude-opus-session, .claude-sonnet-session).
+        """
+        cfg = resolve_project_config_dir(work_dir)
+        if not cfg.is_dir():
+            return find_project_session_file(work_dir, ".claude-session") or (cfg / ".claude-session")
+
+        # Collect the default file plus any named-instance files.
+        # Named instances use session_filename_for_instance which produces
+        # .claude-<instance>-session, so we glob .claude-*-session and then
+        # exclude variant-provider files whose names start with a known
+        # variant prefix (e.g. .claude-opus*, .claude-sonnet*).
+        _variant_prefixes = (".claude-opus-", ".claude-opus-session", ".claude-sonnet-", ".claude-sonnet-session")
+        candidates = [cfg / ".claude-session"] if (cfg / ".claude-session").exists() else []
+        for p in cfg.glob(".claude-*-session"):
+            if any(p.name == vp or p.name.startswith(vp) for vp in _variant_prefixes):
+                continue
+            if p not in candidates:
+                candidates.append(p)
+        candidates.sort(key=self._safe_mtime, reverse=True)
+
+        if not candidates:
+            return find_project_session_file(work_dir, ".claude-session") or (cfg / ".claude-session")
+        if session_id:
+            for c in candidates:
+                try:
+                    data = json.loads(c.read_text(encoding="utf-8", errors="replace"))
+                    if isinstance(data, dict) and str(data.get("claude_session_id") or "").strip() == session_id:
+                        return c
+                except Exception:
+                    pass
+        # Fallback: most recently modified active file, or the default
+        for c in candidates:
+            try:
+                data = json.loads(c.read_text(encoding="utf-8", errors="replace"))
+                if isinstance(data, dict) and data.get("active") is not False:
+                    return c
+            except Exception:
+                pass
+        return candidates[0] if candidates else (cfg / ".claude-session")
 
     def _update_session_file_direct(self, session_file: Path, log_path: Path, session_id: str) -> None:
         if not session_file.exists():
@@ -902,7 +951,7 @@ class LaskdSessionRegistry:
         if not session_id:
             return
         work_dir = Path(cwd)
-        session_file = self._find_claude_session_file(work_dir)
+        session_file = self._find_claude_session_file(work_dir, session_id=session_id)
         if session_file:
             self._update_session_file_direct(session_file, path, session_id)
 
@@ -1009,7 +1058,7 @@ class LaskdSessionRegistry:
             if not session_path or not session_path.exists():
                 continue
             session_id = session_path.stem
-            session_file = self._find_claude_session_file(work_dir)
+            session_file = self._find_claude_session_file(work_dir, session_id=session_id)
             if session_file:
                 self._update_session_file_direct(session_file, session_path, session_id)
             session = entry.session or load_project_session(work_dir)
