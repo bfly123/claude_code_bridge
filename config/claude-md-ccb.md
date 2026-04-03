@@ -22,36 +22,56 @@ This rule applies unconditionally. Violating it causes duplicate requests and wa
 Abstract roles map to concrete AI providers. Skills reference roles, not providers directly.
 
 | Role | Provider | Description |
-|------|----------|-------------|
-| `designer` | `claude` | Primary planner and architect — owns plans and designs |
-| `inspiration` | `gemini` | Creative brainstorming — provides ideas as reference only (unreliable, never blindly follow) |
-| `reviewer` | `codex` | Scored quality gate — evaluates plans/code using Rubrics |
-| `executor` | `claude` | Code implementation — writes and modifies code |
+|---|---|---|
+| `designer` | `claude-opus` | Primary planner and architect — owns plans and designs |
+| `inspiration` | `gemini` | Task-conditioned second perspective — architectural challenge (default) or creative brainstorming (for UI/UX/naming/ideation tasks) |
+| `reviewer` | `claude-sonnet`, `codex` | Both review and evaluate — all dimensions must score 10 |
+| `executor` | `claude-opus` | Code implementation — writes and modifies code |
 
 To change a role assignment, edit the Provider column above.
-When a skill references a role (e.g. `reviewer`), resolve it to the provider listed here (e.g. `/ask codex`).
+When a skill references a role (e.g. `reviewer`), resolve it to BOTH providers listed (send to each via `/ask`).
 <!-- CCB_ROLES_END -->
 
 <!-- CODEX_REVIEW_START -->
 ## Peer Review Framework
 
-The `designer` MUST send to `reviewer` (via `/ask`) at two checkpoints:
-1. **Plan Review** — after finalizing a plan, BEFORE writing code. Tag: `[PLAN REVIEW REQUEST]`.
-2. **Code Review** — after completing code changes, BEFORE reporting done. Tag: `[CODE REVIEW REQUEST]`.
+The workflow has two checkpoints, each with a distinct pass action:
+
+1. **Plan Review** — the `designer` finalizes a plan, sends to BOTH reviewers. Tag: `[PLAN REVIEW REQUEST]`.
+   - **On pass**: display scores, then the `executor` implements the plan immediately.
+2. **Code Review** — after the `executor` completes implementation, the `designer` sends changes to BOTH reviewers. Tag: `[CODE REVIEW REQUEST]`.
+   - **On pass**: display scores, then report completion to the user.
 
 Include the full plan or `git diff` between `--- PLAN START/END ---` or `--- CHANGES START/END ---` delimiters.
-The `reviewer` scores using Rubrics defined in `AGENTS.md` and returns JSON.
+Send to both via `ask claude-sonnet` and `ask codex`. Both score using rubrics defined in `AGENTS.md` and return JSON.
 
-**Pass criteria**: overall >= 7.0 AND no single dimension <= 3.
-**On fail**: fix issues from response, re-submit (max 3 rounds). After 3 failures, present results to user.
-**On pass**: display final scores as a summary table.
+**Pass criteria**: BOTH reviewers score 10 on ALL dimensions. This is intentionally strict — iteration is the mechanism, not a flaw.
+**On fail**: fix all issues from both responses, re-submit to both. Repeat until 10/10 is reached — no round limit.
+
+### Shared Context Rule
+
+On every review submission (including the first), include in the message to EACH reviewer:
+1. The plan or diff being reviewed
+2. ALL prior feedback from BOTH reviewers (scores, weaknesses, and fix suggestions from every previous round)
+3. What was changed in response to that feedback
+
+This ensures every reviewer has full visibility into the other's critiques. No reviewer should operate in isolation.
+
+**Exception — provider failure**: if one reviewer is unreachable after reasonable retry, proceed with the available reviewer's scores and flag the gap to the user.
 <!-- CODEX_REVIEW_END -->
 
 <!-- GEMINI_INSPIRATION_START -->
 ## Inspiration Consultation
 
-For creative tasks (UI/UX design, copywriting, naming, brainstorming), the `designer` SHOULD consult `inspiration` (via `/ask`) for reference ideas.
-The `inspiration` provider is often unreliable — never blindly follow. Exercise independent judgment and present suggestions to the user for decision.
+The `designer` SHOULD consult `inspiration` (via `/ask gemini`) based on task type:
+
+- **Architecture/planning tasks** (default): request assumption stress-testing, alternative designs, and architectural challenge
+- **UI/UX, naming, copy, ideation tasks**: request creative brainstorming and option generation
+- **Ambiguous task type**: default to challenge-first
+
+The `inspiration` provider's input is advisory — the `designer` synthesizes it and makes the final call. Present suggestions to the user for decision.
+
+If the `inspiration` provider is unreachable, surface this visibly ("Gemini unavailable — proceeding without inspiration input") and proceed. Do not fail silently.
 <!-- GEMINI_INSPIRATION_END -->
 
 <!-- CCB_CONFIG_END -->

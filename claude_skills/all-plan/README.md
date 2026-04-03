@@ -18,9 +18,9 @@ Example:
 **5-Phase Design Process:**
 
 1. **Requirement Clarification** - 5-Dimension readiness model, structured Q&A
-2. **Inspiration Brainstorming** - Creative ideas from `inspiration` (reference only)
+2. **Inspiration Consultation** - Task-conditioned input from `inspiration`: architectural challenge (default) or creative brainstorming (UI/UX/naming/ideation)
 3. **Design** - `designer` creates the full plan, integrating adopted ideas
-4. **Scored Review** - `reviewer` scores using Rubric A (must pass >= 7.0)
+4. **Dual Scored Review** - Both reviewers (`claude-sonnet` + `codex`) score using Rubric A — all dimensions must reach 10
 5. **Final Output** - Actionable plan saved to `plans/` directory
 
 ## Roles Used
@@ -28,8 +28,8 @@ Example:
 | Role | Responsibility |
 |------|---------------|
 | `designer` | Primary planner, owns the plan |
-| `inspiration` | Creative consultant (unreliable, user decides) |
-| `reviewer` | Quality gate (Rubric A, per-dimension scoring) |
+| `inspiration` | Task-conditioned second perspective (architectural challenge or creative brainstorming) |
+| `reviewer` | Dual quality gate — both `claude-sonnet` and `codex` score (all dimensions must reach 10) |
 
 Roles resolve to providers via CLAUDE.md `CCB_ROLES` table.
 
@@ -37,7 +37,7 @@ Roles resolve to providers via CLAUDE.md `CCB_ROLES` table.
 
 - **Structured Clarification**: 5-Dimension readiness scoring (100 pts)
 - **Inspiration Filter**: Adopt / Adapt / Discard with user approval
-- **Scored Quality Gate**: Dimension-level scoring, auto-correction (max 3 rounds)
+- **Dual Scored Quality Gate**: Both reviewers must score 10 on all dimensions — iterate until pass, no round limit
 - **Optional Web Research**: Triggered when requirements depend on external info
 
 ## When to Use

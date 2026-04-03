@@ -6,8 +6,8 @@ Planning skill using abstract roles defined in CLAUDE.md Role Assignment table.
 
 **Roles used by this skill** (resolve to providers via CLAUDE.md `CCB_ROLES`):
 - `designer` — Primary planner, owns the plan from start to finish
-- `inspiration` — Creative brainstorming consultant (unreliable, use with judgment)
-- `reviewer` — Scored quality gate, evaluates the plan using Rubric A (must pass >= 7.0)
+- `inspiration` — Task-conditioned second perspective: architectural challenge (default) or creative brainstorming (for UI/UX/naming/ideation tasks). Advisory — the `designer` synthesizes input and makes the final call. If unreachable, surface visibly ("Gemini unavailable — proceeding without inspiration input") and proceed.
+- `reviewer` — Dual scored quality gate (`claude-sonnet` + `codex`). Both score using Rubric A — all dimensions must reach 10. Iterate until pass, no round limit.
 
 ---
 
@@ -211,13 +211,32 @@ Save as `design_brief`.
 
 ---
 
-### Phase 2: Inspiration Brainstorming
+### Phase 2: Inspiration Consultation
 
-Send the design brief to `inspiration` for creative input. The `inspiration` provider excels at divergent thinking, aesthetic ideas, and unconventional approaches — but is often unreliable, so treat all output as **reference only**.
+Send the design brief to `inspiration` for task-conditioned input. The prompt varies by task type.
 
 **2.1 Request Inspiration**
 
-Send to `inspiration` (via `/ask`):
+Send to `inspiration` (via `/ask gemini`). Choose the prompt based on task type:
+
+**For architecture/planning tasks (default):**
+
+```
+You are an architectural reviewer and second perspective. Based on this design brief, challenge the assumptions and propose alternatives — not a full implementation plan.
+
+DESIGN BRIEF:
+[design_brief]
+
+Provide:
+1) 2-3 assumptions in this brief that should be stress-tested
+2) 1-2 alternative architectural approaches worth considering
+3) Risks or failure modes the brief may have missed
+4) Trade-offs the designer should explicitly decide on
+
+Be direct and critical. Your role is to strengthen the plan by challenging it.
+```
+
+**For UI/UX, naming, copy, or ideation tasks:**
 
 ```
 You are a creative brainstorming partner. Based on this design brief, provide INSPIRATION and CREATIVE IDEAS — not a full implementation plan.
@@ -234,6 +253,8 @@ Provide:
 
 Be bold and creative. Practical feasibility is secondary — inspiration is the goal.
 ```
+
+**If `inspiration` is unreachable:** Surface this visibly ("Gemini unavailable — proceeding without inspiration input") and skip to Phase 3.
 
 Save response as `inspiration_response`.
 
@@ -314,11 +335,11 @@ Save as `plan_draft_v1`.
 
 ### Phase 4: Scored Review
 
-Submit the plan to `reviewer` for scored review using Rubric A (defined in CLAUDE.md).
+Submit the plan to BOTH reviewers for scored review using Rubric A (defined in AGENTS.md).
 
 **4.1 Submit Plan for Review**
 
-Send to `reviewer` (via `/ask`):
+Send to BOTH reviewers (via `/ask claude-sonnet` AND `/ask codex`):
 
 ```
 [PLAN REVIEW REQUEST]
@@ -370,31 +391,30 @@ Return your response as JSON with this exact structure:
 
 **4.2 Parse and Judge**
 
-After receiving the `reviewer`'s JSON response:
+After receiving BOTH reviewers' JSON responses:
 
 ```
 iteration = 1
 
 CHECK:
-  - If overall >= 7.0 AND no single dimension score <= 3 → PASS
+  - If BOTH reviewers score 10 on ALL dimensions → PASS
   - Otherwise → FAIL
 ```
 
-**4.3 Auto-Correction Loop (on FAIL)**
+**4.3 Iteration Loop (on FAIL)**
 
 ```
-WHILE result == FAIL AND iteration <= 3:
-  1. Read each dimension's weaknesses and fix suggestions
-  2. Read critical_issues list
-  3. Revise plan_draft to address ALL issues
+WHILE result == FAIL:
+  1. Read ALL feedback from BOTH reviewers (scores, weaknesses, fix suggestions)
+  2. Read critical_issues lists from both
+  3. Revise plan_draft to address ALL issues from BOTH reviewers
   4. Save as plan_draft_v{iteration+1}
-  5. Re-submit to `reviewer` via /ask (same template)
+  5. Re-submit to BOTH reviewers via /ask (include: the revised plan, ALL prior feedback from BOTH reviewers, and what was changed in response)
   6. iteration += 1
   7. Re-check PASS/FAIL
 
-IF iteration > 3 AND still FAIL:
-  Present all review rounds to user
-  Ask: "Review did not pass after 3 rounds. How would you like to proceed?"
+No round limit — iterate until 10/10 is reached.
+Exception: if one reviewer is unreachable after reasonable retry, proceed with the available reviewer's scores and flag the gap to the user.
 ```
 
 **4.4 Display Score Summary (on PASS)**
@@ -402,15 +422,23 @@ IF iteration > 3 AND still FAIL:
 ```
 REVIEW: PASSED (Round [N])
 =================================
-| Dimension             | Score | Weight | Weighted |
-|-----------------------|-------|--------|----------|
-| Clarity               | X/10  | 20%    | X.XX     |
-| Completeness          | X/10  | 25%    | X.XX     |
-| Feasibility           | X/10  | 25%    | X.XX     |
-| Risk Assessment       | X/10  | 15%    | X.XX     |
-| Requirement Alignment | X/10  | 15%    | X.XX     |
-|-----------------------|-------|--------|----------|
-| OVERALL               |       |        | X.XX/10  |
+Reviewer: claude-sonnet
+| Dimension             | Score |
+|-----------------------|-------|
+| Clarity               | 10/10 |
+| Completeness          | 10/10 |
+| Feasibility           | 10/10 |
+| Risk Assessment       | 10/10 |
+| Requirement Alignment | 10/10 |
+
+Reviewer: codex
+| Dimension             | Score |
+|-----------------------|-------|
+| Clarity               | 10/10 |
+| Completeness          | 10/10 |
+| Feasibility           | 10/10 |
+| Risk Assessment       | 10/10 |
+| Requirement Alignment | 10/10 |
 
 Key Strengths:
 - [from `reviewer` response]
@@ -442,7 +470,7 @@ Use this template:
 
 **Readiness Score**: [X]/100
 
-**Review Score**: [X.XX]/10 (passed round [N])
+**Review**: Passed round [N] (all dimensions 10/10 from both reviewers)
 
 **Generated**: [Date]
 ```
@@ -543,16 +571,15 @@ Finish the plan document with credits and appendix:
 
 ## Review Summary
 
-| Dimension | Score |
-|-----------|-------|
-| Clarity | X/10 |
-| Completeness | X/10 |
-| Feasibility | X/10 |
-| Risk Assessment | X/10 |
-| Requirement Alignment | X/10 |
-| **Overall** | **X.XX/10** |
+| Dimension | claude-sonnet | codex |
+|-----------|-------|-------|
+| Clarity | X/10 | X/10 |
+| Completeness | X/10 | X/10 |
+| Feasibility | X/10 | X/10 |
+| Risk Assessment | X/10 | X/10 |
+| Requirement Alignment | X/10 | X/10 |
 
-Review rounds: [N]
+Review rounds: [N] | Pass: all dimensions 10/10 from both reviewers
 
 ---
 
@@ -583,7 +610,7 @@ Summary:
 - Steps: [N] implementation steps
 - Risks: [N] identified with mitigations
 - Readiness: [X]/100
-- Review Score: [X.XX]/10 (round [N])
+- Review: Passed round [N] (all dimensions 10/10 from both reviewers)
 - Inspiration Ideas: [N] adopted, [N] adapted, [N] discarded
 
 Next: Review the plan and proceed with implementation when ready.
@@ -596,11 +623,11 @@ Next: Review the plan and proceed with implementation when ready.
 1. **`designer` Owns the Design**: The `designer` is the sole planner; `inspiration` and `reviewer` are consultants
 2. **Structured Clarification**: Use option-based questions to systematically capture requirements
 3. **Readiness Scoring**: Quantify requirement completeness before proceeding
-4. **`inspiration` for Ideas Only**: Leverage creativity but never blindly follow it
+4. **`inspiration` is Advisory**: Task-conditioned input (architectural challenge or creative brainstorming) — the `designer` synthesizes and decides
 5. **User Controls Inspiration**: User decides which ideas to adopt/discard
-6. **`reviewer` as Quality Gate**: Plan must pass Rubric A (>= 7.0) before proceeding
-7. **Dimension-Level Feedback**: The `reviewer` scores each dimension individually with actionable fixes
-8. **Auto-Correction with Limits**: Max 3 review rounds; escalate to user if still failing
+6. **Dual `reviewer` Quality Gate**: Plan must pass Rubric A (all dimensions = 10 from BOTH reviewers) before proceeding
+7. **Dimension-Level Feedback**: Both reviewers score each dimension individually with actionable fixes
+8. **Iterate Until Pass**: No round limit — shared context ensures reviewers see each other's feedback
 9. **Concrete Deliverables**: Output actionable plan document, not just discussion notes
 10. **Research When Needed**: Use WebSearch for external knowledge when applicable
 
@@ -610,7 +637,8 @@ Next: Review the plan and proceed with implementation when ready.
 
 - This skill is designed for complex features or architectural decisions
 - For simple tasks, use direct implementation instead
-- Resolve `inspiration` and `reviewer` to providers via CLAUDE.md Role Assignment, then use `/ask <provider>`
-- If `inspiration` provider is not available, skip Phase 2 and proceed directly to Phase 3
-- If `reviewer` provider is not available, skip Phase 4 and present the plan directly to user
+- Resolve `inspiration` to provider via CLAUDE.md Role Assignment (`/ask gemini`); resolve `reviewer` to BOTH providers (`/ask claude-sonnet` AND `/ask codex`)
+- If `inspiration` provider is unreachable, surface visibly ("Gemini unavailable — proceeding without inspiration input") and skip to Phase 3
+- If one reviewer is unreachable, proceed with the available reviewer and flag the gap to user
+- If both reviewers are unavailable, present the plan directly to user
 - Plans are saved to `plans/` directory with descriptive filenames

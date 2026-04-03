@@ -4,12 +4,12 @@
 Abstract roles map to concrete AI providers. Skills reference roles, not providers directly.
 
 | Role | Provider | Description |
-|------|----------|-------------|
-| `designer` | `claude` | Primary planner and architect — owns plans and designs |
-| `inspiration` | `gemini` | Creative brainstorming — provides ideas as reference only (unreliable, never blindly follow) |
-| `reviewer` | `codex` | Scored quality gate — evaluates plans/code using Rubrics |
-| `executor` | `claude` | Code implementation — writes and modifies code |
+|---|---|---|
+| `designer` | `claude-opus` | Primary planner and architect — owns plans and designs |
+| `inspiration` | `gemini` | Task-conditioned second perspective — architectural challenge (default) or creative brainstorming (for UI/UX/naming/ideation tasks) |
+| `reviewer` | `claude-sonnet`, `codex` | Both review and evaluate — all dimensions must score 10 |
+| `executor` | `claude-opus` | Code implementation — writes and modifies code |
 
 To change a role assignment, edit the Provider column above.
-When a skill references a role (e.g. `reviewer`), resolve it to the provider listed here.
+When a skill references a role (e.g. `reviewer`), resolve it to BOTH providers listed (send to each via `/ask`).
 <!-- CCB_ROLES_END -->
