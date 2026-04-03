@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from env_utils import env_bool
-from providers import ProviderClientSpec
+from providers import ProviderClientSpec, session_filename_for_instance
 from session_utils import (
     CCB_PROJECT_CONFIG_DIRNAME,
     CCB_PROJECT_CONFIG_LEGACY_DIRNAME,
@@ -23,15 +23,15 @@ from pane_registry import load_registry_by_project_id
 
 
 # Maps protocol_prefix → unified daemon provider key.
-# Entries with ":" use the instance mechanism (e.g., "claude:opus" → base="claude", instance="opus").
+# Variant providers (claude-opus, claude-sonnet) map to their own adapter keys.
 _UNIFIED_PROVIDER_MAP = {
     "cask": "codex",
     "gask": "gemini",
     "oask": "opencode",
     "dask": "droid",
     "lask": "claude",
-    "loask": "claude:opus",
-    "lsask": "claude:sonnet",
+    "loask": "claude-opus",
+    "lsask": "claude-sonnet",
     "hask": "copilot",
     "bask": "codebuddy",
     "qask": "qwen",
@@ -72,9 +72,18 @@ def resolve_work_dir(
     except Exception:
         session_path = Path(expanded).absolute()
 
-    if session_path.name != spec.session_filename:
+    # Accept default and any instance-qualified session filenames.
+    # e.g. for spec ".claude-sonnet-session", accept ".claude-sonnet-session"
+    # and ".claude-sonnet-<instance>-session" for any instance.
+    _base = spec.session_filename
+    _name = session_path.name
+    _valid = (_name == _base)
+    if not _valid and _base.endswith("-session"):
+        _prefix = _base[:-len("-session")]  # e.g. ".claude-sonnet"
+        _valid = _name.startswith(f"{_prefix}-") and _name.endswith("-session")
+    if not _valid:
         raise ValueError(
-            f"Invalid session file for {spec.protocol_prefix}: expected filename {spec.session_filename}, got {session_path.name}"
+            f"Invalid session file for {spec.protocol_prefix}: expected {_base} or {_base[:-len('-session')]}-<instance>-session, got {_name}"
         )
     if not session_path.exists():
         raise ValueError(f"Session file not found: {session_path}")
@@ -119,10 +128,12 @@ def resolve_work_dir_with_registry(
 
     # Try to get work_dir from unified askd daemon state
     from askd_runtime import get_daemon_work_dir
+    _reg_inst = os.environ.get("CCB_SESSION_NAME", "").strip() or None
+    _reg_sfn = session_filename_for_instance(spec.session_filename, _reg_inst)
     daemon_work_dir = get_daemon_work_dir("askd.json")
     if daemon_work_dir and daemon_work_dir.exists():
         try:
-            found = find_project_session_file(daemon_work_dir, spec.session_filename)
+            found = find_project_session_file(daemon_work_dir, _reg_sfn)
             if found:
                 return daemon_work_dir, found
         except Exception:
@@ -147,7 +158,7 @@ def resolve_work_dir_with_registry(
                 wd = rec.get("work_dir")
                 if isinstance(wd, str) and wd.strip():
                     try:
-                        found = find_project_session_file(Path(wd.strip()), spec.session_filename)
+                        found = find_project_session_file(Path(wd.strip()), _reg_sfn)
                     except Exception:
                         found = None
                     if found:
@@ -157,7 +168,7 @@ def resolve_work_dir_with_registry(
                             cfg_dir = resolve_project_config_dir(Path(wd.strip()))
                         except Exception:
                             cfg_dir = Path(wd.strip()) / CCB_PROJECT_CONFIG_DIRNAME
-                        session_file = str(cfg_dir / spec.session_filename)
+                        session_file = str(cfg_dir / _reg_sfn)
             if session_file:
                 try:
                     return resolve_work_dir(
@@ -205,7 +216,10 @@ def try_daemon_request(
     if not env_bool(spec.enabled_env, True):
         return None
 
-    if not find_project_session_file(work_dir, spec.session_filename):
+    # Check for session file, accounting for named sessions.
+    _inst = os.environ.get("CCB_SESSION_NAME", "").strip() or None
+    _sfn = session_filename_for_instance(spec.session_filename, _inst)
+    if not find_project_session_file(work_dir, _sfn):
         return None
 
     from importlib import import_module
@@ -258,7 +272,11 @@ def try_daemon_request(
             "message": message,
         }
         if unified_provider:
-            payload["provider"] = unified_provider
+            # Qualify provider with named session instance if active.
+            if _inst:
+                payload["provider"] = f"{unified_provider}:{_inst}"
+            else:
+                payload["provider"] = unified_provider
         if output_path:
             payload["output_path"] = str(output_path)
         req_id = os.environ.get("CCB_REQ_ID", "").strip()
@@ -304,7 +322,10 @@ def maybe_start_daemon(spec: ProviderClientSpec, work_dir: Path) -> bool:
         return False
     if not autostart_enabled(spec.autostart_env_primary, spec.autostart_env_legacy, True):
         return False
-    if not find_project_session_file(work_dir, spec.session_filename):
+    # Check for session file, accounting for named sessions.
+    _inst = os.environ.get("CCB_SESSION_NAME", "").strip() or None
+    _sfn = session_filename_for_instance(spec.session_filename, _inst)
+    if not find_project_session_file(work_dir, _sfn):
         return False
 
     candidates: list[str] = []

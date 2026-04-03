@@ -650,8 +650,10 @@ def main(argv: list[str]) -> int:
     task_id = make_task_id()
     log_dir = Path(tempfile.gettempdir()) / "ccb-tasks"
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / f"ask-{provider}-{task_id}.log"
-    status_file = log_dir / f"ask-{provider}-{task_id}.status"
+    # Sanitize provider for filenames — colon is invalid on Windows.
+    _safe_provider = provider.replace(":", "-")
+    log_file = log_dir / f"ask-{_safe_provider}-{task_id}.log"
+    status_file = log_dir / f"ask-{_safe_provider}-{task_id}.status"
     try:
         log_file.touch(exist_ok=True)
     except Exception:
@@ -681,11 +683,11 @@ def main(argv: list[str]) -> int:
         CREATE_NEW_PROCESS_GROUP = 0x00000200
 
         # Write message to temp file to avoid escaping issues
-        msg_file = log_dir / f"ask-{provider}-{task_id}.msg"
+        msg_file = log_dir / f"ask-{_safe_provider}-{task_id}.msg"
         msg_file.write_text(message, encoding="utf-8")
 
         # Write PowerShell script - call ask --foreground to use unified daemon
-        script_file = log_dir / f"ask-{provider}-{task_id}.ps1"
+        script_file = log_dir / f"ask-{_safe_provider}-{task_id}.ps1"
         status_file_win = str(status_file).replace('"', '`"')
         log_file_win = str(log_file).replace('"', '`"')
 
@@ -791,7 +793,7 @@ fi
 exit "$rc"
 '''
         # Write script to temp file for detached execution
-        script_file = log_dir / f"ask-{provider}-{task_id}.sh"
+        script_file = log_dir / f"ask-{_safe_provider}-{task_id}.sh"
         script_file.write_text(bg_script, encoding="utf-8")
         script_file.chmod(0o755)
 

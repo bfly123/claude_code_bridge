@@ -150,7 +150,8 @@ def main(argv: list[str]) -> int:
             return exit_code
 
         # Fallback: send directly to Claude pane (works for both sync and async)
-        resolution = resolve_claude_session(work_dir, provider="claude-sonnet")
+        _instance = os.environ.get("CCB_SESSION_NAME", "").strip() or None
+        resolution = resolve_claude_session(work_dir, provider="claude-sonnet", instance=_instance)
         if resolution and resolution.data:
             data = dict(resolution.data)
             if data.get("claude_pane_id") and not data.get("pane_id"):
