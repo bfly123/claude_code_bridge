@@ -3715,8 +3715,21 @@ def cmd_start(args):
         pane_id = str(entry.get("pane_id") or "").strip()
         return record, pane_id
 
-    # Enforce single ccb instance per directory (or per directory+session if --session is given).
+    # Validate and normalize session name.
     session_name = (getattr(args, "session", "") or "").strip()
+    if session_name:
+        import re
+        if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9_-]*$', session_name):
+            print(f"[ERROR] Invalid session name: {session_name!r}", file=sys.stderr)
+            print("[ERROR] Session names must contain only letters, digits, hyphens, and underscores", file=sys.stderr)
+            return 1
+        _reserved = {"opus", "sonnet"}
+        if session_name.lower() in _reserved or any(session_name.lower().startswith(f"{r}-") for r in _reserved):
+            print(f"[ERROR] Session name {session_name!r} is reserved (conflicts with claude-opus/claude-sonnet providers)", file=sys.stderr)
+            return 1
+        session_name = session_name.lower()
+
+    # Enforce single ccb instance per directory (or per directory+session if --session is given).
     lock_cwd = str(Path.cwd().resolve())
     lock_key = f"ccb-{session_name}" if session_name else "ccb"
     ccb_lock = ProviderLock(lock_key, timeout=0.1, cwd=lock_cwd)

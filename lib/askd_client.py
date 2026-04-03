@@ -72,18 +72,14 @@ def resolve_work_dir(
     except Exception:
         session_path = Path(expanded).absolute()
 
-    # Accept default and any instance-qualified session filenames.
-    # e.g. for spec ".claude-sonnet-session", accept ".claude-sonnet-session"
-    # and ".claude-sonnet-<instance>-session" for any instance.
-    _base = spec.session_filename
-    _name = session_path.name
-    _valid = (_name == _base)
-    if not _valid and _base.endswith("-session"):
-        _prefix = _base[:-len("-session")]  # e.g. ".claude-sonnet"
-        _valid = _name.startswith(f"{_prefix}-") and _name.endswith("-session")
-    if not _valid:
+    # Accept default and CCB_SESSION_NAME-qualified filenames.
+    _inst = os.environ.get("CCB_SESSION_NAME", "").strip() or None
+    _accepted = {spec.session_filename}
+    if _inst:
+        _accepted.add(session_filename_for_instance(spec.session_filename, _inst))
+    if session_path.name not in _accepted:
         raise ValueError(
-            f"Invalid session file for {spec.protocol_prefix}: expected {_base} or {_base[:-len('-session')]}-<instance>-session, got {_name}"
+            f"Invalid session file for {spec.protocol_prefix}: expected filename {spec.session_filename}, got {session_path.name}"
         )
     if not session_path.exists():
         raise ValueError(f"Session file not found: {session_path}")
@@ -126,7 +122,8 @@ def resolve_work_dir_with_registry(
             default_cwd=default_cwd,
         )
 
-    # Try to get work_dir from unified askd daemon state
+    # Try to get work_dir from unified askd daemon state.
+    # Use instance-qualified filename when CCB_SESSION_NAME is active.
     from askd_runtime import get_daemon_work_dir
     _reg_inst = os.environ.get("CCB_SESSION_NAME", "").strip() or None
     _reg_sfn = session_filename_for_instance(spec.session_filename, _reg_inst)
