@@ -4,6 +4,7 @@ WebSocket routes for real-time status updates.
 
 import asyncio
 import json
+import os
 from typing import Set
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -12,6 +13,20 @@ router = APIRouter()
 
 # Connected clients
 connected_clients: Set[WebSocket] = set()
+
+
+def _extract_websocket_token(websocket: WebSocket) -> str | None:
+    authorization = websocket.headers.get("authorization")
+    if authorization:
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() == "bearer" and token:
+            return token
+
+    token = websocket.query_params.get("token")
+    if token:
+        return token
+
+    return None
 
 
 async def broadcast_status(data: dict):
@@ -49,6 +64,13 @@ async def get_current_status() -> dict:
 @router.websocket("/status")
 async def websocket_status(websocket: WebSocket):
     """WebSocket endpoint for real-time status updates."""
+    expected_token = getattr(websocket.app.state, "api_token", None) or os.getenv("API_TOKEN")
+    provided_token = _extract_websocket_token(websocket)
+
+    if not expected_token or provided_token != expected_token:
+        await websocket.close(code=1008)
+        return
+
     await websocket.accept()
     connected_clients.add(websocket)
 
