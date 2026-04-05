@@ -18,13 +18,6 @@ async def verify_local_access(request: Request) -> bool:
     if client_host in local_hosts:
         return True
 
-    # Check X-Forwarded-For for reverse proxy setups
-    forwarded = request.headers.get("X-Forwarded-For", "")
-    if forwarded:
-        first_ip = forwarded.split(",")[0].strip()
-        if first_ip in local_hosts:
-            return True
-
     return False
 
 
