@@ -1,0 +1,139 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+import shutil
+import subprocess
+
+from agents.models import WorkspaceMode
+from workspace.models import WorkspacePlan
+
+_COPY_IGNORE_PATTERNS = shutil.ignore_patterns('.git', '.ccb', '__pycache__', '.pytest_cache')
+
+
+@dataclass(frozen=True)
+class MaterializationResult:
+    workspace_path: Path
+    created: bool
+    mode: str
+
+
+class WorkspaceMaterializer:
+    def materialize(self, plan: WorkspacePlan) -> MaterializationResult:
+        if plan.workspace_mode is WorkspaceMode.INPLACE:
+            plan.workspace_path.mkdir(parents=True, exist_ok=True)
+            return MaterializationResult(workspace_path=plan.workspace_path, created=False, mode=plan.workspace_mode.value)
+        if plan.workspace_mode is WorkspaceMode.COPY:
+            return self._materialize_copy(plan)
+        if plan.workspace_mode is WorkspaceMode.GIT_WORKTREE:
+            return self._materialize_git_worktree(plan)
+        raise ValueError(f'unsupported workspace_mode: {plan.workspace_mode}')
+
+    def _materialize_copy(self, plan: WorkspacePlan) -> MaterializationResult:
+        if self._is_placeholder_workspace(plan):
+            self._clear_placeholder_workspace(plan)
+        if plan.workspace_path.exists():
+            return MaterializationResult(workspace_path=plan.workspace_path, created=False, mode=plan.workspace_mode.value)
+        plan.workspace_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(plan.source_root, plan.workspace_path, ignore=_COPY_IGNORE_PATTERNS)
+        return MaterializationResult(workspace_path=plan.workspace_path, created=True, mode=plan.workspace_mode.value)
+
+    def _materialize_git_worktree(self, plan: WorkspacePlan) -> MaterializationResult:
+        if plan.branch_name is None:
+            raise ValueError('git-worktree workspace requires branch_name')
+        if not self._can_use_git_worktree(plan.project_root):
+            return self._materialize_copy(plan)
+
+        if self._is_existing_git_workspace(plan.workspace_path):
+            self._validate_existing_git_workspace(plan)
+            return MaterializationResult(workspace_path=plan.workspace_path, created=False, mode=plan.workspace_mode.value)
+
+        if self._is_placeholder_workspace(plan):
+            self._clear_placeholder_workspace(plan)
+        elif plan.workspace_path.exists() and any(plan.workspace_path.iterdir()):
+            raise RuntimeError(f'workspace path is not empty and is not a git worktree: {plan.workspace_path}')
+
+        plan.workspace_path.parent.mkdir(parents=True, exist_ok=True)
+        branch_exists = self._branch_exists(plan.project_root, plan.branch_name)
+        args = ['git', '-C', str(plan.project_root), 'worktree', 'add']
+        if branch_exists:
+            args.extend([str(plan.workspace_path), plan.branch_name])
+        else:
+            args.extend(['-b', plan.branch_name, str(plan.workspace_path), 'HEAD'])
+        self._run(args, error=f'failed to materialize git worktree for {plan.agent_name}')
+        self._validate_existing_git_workspace(plan)
+        return MaterializationResult(workspace_path=plan.workspace_path, created=True, mode=plan.workspace_mode.value)
+
+    def _validate_existing_git_workspace(self, plan: WorkspacePlan) -> None:
+        top_level = self._git_output(plan.workspace_path, ['rev-parse', '--show-toplevel'])
+        if Path(top_level).expanduser().resolve() != plan.workspace_path:
+            raise RuntimeError(f'workspace path is not the git worktree root: {plan.workspace_path}')
+        if plan.branch_name:
+            current_branch = self._git_output(plan.workspace_path, ['branch', '--show-current'])
+            if current_branch and current_branch != plan.branch_name:
+                raise RuntimeError(
+                    f'workspace branch mismatch for {plan.agent_name}: expected {plan.branch_name}, got {current_branch}'
+                )
+
+    def _is_existing_git_workspace(self, path: Path) -> bool:
+        git_dir = path / '.git'
+        if not git_dir.exists():
+            return False
+        try:
+            self._git_output(path, ['rev-parse', '--show-toplevel'])
+        except RuntimeError:
+            return False
+        return True
+
+    def _is_placeholder_workspace(self, plan: WorkspacePlan) -> bool:
+        if not plan.workspace_path.exists() or not plan.workspace_path.is_dir():
+            return False
+        allowed = {plan.binding_path.name} if plan.binding_path is not None else set()
+        entries = list(plan.workspace_path.iterdir())
+        return all(entry.name in allowed for entry in entries)
+
+    def _clear_placeholder_workspace(self, plan: WorkspacePlan) -> None:
+        if plan.binding_path is not None and plan.binding_path.exists():
+            plan.binding_path.unlink()
+        try:
+            plan.workspace_path.rmdir()
+        except OSError:
+            pass
+
+    def _branch_exists(self, repo_root: Path, branch_name: str) -> bool:
+        result = subprocess.run(
+            ['git', '-C', str(repo_root), 'show-ref', '--verify', '--quiet', f'refs/heads/{branch_name}'],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        return result.returncode == 0
+
+    def _can_use_git_worktree(self, repo_root: Path) -> bool:
+        result = subprocess.run(
+            ['git', '-C', str(repo_root), 'rev-parse', '--show-toplevel'],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        return result.returncode == 0
+
+    def _git_output(self, cwd: Path, args: list[str]) -> str:
+        result = subprocess.run(
+            ['git', '-C', str(cwd), *args],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError((result.stderr or result.stdout or 'git command failed').strip())
+        return (result.stdout or '').strip()
+
+    def _run(self, args: list[str], *, error: str) -> None:
+        result = subprocess.run(args, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or '').strip()
+            raise RuntimeError(f'{error}: {detail}')

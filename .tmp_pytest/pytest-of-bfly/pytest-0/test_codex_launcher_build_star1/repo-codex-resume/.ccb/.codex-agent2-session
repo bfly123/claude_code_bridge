@@ -1,0 +1,4 @@
+{
+  "codex_session_id": "agent2-session-id",
+  "codex_start_cmd": "codex resume agent2-session-id"
+}

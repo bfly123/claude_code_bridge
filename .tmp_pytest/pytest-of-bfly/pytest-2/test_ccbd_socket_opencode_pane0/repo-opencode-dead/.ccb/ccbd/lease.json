@@ -1,0 +1,17 @@
+{
+  "schema_version": 2,
+  "record_type": "ccbd_lease",
+  "api_version": 2,
+  "project_id": "19c7bb763ec3eaadd89f79ae0a6afeb63df9b40d85bad9997e26a8d25bda76b0",
+  "ccbd_pid": 1822551,
+  "socket_path": "/home/bfly/yunwei/ccb_source/.tmp_pytest/pytest-of-bfly/pytest-2/test_ccbd_socket_opencode_pane0/repo-opencode-dead/.ccb/ccbd/ccbd.sock",
+  "owner_uid": 1000,
+  "boot_id": "42a04432-fc77-4321-8953-ad3edf51616f",
+  "started_at": "2026-04-03T11:53:38.842775Z",
+  "last_heartbeat_at": "2026-04-03T11:53:38.843755Z",
+  "mount_state": "unmounted",
+  "generation": 1,
+  "config_signature": "83b85ed56f1e8af624a395bb27a1570b9cc9ef2edf2a91fac3d83a262342c91c",
+  "keeper_pid": null,
+  "daemon_instance_id": "bde0d7fa8d9e4ff5b94112f79c246acb"
+}

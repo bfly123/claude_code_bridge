@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+import sys
+import os
+import argparse
+from pathlib import Path
+
+# Add lib to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'lib'))
+
+from hippocampus.ltm import RepomixLTM
+
+def main():
+    parser = argparse.ArgumentParser(description="Hippocampus Architecture Manager")
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    # Snapshot Command
+    snap_parser = subparsers.add_parser("snapshot", help="Update the Long Term Memory snapshot")
+    snap_parser.add_argument("--force", action="store_true", help="Force update even if no changes")
+    
+    # Init Command (Alias for snapshot)
+    init_parser = subparsers.add_parser("init", help="Initialize Hippocampus memory")
+
+    args = parser.parse_args()
+
+    project_root = os.getcwd()
+    ltm = RepomixLTM(project_root)
+
+    if args.command in ["snapshot", "init"]:
+        changed, msg = ltm.update_snapshot(force=args.force or args.command == "init")
+        print(msg)
+        
+        if changed:
+            # Future: Trigger AI to update ARCH.md
+            print("🚀 Triggering Cortex update event... (TODO: Connect to AI)")
+            
+    elif args.command is None:
+        parser.print_help()
+
+if __name__ == "__main__":
+    main()

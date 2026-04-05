@@ -1,0 +1,26 @@
+---
+name: ping
+description: Inspect CCB control-plane health for a named agent or `ccbd`.
+metadata:
+  short-description: Inspect CCB health
+---
+
+# Ping Agent
+
+Inspect project control-plane health for a named agent or for `ccbd`.
+
+## Usage
+
+The first argument must be an agent name from `.ccb/ccb.config`, or `ccbd`.
+
+## Execution (MANDATORY)
+
+```powershell
+ccb ping $ARGUMENTS
+```
+
+## Examples
+
+- `/ping agent1`
+- `/ping agent3`
+- `/ping ccbd`

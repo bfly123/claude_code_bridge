@@ -1,0 +1,1786 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_PREFIX="${CODEX_INSTALL_PREFIX:-$HOME/.local/share/codex-dual}"
+BIN_DIR="${CODEX_BIN_DIR:-$HOME/.local/bin}"
+readonly REPO_ROOT INSTALL_PREFIX BIN_DIR
+
+# i18n support
+detect_lang() {
+  local lang="${CCB_LANG:-auto}"
+  case "$lang" in
+    zh|cn|chinese) echo "zh" ;;
+    en|english) echo "en" ;;
+    *)
+      local sys_lang="${LANG:-${LC_ALL:-${LC_MESSAGES:-}}}"
+      if [[ "$sys_lang" == zh* ]] || [[ "$sys_lang" == *chinese* ]]; then
+        echo "zh"
+      else
+        echo "en"
+      fi
+      ;;
+  esac
+}
+
+CCB_LANG_DETECTED="$(detect_lang)"
+
+# Message function
+msg() {
+  local key="$1"
+  shift
+  local en_msg zh_msg
+  case "$key" in
+    install_complete)
+      en_msg="Installation complete"
+      zh_msg="安装完成" ;;
+    uninstall_complete)
+      en_msg="Uninstall complete"
+      zh_msg="卸载完成" ;;
+    python_version_old)
+      en_msg="Python version too old: $1"
+      zh_msg="Python 版本过旧: $1" ;;
+    requires_python)
+      en_msg="Requires Python 3.10+"
+      zh_msg="需要 Python 3.10+" ;;
+    missing_dep)
+      en_msg="Missing dependency: $1"
+      zh_msg="缺少依赖: $1" ;;
+    detected_env)
+      en_msg="Detected $1 environment"
+      zh_msg="检测到 $1 环境" ;;
+    confirm_wsl)
+      en_msg="Confirm continue installing in WSL? (y/N)"
+      zh_msg="确认继续在 WSL 中安装？(y/N)" ;;
+    cancelled)
+      en_msg="Installation cancelled"
+      zh_msg="安装已取消" ;;
+    wsl_warning)
+      en_msg="Detected WSL environment"
+      zh_msg="检测到 WSL 环境" ;;
+    same_env_required)
+      en_msg="ccb, ccb ask, ccb ping, and ccb pend must run in the same environment as codex/gemini."
+      zh_msg="ccb、ccb ask、ccb ping、ccb pend 必须与 codex/gemini 在同一环境运行。" ;;
+    confirm_wsl_native)
+      en_msg="Please confirm: you will install and run codex/gemini in WSL (not Windows native)."
+      zh_msg="请确认：你将在 WSL 中安装并运行 codex/gemini（不是 Windows 原生）。" ;;
+    watchdog_installing)
+      en_msg="Installing Python dependency: watchdog"
+      zh_msg="正在安装 Python 依赖: watchdog" ;;
+    watchdog_installed)
+      en_msg="OK: watchdog installed"
+      zh_msg="OK: watchdog 已安装" ;;
+    watchdog_failed)
+      en_msg="WARN: watchdog install failed (will fall back to polling)"
+      zh_msg="警告：watchdog 安装失败（将退回轮询）" ;;
+    pip_missing)
+      en_msg="WARN: pip not available; please install watchdog manually"
+      zh_msg="警告：未找到 pip，请手动安装 watchdog" ;;
+    root_error)
+      en_msg="ERROR: Do not run as root/sudo. Please run as normal user."
+      zh_msg="错误：请勿以 root/sudo 身份运行。请使用普通用户执行。" ;;
+    *)
+      en_msg="$key"
+      zh_msg="$key" ;;
+  esac
+  if [[ "$CCB_LANG_DETECTED" == "zh" ]]; then
+    echo "$zh_msg"
+  else
+    echo "$en_msg"
+  fi
+}
+
+# Check for root/sudo - refuse to run as root
+if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+  msg root_error >&2
+  exit 1
+fi
+
+SCRIPTS_TO_LINK=(
+  bin/ask
+  bin/autonew
+  bin/ctx-transfer
+  ccb
+)
+
+CLAUDE_MARKDOWN=(
+  # Old CCB commands removed - replaced by unified ask/ping/pend skills
+)
+
+LEGACY_SCRIPTS=(
+  bask
+  bpend
+  bping
+  cask
+  cpend
+  cping
+  ccb-mounted
+  ccb-ping
+  ping
+  dask
+  dpend
+  dping
+  gask
+  gpend
+  gping
+  hask
+  hpend
+  hping
+  lask
+  lpend
+  lping
+  oask
+  opend
+  oping
+  pend
+  qask
+  qpend
+  qping
+  cast
+  cast-w
+  codex-ask
+  codex-pending
+  codex-ping
+  claude-codex-dual
+  claude_codex
+  claude_ai
+  claude_bridge
+  caskd
+  gaskd
+  oaskd
+  laskd
+  daskd
+)
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  ./install.sh install    # Install or update Codex dual-window tools
+  ./install.sh uninstall  # Uninstall installed content
+
+Optional environment variables:
+  CODEX_INSTALL_PREFIX     Install directory (default: ~/.local/share/codex-dual)
+  CODEX_BIN_DIR            Executable directory (default: ~/.local/bin)
+  CODEX_CLAUDE_COMMAND_DIR Custom Claude commands directory (default: auto-detect)
+  CCB_DROID_AUTOINSTALL    Auto-register Droid MCP tools if droid exists (default: 1)
+  CCB_DROID_AUTOINSTALL_FORCE Re-register Droid MCP tools (default: 0)
+  CCB_CLAUDE_MD_MODE       CLAUDE.md injection mode: "inline" (default) or "route"
+                           inline = full config in CLAUDE.md (~57 lines)
+                           route  = minimal pointer in CLAUDE.md, full config in ~/.claude/rules/ccb-config.md
+USAGE
+}
+
+detect_claude_dir() {
+  if [[ -n "${CODEX_CLAUDE_COMMAND_DIR:-}" ]]; then
+    echo "$CODEX_CLAUDE_COMMAND_DIR"
+    return
+  fi
+
+  local candidates=(
+    "$HOME/.claude/commands"
+    "$HOME/.config/claude/commands"
+    "$HOME/.local/share/claude/commands"
+  )
+
+  for dir in "${candidates[@]}"; do
+    if [[ -d "$dir" ]]; then
+      echo "$dir"
+      return
+    fi
+  done
+
+  local fallback="$HOME/.claude/commands"
+  mkdir -p "$fallback"
+  echo "$fallback"
+}
+
+require_command() {
+  local cmd="$1"
+  local pkg="${2:-$1}"
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "ERROR: Missing dependency: $cmd"
+    echo "   Please install $pkg first, then re-run install.sh"
+    exit 1
+  fi
+}
+
+PYTHON_BIN="${CCB_PYTHON_BIN:-}"
+
+_python_check_310() {
+  local cmd="$1"
+  command -v "$cmd" >/dev/null 2>&1 || return 1
+  "$cmd" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1
+}
+
+pick_python_bin() {
+  if [[ -n "${PYTHON_BIN}" ]] && _python_check_310 "${PYTHON_BIN}"; then
+    return 0
+  fi
+  for cmd in python3 python; do
+    if _python_check_310 "$cmd"; then
+      PYTHON_BIN="$cmd"
+      return 0
+    fi
+  done
+  return 1
+}
+
+pick_any_python_bin() {
+  if [[ -n "${PYTHON_BIN}" ]] && command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+    return 0
+  fi
+  for cmd in python3 python; do
+    if command -v "$cmd" >/dev/null 2>&1; then
+      PYTHON_BIN="$cmd"
+      return 0
+    fi
+  done
+  return 1
+}
+
+require_python_version() {
+  # ccb requires Python 3.10+ (PEP 604 type unions: `str | None`, etc.)
+  if ! pick_python_bin; then
+    echo "ERROR: Missing dependency: python (3.10+ required)"
+    echo "   Please install Python 3.10+ and ensure it is on PATH, then re-run install.sh"
+    exit 1
+  fi
+  local version
+  version="$("$PYTHON_BIN" -c 'import sys; print("{}.{}.{}".format(sys.version_info[0], sys.version_info[1], sys.version_info[2]))' 2>/dev/null || echo unknown)"
+  if ! _python_check_310 "$PYTHON_BIN"; then
+    echo "ERROR: Python version too old: $version"
+    echo "   Requires Python 3.10+, please upgrade and retry"
+    exit 1
+  fi
+  echo "OK: Python $version ($PYTHON_BIN)"
+}
+
+python_has_module() {
+  local module="$1"
+  if ! pick_any_python_bin; then
+    return 1
+  fi
+  "$PYTHON_BIN" - <<PY >/dev/null 2>&1
+import importlib.util
+import sys
+sys.exit(0 if importlib.util.find_spec("${module}") else 1)
+PY
+}
+
+install_watchdog() {
+  if python_has_module "watchdog"; then
+    msg watchdog_installed
+    return 0
+  fi
+  msg watchdog_installing
+
+  # 1. Try uv (fast, no PEP 668 issues)
+  if command -v uv >/dev/null 2>&1; then
+    if uv pip install --system "watchdog>=2.1.0" >/dev/null 2>&1 || \
+       uv pip install "watchdog>=2.1.0" >/dev/null 2>&1; then
+      if python_has_module "watchdog"; then
+        msg watchdog_installed
+        return 0
+      fi
+    fi
+  fi
+
+  if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
+    msg pip_missing
+    return 1
+  fi
+
+  # 2. Try standard pip install --user
+  if "$PYTHON_BIN" -m pip install --user "watchdog>=2.1.0" >/dev/null 2>&1; then
+    if python_has_module "watchdog"; then
+      msg watchdog_installed
+      return 0
+    fi
+  fi
+
+  # 3. PEP 668 fallback: --break-system-packages (Homebrew Python, Debian 12+, etc.)
+  if "$PYTHON_BIN" -m pip install --user --break-system-packages "watchdog>=2.1.0" >/dev/null 2>&1; then
+    if python_has_module "watchdog"; then
+      msg watchdog_installed
+      return 0
+    fi
+  fi
+
+  # 4. Try pipx inject into a shared venv as last resort
+  if command -v pipx >/dev/null 2>&1; then
+    if pipx install watchdog >/dev/null 2>&1; then
+      if python_has_module "watchdog"; then
+        msg watchdog_installed
+        return 0
+      fi
+    fi
+  fi
+
+  msg watchdog_failed
+  return 1
+}
+
+# Return linux / macos / unknown based on uname
+detect_platform() {
+  local name
+  name="$(uname -s 2>/dev/null || echo unknown)"
+  case "$name" in
+    Linux) echo "linux" ;;
+    Darwin) echo "macos" ;;
+    *) echo "unknown" ;;
+  esac
+}
+
+
+is_wsl() {
+  [[ -f /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null
+}
+
+get_wsl_version() {
+  if [[ -n "${WSL_INTEROP:-}" ]]; then
+    echo 2
+  else
+    echo 1
+  fi
+}
+
+check_wsl_compatibility() {
+  if is_wsl; then
+    local ver
+    ver="$(get_wsl_version)"
+    echo "OK: Detected WSL $ver environment"
+  fi
+}
+
+confirm_backend_env_wsl() {
+  if ! is_wsl; then
+    return
+  fi
+
+  if [[ "${CCB_INSTALL_ASSUME_YES:-}" == "1" ]]; then
+    return
+  fi
+
+  if [[ ! -t 0 ]]; then
+    echo "ERROR: Installing in WSL but detected non-interactive terminal; aborted to avoid env mismatch."
+    echo "   If you confirm codex/gemini will be installed and run in WSL:"
+    echo "   Re-run: CCB_INSTALL_ASSUME_YES=1 ./install.sh install"
+    exit 1
+  fi
+
+  echo
+  echo "================================================================"
+  echo "WARN: Detected WSL environment"
+  echo "================================================================"
+  echo "ccb/ask/ping/pend must run in the same environment as codex/gemini."
+  echo
+  echo "Please confirm: you will install and run codex/gemini in WSL (not Windows native)."
+  echo "If you plan to run codex/gemini in Windows native, exit and run on Windows side:"
+  echo "   powershell -ExecutionPolicy Bypass -File .\\install.ps1 install"
+  echo "================================================================"
+  echo
+  read -r -p "Confirm continue installing in WSL? (y/N): " reply
+  case "$reply" in
+    y|Y|yes|YES) ;;
+    *) echo "Installation cancelled"; exit 1 ;;
+  esac
+}
+
+print_tmux_install_hint() {
+  local platform
+  platform="$(detect_platform)"
+  case "$platform" in
+    macos)
+      if command -v brew >/dev/null 2>&1; then
+        echo "   macOS: Run 'brew install tmux'"
+      else
+        echo "   macOS: Homebrew not detected, install from https://brew.sh then run 'brew install tmux'"
+      fi
+      ;;
+    linux)
+      if command -v apt-get >/dev/null 2>&1; then
+        echo "   Debian/Ubuntu: sudo apt-get update && sudo apt-get install -y tmux"
+      elif command -v dnf >/dev/null 2>&1; then
+        echo "   Fedora/CentOS/RHEL: sudo dnf install -y tmux"
+      elif command -v yum >/dev/null 2>&1; then
+        echo "   CentOS/RHEL: sudo yum install -y tmux"
+      elif command -v pacman >/dev/null 2>&1; then
+        echo "   Arch/Manjaro: sudo pacman -S tmux"
+      elif command -v apk >/dev/null 2>&1; then
+        echo "   Alpine: sudo apk add tmux"
+      elif command -v zypper >/dev/null 2>&1; then
+        echo "   openSUSE: sudo zypper install -y tmux"
+      else
+        echo "   Linux: Please use your distro's package manager to install tmux"
+      fi
+      ;;
+    *)
+      echo "   See https://github.com/tmux/tmux/wiki/Installing for tmux installation"
+      ;;
+  esac
+}
+
+require_terminal_backend() {
+  if [[ -n "${TMUX:-}" ]]; then
+    echo "OK: Detected tmux environment"
+    return
+  fi
+
+  if command -v tmux >/dev/null 2>&1; then
+    echo "OK: Detected tmux"
+    return
+  fi
+
+  echo "ERROR: Missing dependency: tmux"
+
+  if [[ "$(uname)" == "Darwin" ]]; then
+    echo
+    echo "NOTE: macOS user recommended options:"
+    echo "   - Install tmux: brew install tmux"
+  fi
+
+  print_tmux_install_hint
+  exit 1
+}
+
+copy_project() {
+  local staging
+  staging="$(mktemp -d)"
+  trap 'rm -rf "$staging"' EXIT
+
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a \
+      --exclude '.git/' \
+      --exclude '__pycache__/' \
+      --exclude '.pytest_cache/' \
+      --exclude '.mypy_cache/' \
+      --exclude '.venv/' \
+      --exclude 'lib/web/' \
+      --exclude 'bin/ccb-web' \
+      "$REPO_ROOT"/ "$staging"/
+  else
+    tar -C "$REPO_ROOT" \
+      --exclude '.git' \
+      --exclude '__pycache__' \
+      --exclude '.pytest_cache' \
+      --exclude '.mypy_cache' \
+      --exclude '.venv' \
+      --exclude 'lib/web' \
+      --exclude 'bin/ccb-web' \
+      -cf - . | tar -C "$staging" -xf -
+  fi
+
+  rm -rf "$INSTALL_PREFIX"
+  mkdir -p "$(dirname "$INSTALL_PREFIX")"
+  mv "$staging" "$INSTALL_PREFIX"
+  trap - EXIT
+
+  # Update GIT_COMMIT and GIT_DATE in ccb file
+  local git_commit="" git_date=""
+
+  # Method 1: From git repo
+  if command -v git >/dev/null 2>&1 && [[ -d "$REPO_ROOT/.git" ]]; then
+    git_commit=$(git -C "$REPO_ROOT" log -1 --format='%h' 2>/dev/null || echo "")
+    git_date=$(git -C "$REPO_ROOT" log -1 --format='%cs' 2>/dev/null || echo "")
+  fi
+
+  # Method 2: From environment variables (set by ccb update)
+  if [[ -z "$git_commit" && -n "${CCB_GIT_COMMIT:-}" ]]; then
+    git_commit="$CCB_GIT_COMMIT"
+    git_date="${CCB_GIT_DATE:-}"
+  fi
+
+  # Method 3: From GitHub API (fallback)
+  if [[ -z "$git_commit" ]] && command -v curl >/dev/null 2>&1; then
+    local api_response
+    api_response=$(curl -fsSL "https://api.github.com/repos/bfly123/claude_code_bridge/commits/main" 2>/dev/null || echo "")
+    if [[ -n "$api_response" ]]; then
+      git_commit=$(echo "$api_response" | grep -o '"sha": "[^"]*"' | head -1 | cut -d'"' -f4 | cut -c1-7)
+      git_date=$(echo "$api_response" | grep -o '"date": "[^"]*"' | head -1 | cut -d'"' -f4 | cut -c1-10)
+    fi
+  fi
+
+  if [[ -n "$git_commit" && -f "$INSTALL_PREFIX/ccb" ]]; then
+    sed -i.bak "s/^GIT_COMMIT = .*/GIT_COMMIT = \"$git_commit\"/" "$INSTALL_PREFIX/ccb"
+    sed -i.bak "s/^GIT_DATE = .*/GIT_DATE = \"$git_date\"/" "$INSTALL_PREFIX/ccb"
+    rm -f "$INSTALL_PREFIX/ccb.bak"
+  fi
+}
+
+install_bin_links() {
+  mkdir -p "$BIN_DIR"
+
+  for path in "${SCRIPTS_TO_LINK[@]}"; do
+    local name
+    name="$(basename "$path")"
+    if [[ ! -f "$INSTALL_PREFIX/$path" ]]; then
+      echo "WARN: Script not found $INSTALL_PREFIX/$path, skipping link creation"
+      continue
+    fi
+    chmod +x "$INSTALL_PREFIX/$path"
+    if ln -sf "$INSTALL_PREFIX/$path" "$BIN_DIR/$name" 2>/dev/null; then
+      :
+    else
+      # Windows (Git Bash) / restricted environments may not allow symlinks. Fall back to copying.
+      cp -f "$INSTALL_PREFIX/$path" "$BIN_DIR/$name"
+      chmod +x "$BIN_DIR/$name" 2>/dev/null || true
+    fi
+  done
+
+  for legacy in "${LEGACY_SCRIPTS[@]}"; do
+    rm -f "$BIN_DIR/$legacy"
+  done
+
+  echo "Created executable links in $BIN_DIR"
+}
+
+ensure_path_configured() {
+  # Check if BIN_DIR is already in PATH
+  if [[ ":$PATH:" == *":$BIN_DIR:"* ]]; then
+    return
+  fi
+
+  local shell_rc=""
+  local current_shell
+  current_shell="$(basename "${SHELL:-/bin/bash}")"
+
+  case "$current_shell" in
+    zsh)  shell_rc="$HOME/.zshrc" ;;
+    bash)
+      if [[ -f "$HOME/.bash_profile" ]]; then
+        shell_rc="$HOME/.bash_profile"
+      else
+        shell_rc="$HOME/.bashrc"
+      fi
+      ;;
+    *)    shell_rc="$HOME/.profile" ;;
+  esac
+
+  local path_line="export PATH=\"${BIN_DIR}:\$PATH\""
+
+  # Check if already configured in shell rc
+  if [[ -f "$shell_rc" ]] && grep -qF "$BIN_DIR" "$shell_rc" 2>/dev/null; then
+    echo "PATH already configured in $shell_rc (restart terminal to apply)"
+    return
+  fi
+
+  # Add to shell rc
+  echo "" >> "$shell_rc"
+  echo "# Added by ccb installer" >> "$shell_rc"
+  echo "$path_line" >> "$shell_rc"
+  echo "OK: Added $BIN_DIR to PATH in $shell_rc"
+  echo "   Run: source $shell_rc  (or restart terminal)"
+}
+
+install_claude_commands() {
+  local claude_dir
+  claude_dir="$(detect_claude_dir)"
+  mkdir -p "$claude_dir"
+
+  # Clean up obsolete CCB commands (replaced by unified ask/ping/pend)
+  local obsolete_cmds="bask.md bpend.md bping.md cask.md cpend.md cping.md dask.md dpend.md dping.md gask.md gpend.md gping.md hask.md hpend.md hping.md lask.md lpend.md lping.md oask.md opend.md oping.md qask.md qpend.md qping.md"
+  for obs_cmd in $obsolete_cmds; do
+    if [[ -f "$claude_dir/$obs_cmd" ]]; then
+      rm -f "$claude_dir/$obs_cmd"
+      echo "  Removed obsolete command: $obs_cmd"
+    fi
+  done
+
+  for doc in "${CLAUDE_MARKDOWN[@]+"${CLAUDE_MARKDOWN[@]}"}"; do
+    cp -f "$REPO_ROOT/commands/$doc" "$claude_dir/$doc"
+    chmod 0644 "$claude_dir/$doc" 2>/dev/null || true
+  done
+
+  echo "Updated Claude commands directory: $claude_dir"
+}
+
+install_claude_skills() {
+  local skills_src="$REPO_ROOT/claude_skills"
+  local skills_dst="$HOME/.claude/skills"
+
+  if [[ ! -d "$skills_src" ]]; then
+    return
+  fi
+
+  mkdir -p "$skills_dst"
+
+  # Clean up obsolete wrapper/provider skills
+  local obsolete_skills="bask bpend bping cask cpend cping dask dpend dping gask gpend gping hask hpend hping lask lpend lping mounted oask opend oping qask qpend qping auto"
+  for obs_skill in $obsolete_skills; do
+    if [[ -d "$skills_dst/$obs_skill" ]]; then
+      rm -rf "$skills_dst/$obs_skill"
+      echo "  Removed obsolete skill: $obs_skill"
+    fi
+  done
+
+  echo "Installing Claude skills (bash SKILL.md templates)..."
+  for skill_dir in "$skills_src"/*/; do
+    [[ -d "$skill_dir" ]] || continue
+    local skill_name
+    skill_name=$(basename "$skill_dir")
+    [[ "$skill_name" == "docs" ]] && continue
+
+    local src_skill_md=""
+    if [[ -f "$skill_dir/SKILL.md.bash" ]]; then
+      src_skill_md="$skill_dir/SKILL.md.bash"
+    elif [[ -f "$skill_dir/SKILL.md" ]]; then
+      src_skill_md="$skill_dir/SKILL.md"
+    else
+      continue
+    fi
+
+    local dst_dir="$skills_dst/$skill_name"
+    local dst_skill_md="$dst_dir/SKILL.md"
+    mkdir -p "$dst_dir"
+    cp -f "$src_skill_md" "$dst_skill_md"
+
+    # Copy additional subdirectories (e.g., references/) if they exist
+    for subdir in "$skill_dir"*/; do
+      if [[ -d "$subdir" ]]; then
+        local subdir_name
+        subdir_name=$(basename "$subdir")
+        cp -rf "$subdir" "$dst_dir/$subdir_name"
+      fi
+    done
+
+    echo "  Updated skill: $skill_name"
+  done
+
+  # Shared docs live at skills/docs but are not a "skill directory". Install them as well.
+  if [[ -d "$skills_src/docs" ]]; then
+    rm -rf "$skills_dst/docs"
+    cp -r "$skills_src/docs" "$skills_dst/docs"
+    echo "  Installed skills docs: docs/"
+  fi
+
+  # Make autoloop scripts executable
+  local autoloop_sh="$skills_dst/tr/scripts/autoloop.sh"
+  local autoloop_py="$skills_dst/tr/scripts/autoloop.py"
+  [[ -f "$autoloop_sh" ]] && chmod +x "$autoloop_sh"
+  [[ -f "$autoloop_py" ]] && chmod +x "$autoloop_py"
+
+  echo "Updated Claude skills directory: $skills_dst"
+}
+
+install_codex_skills() {
+  local skills_src="$REPO_ROOT/codex_skills"
+  local skills_dst="${CODEX_HOME:-$HOME/.codex}/skills"
+
+  if [[ ! -d "$skills_src" ]]; then
+    return
+  fi
+
+  mkdir -p "$skills_dst"
+
+  # Clean up obsolete wrapper/provider skills
+  local obsolete_skills="bask bpend bping cask cpend cping dask dpend dping gask gpend gping hask hpend hping lask lpend lping mounted oask opend oping qask qpend qping"
+  for obs_skill in $obsolete_skills; do
+    if [[ -d "$skills_dst/$obs_skill" ]]; then
+      rm -rf "$skills_dst/$obs_skill"
+      echo "  Removed obsolete skill: $obs_skill"
+    fi
+  done
+
+  echo "Installing Codex skills (bash SKILL.md templates)..."
+  for skill_dir in "$skills_src"/*/; do
+    [[ -d "$skill_dir" ]] || continue
+    local skill_name
+    skill_name=$(basename "$skill_dir")
+
+    local src_skill_md=""
+    if [[ -f "$skill_dir/SKILL.md.bash" ]]; then
+      src_skill_md="$skill_dir/SKILL.md.bash"
+    elif [[ -f "$skill_dir/SKILL.md" ]]; then
+      src_skill_md="$skill_dir/SKILL.md"
+    else
+      continue
+    fi
+
+    local dst_dir="$skills_dst/$skill_name"
+    local dst_skill_md="$dst_dir/SKILL.md"
+    mkdir -p "$dst_dir"
+    cp -f "$src_skill_md" "$dst_skill_md"
+
+    # Copy additional subdirectories (e.g., references/) if they exist
+    for subdir in "$skill_dir"*/; do
+      if [[ -d "$subdir" ]]; then
+        local subdir_name
+        subdir_name=$(basename "$subdir")
+        cp -rf "$subdir" "$dst_dir/$subdir_name"
+      fi
+    done
+
+    echo "  Updated Codex skill: $skill_name"
+  done
+  echo "Updated Codex skills directory: $skills_dst"
+}
+
+install_droid_skills() {
+  local skills_src="$REPO_ROOT/droid_skills"
+  local skills_dst="${FACTORY_HOME:-$HOME/.factory}/skills"
+
+  if [[ ! -d "$skills_src" ]]; then
+    return
+  fi
+
+  if ! command -v droid >/dev/null 2>&1; then
+    return
+  fi
+
+  mkdir -p "$skills_dst"
+
+  # Clean up obsolete wrapper/provider skills
+  local obsolete_skills="bask bpend bping cask cpend cping dask dpend dping gask gpend gping hask hpend hping lask lpend lping mounted oask opend oping qask qpend qping"
+  for obs_skill in $obsolete_skills; do
+    if [[ -d "$skills_dst/$obs_skill" ]]; then
+      rm -rf "$skills_dst/$obs_skill"
+      echo "  Removed obsolete skill: $obs_skill"
+    fi
+  done
+
+  echo "Installing Droid/Factory skills..."
+  for skill_dir in "$skills_src"/*/; do
+    [[ -d "$skill_dir" ]] || continue
+    local skill_name
+    skill_name=$(basename "$skill_dir")
+
+    local src_skill_md=""
+    if [[ -f "$skill_dir/SKILL.md" ]]; then
+      src_skill_md="$skill_dir/SKILL.md"
+    else
+      continue
+    fi
+
+    local dst_dir="$skills_dst/$skill_name"
+    local dst_skill_md="$dst_dir/SKILL.md"
+    mkdir -p "$dst_dir"
+    cp -f "$src_skill_md" "$dst_skill_md"
+
+    # Copy additional subdirectories (e.g., references/) if they exist
+    for subdir in "$skill_dir"*/; do
+      if [[ -d "$subdir" ]]; then
+        local subdir_name
+        subdir_name=$(basename "$subdir")
+        cp -rf "$subdir" "$dst_dir/$subdir_name"
+      fi
+    done
+
+    echo "  Updated Factory skill: $skill_name"
+  done
+  echo "Updated Factory skills directory: $skills_dst"
+}
+
+install_droid_delegation() {
+  if [[ "${CCB_DROID_AUTOINSTALL:-1}" == "0" ]]; then
+    return
+  fi
+  if ! command -v droid >/dev/null 2>&1; then
+    return
+  fi
+  local py
+  py="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
+  if [[ -z "$py" ]]; then
+    echo "WARN: python required for Droid MCP setup; skipping"
+    return
+  fi
+  local server="$INSTALL_PREFIX/mcp/ccb-delegation/server.py"
+  if [[ ! -f "$server" ]]; then
+    echo "WARN: Droid MCP server not found at $server; skipping"
+    return
+  fi
+  if [[ "${CCB_DROID_AUTOINSTALL_FORCE:-0}" == "1" ]]; then
+    droid mcp remove ccb-delegation >/dev/null 2>&1 || true
+  fi
+  if droid mcp add ccb-delegation --type stdio "$py" "$server" >/dev/null 2>&1; then
+    echo "OK: Droid MCP delegation registered"
+  else
+    echo "WARN: Failed to register Droid MCP delegation (already registered or droid config unavailable)"
+  fi
+}
+
+CCB_START_MARKER="<!-- CCB_CONFIG_START -->"
+CCB_END_MARKER="<!-- CCB_CONFIG_END -->"
+LEGACY_RULE_MARKER="## Codex 协作规则"
+
+remove_codex_mcp() {
+  local claude_config="$HOME/.claude.json"
+
+  if [[ ! -f "$claude_config" ]]; then
+    return
+  fi
+
+  if ! pick_python_bin; then
+    echo "WARN: python required to detect MCP configuration"
+    return
+  fi
+
+  local has_codex_mcp
+  has_codex_mcp=$("$PYTHON_BIN" -c "
+import json
+
+try:
+    with open('$claude_config', 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    projects = data.get('projects', {}) if isinstance(data, dict) else {}
+    found = False
+    if isinstance(projects, dict):
+        for _proj, cfg in projects.items():
+            if not isinstance(cfg, dict):
+                continue
+            servers = cfg.get('mcpServers', {})
+            if not isinstance(servers, dict):
+                continue
+            for name in list(servers.keys()):
+                if 'codex' in str(name).lower():
+                    found = True
+                    break
+            if found:
+                break
+    print('yes' if found else 'no')
+except Exception:
+    print('no')
+" 2>/dev/null)
+
+  if [[ "$has_codex_mcp" == "yes" ]]; then
+    echo "WARN: Detected codex-related MCP configuration, removing to avoid conflicts..."
+    "$PYTHON_BIN" -c "
+import json
+import sys
+
+try:
+    with open('$claude_config', 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    removed = []
+    projects = data.get('projects', {}) if isinstance(data, dict) else {}
+    if isinstance(projects, dict):
+        for proj, cfg in projects.items():
+            if not isinstance(cfg, dict):
+                continue
+            servers = cfg.get('mcpServers')
+            if not isinstance(servers, dict):
+                continue
+            for name in list(servers.keys()):
+                if 'codex' in str(name).lower():
+                    del servers[name]
+                    removed.append(f'{proj}: {name}')
+    with open('$claude_config', 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2)
+    if removed:
+        print('Removed the following MCP configurations:')
+        for r in removed:
+            print(f'  - {r}')
+except Exception as e:
+    sys.stderr.write(f'WARN: failed cleaning MCP config: {e}\\n')
+    sys.exit(0)
+"
+    echo "OK: Codex MCP configuration cleaned"
+  fi
+}
+
+install_claude_md_config() {
+  local claude_md="$HOME/.claude/CLAUDE.md"
+  local md_mode="${CCB_CLAUDE_MD_MODE:-inline}"
+  local full_template="$INSTALL_PREFIX/config/claude-md-ccb.md"
+  local route_template="$INSTALL_PREFIX/config/claude-md-ccb-route.md"
+  local external_config="$HOME/.claude/rules/ccb-config.md"
+
+  # Select template based on mode
+  local template
+  if [[ "$md_mode" == "route" ]]; then
+    template="$route_template"
+  else
+    template="$full_template"
+  fi
+
+  mkdir -p "$HOME/.claude"
+  if ! pick_python_bin; then
+    echo "ERROR: python required to update CLAUDE.md"
+    return 1
+  fi
+
+  if [[ ! -f "$template" ]]; then
+    echo "WARN: Template not found: $template; skipping CLAUDE.md injection"
+    return 1
+  fi
+
+  # In route mode, write full config to external file
+  if [[ "$md_mode" == "route" ]]; then
+    mkdir -p "$HOME/.claude/rules"
+    cp "$full_template" "$external_config"
+    echo "Wrote full CCB config to $external_config"
+  fi
+
+  local ccb_content
+  ccb_content="$(cat "$template")"
+
+  if [[ -f "$claude_md" ]]; then
+    if grep -q "$CCB_START_MARKER" "$claude_md" 2>/dev/null; then
+      echo "Updating existing CCB config block (mode: $md_mode)..."
+      "$PYTHON_BIN" -c "
+import re, sys
+
+with open(sys.argv[1], 'r', encoding='utf-8') as f:
+    content = f.read()
+with open(sys.argv[2], 'r', encoding='utf-8') as f:
+    new_block = f.read().strip()
+pattern = r'<!-- CCB_CONFIG_START -->.*?<!-- CCB_CONFIG_END -->'
+content = re.sub(pattern, new_block, content, flags=re.DOTALL)
+with open(sys.argv[1], 'w', encoding='utf-8') as f:
+    f.write(content)
+" "$claude_md" "$template"
+    elif grep -qE "$LEGACY_RULE_MARKER|## Codex Collaboration Rules|## Gemini|## OpenCode" "$claude_md" 2>/dev/null; then
+      echo "Removing legacy rules and adding new CCB config block..."
+      "$PYTHON_BIN" -c "
+import re, sys
+
+with open(sys.argv[1], 'r', encoding='utf-8') as f:
+    content = f.read()
+patterns = [
+    r'## Codex Collaboration Rules.*?(?=\n## (?!Gemini)|\Z)',
+    r'## Codex 协作规则.*?(?=\n## |\Z)',
+    r'## Gemini Collaboration Rules.*?(?=\n## |\Z)',
+    r'## Gemini 协作规则.*?(?=\n## |\Z)',
+    r'## OpenCode Collaboration Rules.*?(?=\n## |\Z)',
+    r'## OpenCode 协作规则.*?(?=\n## |\Z)',
+]
+for p in patterns:
+    content = re.sub(p, '', content, flags=re.DOTALL)
+content = content.rstrip() + '\n'
+with open(sys.argv[1], 'w', encoding='utf-8') as f:
+    f.write(content)
+" "$claude_md"
+      cat "$template" >> "$claude_md"
+    else
+      echo "" >> "$claude_md"
+      cat "$template" >> "$claude_md"
+    fi
+  else
+    cat "$template" > "$claude_md"
+  fi
+
+  echo "Updated AI collaboration rules in $claude_md (mode: $md_mode)"
+}
+
+CCB_ROLES_START_MARKER="<!-- CCB_ROLES_START -->"
+CCB_ROLES_END_MARKER="<!-- CCB_ROLES_END -->"
+CCB_RUBRICS_START_MARKER="<!-- REVIEW_RUBRICS_START -->"
+CCB_RUBRICS_END_MARKER="<!-- REVIEW_RUBRICS_END -->"
+
+install_agents_md_config() {
+  local agents_md="$INSTALL_PREFIX/AGENTS.md"
+  local template="$INSTALL_PREFIX/config/agents-md-ccb.md"
+
+  if ! pick_python_bin; then
+    echo "WARN: python required to update AGENTS.md; skipping"
+    return 1
+  fi
+  if [[ ! -f "$template" ]]; then
+    echo "WARN: Template not found: $template; skipping AGENTS.md injection"
+    return 1
+  fi
+
+  if [[ -f "$agents_md" ]]; then
+    # Replace existing CCB blocks if present
+    local updated=false
+    if grep -q "$CCB_ROLES_START_MARKER" "$agents_md" 2>/dev/null || \
+       grep -q "$CCB_RUBRICS_START_MARKER" "$agents_md" 2>/dev/null; then
+      echo "Updating existing CCB blocks in AGENTS.md..."
+      "$PYTHON_BIN" -c "
+import re, sys
+
+with open(sys.argv[1], 'r', encoding='utf-8') as f:
+    content = f.read()
+with open(sys.argv[2], 'r', encoding='utf-8') as f:
+    new_block = f.read().strip()
+
+# Remove old roles block
+content = re.sub(
+    r'<!-- CCB_ROLES_START -->.*?<!-- CCB_ROLES_END -->',
+    '', content, flags=re.DOTALL)
+# Remove old rubrics block
+content = re.sub(
+    r'<!-- REVIEW_RUBRICS_START -->.*?<!-- REVIEW_RUBRICS_END -->',
+    '', content, flags=re.DOTALL)
+content = content.rstrip() + '\n\n' + new_block + '\n'
+with open(sys.argv[1], 'w', encoding='utf-8') as f:
+    f.write(content)
+" "$agents_md" "$template"
+      updated=true
+    fi
+    if ! $updated; then
+      echo "" >> "$agents_md"
+      cat "$template" >> "$agents_md"
+    fi
+  else
+    cat "$template" > "$agents_md"
+  fi
+
+  echo "Updated AGENTS.md: $agents_md"
+}
+
+install_clinerules_config() {
+  local clinerules="$INSTALL_PREFIX/.clinerules"
+  local template="$INSTALL_PREFIX/config/clinerules-ccb.md"
+
+  if ! pick_python_bin; then
+    echo "WARN: python required to update .clinerules; skipping"
+    return 1
+  fi
+  if [[ ! -f "$template" ]]; then
+    echo "WARN: Template not found: $template; skipping .clinerules injection"
+    return 1
+  fi
+
+  if [[ -f "$clinerules" ]]; then
+    if grep -q "$CCB_ROLES_START_MARKER" "$clinerules" 2>/dev/null; then
+      echo "Updating existing CCB roles block in .clinerules..."
+      "$PYTHON_BIN" -c "
+import re, sys
+
+with open(sys.argv[1], 'r', encoding='utf-8') as f:
+    content = f.read()
+with open(sys.argv[2], 'r', encoding='utf-8') as f:
+    new_block = f.read().strip()
+
+content = re.sub(
+    r'<!-- CCB_ROLES_START -->.*?<!-- CCB_ROLES_END -->',
+    new_block, content, flags=re.DOTALL)
+with open(sys.argv[1], 'w', encoding='utf-8') as f:
+    f.write(content)
+" "$clinerules" "$template"
+    else
+      echo "" >> "$clinerules"
+      cat "$template" >> "$clinerules"
+    fi
+  else
+    cat "$template" > "$clinerules"
+  fi
+
+  echo "Updated .clinerules: $clinerules"
+}
+
+install_settings_permissions() {
+  local settings_file="$HOME/.claude/settings.json"
+  mkdir -p "$HOME/.claude"
+
+  local perms_to_add=(
+    'Bash(ccb ask *)'
+    'Bash(ccb ping *)'
+    'Bash(ccb pend *)'
+  )
+
+  if [[ ! -f "$settings_file" ]]; then
+    cat > "$settings_file" << 'SETTINGS'
+{
+	  "permissions": {
+	    "allow": [
+	      "Bash(ccb ask *)",
+	      "Bash(ccb ping *)",
+	      "Bash(ccb pend *)"
+	    ],
+    "deny": []
+  }
+}
+SETTINGS
+    echo "Created $settings_file with permissions"
+    return
+  fi
+
+  local perms_to_remove=(
+    'Bash(ask *)'
+    'Bash(ccb provider ping *)'
+    'Bash(ccb provider pend *)'
+    'Bash(ping *)'
+    'Bash(ccb-ping *)'
+    'Bash(pend *)'
+  )
+  if pick_python_bin; then
+    local add_json remove_json
+    add_json="$(printf '%s\n' "${perms_to_add[@]}" | "$PYTHON_BIN" -c 'import json,sys; print(json.dumps([line.rstrip("\n") for line in sys.stdin]))')"
+    remove_json="$(printf '%s\n' "${perms_to_remove[@]}" | "$PYTHON_BIN" -c 'import json,sys; print(json.dumps([line.rstrip("\n") for line in sys.stdin]))')"
+    "$PYTHON_BIN" -c "
+import json
+
+path = '$settings_file'
+perms_to_add = json.loads('''$add_json''')
+perms_to_remove = set(json.loads('''$remove_json'''))
+
+try:
+    with open(path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+except Exception:
+    data = {}
+
+if not isinstance(data, dict):
+    data = {}
+perms = data.get('permissions')
+if not isinstance(perms, dict):
+    perms = {}
+    data['permissions'] = perms
+allow = perms.get('allow')
+if not isinstance(allow, list):
+    allow = []
+deny = perms.get('deny')
+if not isinstance(deny, list):
+    deny = []
+
+new_allow = [entry for entry in allow if entry not in perms_to_remove]
+for entry in perms_to_add:
+    if entry not in new_allow:
+        new_allow.append(entry)
+
+perms['allow'] = new_allow
+perms['deny'] = deny
+
+with open(path, 'w', encoding='utf-8') as f:
+    json.dump(data, f, ensure_ascii=False, indent=2)
+    f.write('\n')
+" || return 1
+    echo "Updated $settings_file permissions"
+  else
+    echo "WARN: python required to update $settings_file permissions"
+  fi
+}
+
+CCB_TMUX_MARKER="# CCB (Claude Code Bridge) tmux configuration"
+CCB_TMUX_MARKER_LEGACY="# CCB tmux configuration"
+
+remove_ccb_tmux_block_from_file() {
+  local target_conf="$1"
+
+  if [[ ! -f "$target_conf" ]]; then
+    return 0
+  fi
+
+  if ! grep -q "$CCB_TMUX_MARKER" "$target_conf" 2>/dev/null && \
+     ! grep -q "$CCB_TMUX_MARKER_LEGACY" "$target_conf" 2>/dev/null; then
+    return 0
+  fi
+
+  if ! pick_any_python_bin; then
+    return 1
+  fi
+
+  "$PYTHON_BIN" -c "
+import re
+path = '$target_conf'
+with open(path, 'r', encoding='utf-8') as f:
+    content = f.read()
+# Remove CCB tmux config block (both new and legacy markers)
+pattern = r'\n*# =+\n# CCB \(Claude Code Bridge\) tmux configuration.*?# =+\n# End of CCB tmux configuration\n# =+'
+content = re.sub(pattern, '', content, flags=re.DOTALL)
+pattern = r'\n*# CCB tmux configuration.*'
+content = re.sub(pattern, '', content, flags=re.DOTALL)
+with open(path, 'w', encoding='utf-8') as f:
+    f.write(content.strip() + '\n' if content.strip() else '')
+"
+}
+
+install_tmux_config() {
+  local tmux_conf_main="$HOME/.tmux.conf"
+  local tmux_conf_local="$HOME/.tmux.conf.local"
+  local tmux_conf="$tmux_conf_main"
+  local reload_conf="$tmux_conf_main"
+  local ccb_tmux_conf="$REPO_ROOT/config/tmux-ccb.conf"
+  local ccb_status_script="$REPO_ROOT/config/ccb-status.sh"
+  local status_install_path="$BIN_DIR/ccb-status.sh"
+
+  if [[ ! -f "$ccb_tmux_conf" ]]; then
+    return
+  fi
+
+  mkdir -p "$BIN_DIR"
+
+  # Install ccb-status.sh script
+  if [[ -f "$ccb_status_script" ]]; then
+    cp "$ccb_status_script" "$status_install_path"
+    chmod +x "$status_install_path"
+    echo "Installed: $status_install_path"
+  fi
+
+  # Install ccb-border.sh script (dynamic pane border colors)
+  local ccb_border_script="$REPO_ROOT/config/ccb-border.sh"
+  local border_install_path="$BIN_DIR/ccb-border.sh"
+  if [[ -f "$ccb_border_script" ]]; then
+    cp "$ccb_border_script" "$border_install_path"
+    chmod +x "$border_install_path"
+    echo "Installed: $border_install_path"
+  fi
+
+  # Install ccb-git.sh script (cached git status for tmux status line)
+  local ccb_git_script="$REPO_ROOT/config/ccb-git.sh"
+  local git_install_path="$BIN_DIR/ccb-git.sh"
+  if [[ -f "$ccb_git_script" ]]; then
+    cp "$ccb_git_script" "$git_install_path"
+    chmod +x "$git_install_path"
+    echo "Installed: $git_install_path"
+  fi
+
+  # Install tmux UI toggle scripts (enable/disable CCB theming per-session)
+  local ccb_tmux_on_script="$REPO_ROOT/config/ccb-tmux-on.sh"
+  local ccb_tmux_off_script="$REPO_ROOT/config/ccb-tmux-off.sh"
+  if [[ -f "$ccb_tmux_on_script" ]]; then
+    cp "$ccb_tmux_on_script" "$BIN_DIR/ccb-tmux-on.sh"
+    chmod +x "$BIN_DIR/ccb-tmux-on.sh"
+    echo "Installed: $BIN_DIR/ccb-tmux-on.sh"
+  fi
+  if [[ -f "$ccb_tmux_off_script" ]]; then
+    cp "$ccb_tmux_off_script" "$BIN_DIR/ccb-tmux-off.sh"
+    chmod +x "$BIN_DIR/ccb-tmux-off.sh"
+    echo "Installed: $BIN_DIR/ccb-tmux-off.sh"
+  fi
+
+  # Oh-My-Tmux keeps user customizations in ~/.tmux.conf.local.
+  # Appending to ~/.tmux.conf can break its internal _apply_configuration script.
+  if [[ -f "$tmux_conf_main" ]] && grep -q 'TMUX_CONF_LOCAL' "$tmux_conf_main" 2>/dev/null; then
+    tmux_conf="$tmux_conf_local"
+    reload_conf="$tmux_conf_main"
+    if [[ ! -f "$tmux_conf_local" ]]; then
+      touch "$tmux_conf_local"
+    fi
+  else
+    reload_conf="$tmux_conf"
+  fi
+
+  # Check if already configured (new or legacy marker) in either main/local config.
+  local already_configured=false
+  for conf in "$tmux_conf_main" "$tmux_conf_local"; do
+    if [[ -f "$conf" ]] && \
+      (grep -q "$CCB_TMUX_MARKER" "$conf" 2>/dev/null || \
+       grep -q "$CCB_TMUX_MARKER_LEGACY" "$conf" 2>/dev/null); then
+      already_configured=true
+      break
+    fi
+  done
+
+  if $already_configured; then
+    # Update existing config: remove old CCB block(s) and re-add at target location.
+    echo "Updating CCB tmux configuration..."
+    remove_ccb_tmux_block_from_file "$tmux_conf_main" || true
+    remove_ccb_tmux_block_from_file "$tmux_conf_local" || true
+  else
+    # Backup existing config if present
+    if [[ -f "$tmux_conf" ]]; then
+      cp "$tmux_conf" "$tmux_conf.bak.$(date +%Y%m%d%H%M%S)"
+    fi
+  fi
+
+  # Append CCB tmux config (fill in BIN_DIR placeholders)
+  {
+    echo ""
+    if pick_any_python_bin; then
+      "$PYTHON_BIN" -c "
+import sys
+
+path = '$ccb_tmux_conf'
+bin_dir = '$BIN_DIR'
+with open(path, 'r', encoding='utf-8') as f:
+    content = f.read()
+sys.stdout.write(content.replace('@CCB_BIN_DIR@', bin_dir))
+" 2>/dev/null || cat "$ccb_tmux_conf"
+    else
+      cat "$ccb_tmux_conf"
+    fi
+  } >> "$tmux_conf"
+
+  echo "Updated tmux configuration: $tmux_conf"
+  echo "   - CCB tmux integration (copy mode, mouse, pane management)"
+  echo "   - CCB theme is enabled only while CCB is running (auto restore on exit)"
+  echo "   - Vi-style pane management with h/j/k/l"
+  echo "   - Mouse support and better copy mode"
+  echo "   - Run 'tmux source $reload_conf' to apply (or restart tmux)"
+
+  # Best-effort: if a tmux server is already running, reload config automatically.
+  # (Avoid spawning a new server when tmux isn't running.)
+  if command -v tmux >/dev/null 2>&1; then
+    if tmux list-sessions >/dev/null 2>&1; then
+      if tmux source-file "$reload_conf" >/dev/null 2>&1; then
+        echo "Reloaded tmux configuration in running server."
+      else
+        echo "WARN: Failed to reload tmux configuration automatically; run: tmux source $reload_conf"
+      fi
+    fi
+  fi
+}
+
+uninstall_tmux_config() {
+  local tmux_conf_main="$HOME/.tmux.conf"
+  local tmux_conf_local="$HOME/.tmux.conf.local"
+  local status_script="$BIN_DIR/ccb-status.sh"
+  local border_script="$BIN_DIR/ccb-border.sh"
+  local tmux_on_script="$BIN_DIR/ccb-tmux-on.sh"
+  local tmux_off_script="$BIN_DIR/ccb-tmux-off.sh"
+
+  # Remove ccb-status.sh script
+  if [[ -f "$status_script" ]]; then
+    rm -f "$status_script"
+    echo "Removed: $status_script"
+  fi
+
+  # Remove ccb-border.sh script
+  if [[ -f "$border_script" ]]; then
+    rm -f "$border_script"
+    echo "Removed: $border_script"
+  fi
+
+  # Remove tmux UI toggle scripts
+  if [[ -f "$tmux_on_script" ]]; then
+    rm -f "$tmux_on_script"
+    echo "Removed: $tmux_on_script"
+  fi
+  if [[ -f "$tmux_off_script" ]]; then
+    rm -f "$tmux_off_script"
+    echo "Removed: $tmux_off_script"
+  fi
+
+  local removed_any=false
+  for conf in "$tmux_conf_main" "$tmux_conf_local"; do
+    if [[ -f "$conf" ]] && \
+      (grep -q "$CCB_TMUX_MARKER" "$conf" 2>/dev/null || \
+       grep -q "$CCB_TMUX_MARKER_LEGACY" "$conf" 2>/dev/null); then
+      echo "Removing CCB tmux configuration from $conf..."
+      if remove_ccb_tmux_block_from_file "$conf"; then
+        echo "Removed CCB tmux configuration from $conf"
+        removed_any=true
+      fi
+    fi
+  done
+
+  if ! $removed_any; then
+    return
+  fi
+}
+
+install_requirements() {
+  check_wsl_compatibility
+  confirm_backend_env_wsl
+  require_python_version
+  install_watchdog || true
+  require_terminal_backend
+}
+
+# Clean up legacy daemon files from the pre-ccbd era
+cleanup_legacy_files() {
+  echo "Cleaning up legacy files..."
+  local cleaned=0
+
+  # Legacy daemon scripts in bin/
+  local legacy_daemons="caskd gaskd oaskd laskd daskd"
+  for daemon in $legacy_daemons; do
+    if [[ -f "$BIN_DIR/$daemon" ]]; then
+      rm -f "$BIN_DIR/$daemon"
+      echo "  Removed legacy daemon script: $BIN_DIR/$daemon"
+      cleaned=$((cleaned + 1))
+    fi
+    # Also check install prefix bin
+    if [[ -f "$INSTALL_PREFIX/bin/$daemon" ]]; then
+      rm -f "$INSTALL_PREFIX/bin/$daemon"
+      echo "  Removed legacy daemon script: $INSTALL_PREFIX/bin/$daemon"
+      cleaned=$((cleaned + 1))
+    fi
+  done
+
+  # Legacy daemon state files in ~/.cache/ccb/
+  local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/ccb"
+  local legacy_states="caskd.json gaskd.json oaskd.json laskd.json daskd.json"
+  for state in $legacy_states; do
+    if [[ -f "$cache_dir/$state" ]]; then
+      rm -f "$cache_dir/$state"
+      echo "  Removed legacy state file: $cache_dir/$state"
+      cleaned=$((cleaned + 1))
+    fi
+  done
+
+  # Legacy daemon module files in lib/
+  local legacy_modules="caskd_daemon.py gaskd_daemon.py oaskd_daemon.py laskd_daemon.py daskd_daemon.py"
+  for module in $legacy_modules; do
+    if [[ -f "$INSTALL_PREFIX/lib/$module" ]]; then
+      rm -f "$INSTALL_PREFIX/lib/$module"
+      echo "  Removed legacy module: $INSTALL_PREFIX/lib/$module"
+      cleaned=$((cleaned + 1))
+    fi
+  done
+
+  if [[ $cleaned -eq 0 ]]; then
+    echo "  No legacy files found"
+  else
+    echo "  Cleaned up $cleaned legacy file(s)"
+  fi
+}
+
+install_all() {
+  install_requirements
+  remove_codex_mcp
+  cleanup_legacy_files
+  copy_project
+  install_bin_links
+  ensure_path_configured
+  install_claude_commands
+  install_claude_skills
+  install_codex_skills
+  install_droid_skills
+  install_droid_delegation
+  install_claude_md_config
+  install_agents_md_config
+  install_clinerules_config
+  install_settings_permissions
+  install_tmux_config
+  echo "OK: Installation complete"
+  echo "   Project dir    : $INSTALL_PREFIX"
+  echo "   Executable dir : $BIN_DIR"
+  echo "   Claude commands updated"
+  local md_mode="${CCB_CLAUDE_MD_MODE:-inline}"
+  if [[ "$md_mode" == "route" ]]; then
+    echo "   Global CLAUDE.md configured with CCB route pointer (full config in ~/.claude/rules/ccb-config.md)"
+  else
+    echo "   Global CLAUDE.md configured with CCB collaboration rules (inline)"
+  fi
+  echo "   AGENTS.md configured with review rubrics"
+  echo "   .clinerules configured with role assignments"
+  echo "   Global settings.json permissions added"
+}
+
+uninstall_claude_md_config() {
+  local claude_md="$HOME/.claude/CLAUDE.md"
+
+  if [[ ! -f "$claude_md" ]]; then
+    return
+  fi
+
+  if grep -q "$CCB_START_MARKER" "$claude_md" 2>/dev/null; then
+    echo "Removing CCB config block from CLAUDE.md..."
+    if pick_any_python_bin; then
+      "$PYTHON_BIN" -c "
+import re
+
+with open('$claude_md', 'r', encoding='utf-8') as f:
+    content = f.read()
+pattern = r'\\n?<!-- CCB_CONFIG_START -->.*?<!-- CCB_CONFIG_END -->\\n?'
+content = re.sub(pattern, '\\n', content, flags=re.DOTALL)
+content = content.strip() + '\\n'
+with open('$claude_md', 'w', encoding='utf-8') as f:
+    f.write(content)
+"
+      echo "Removed CCB config from CLAUDE.md"
+    else
+      echo "WARN: python required to clean CLAUDE.md, please manually remove CCB_CONFIG block"
+    fi
+  elif grep -qE "$LEGACY_RULE_MARKER|## Codex Collaboration Rules|## Gemini|## OpenCode" "$claude_md" 2>/dev/null; then
+    echo "Removing legacy collaboration rules from CLAUDE.md..."
+    if pick_any_python_bin; then
+      "$PYTHON_BIN" -c "
+import re
+
+with open('$claude_md', 'r', encoding='utf-8') as f:
+    content = f.read()
+patterns = [
+    r'## Codex Collaboration Rules.*?(?=\\n## (?!Gemini)|\\Z)',
+    r'## Codex 协作规则.*?(?=\\n## |\\Z)',
+    r'## Gemini Collaboration Rules.*?(?=\\n## |\\Z)',
+    r'## Gemini 协作规则.*?(?=\\n## |\\Z)',
+    r'## OpenCode Collaboration Rules.*?(?=\\n## |\\Z)',
+    r'## OpenCode 协作规则.*?(?=\\n## |\\Z)',
+]
+for p in patterns:
+    content = re.sub(p, '', content, flags=re.DOTALL)
+content = content.rstrip() + '\\n'
+with open('$claude_md', 'w', encoding='utf-8') as f:
+    f.write(content)
+"
+      echo "Removed collaboration rules from CLAUDE.md"
+    else
+      echo "WARN: python required to clean CLAUDE.md, please manually remove collaboration rules"
+    fi
+  fi
+
+  # Clean up external config file if it exists (route mode)
+  local external_config="$HOME/.claude/rules/ccb-config.md"
+  if [[ -f "$external_config" ]]; then
+    rm -f "$external_config"
+    echo "Removed external CCB config: $external_config"
+  fi
+}
+
+uninstall_settings_permissions() {
+  local settings_file="$HOME/.claude/settings.json"
+
+  if [[ ! -f "$settings_file" ]]; then
+    return
+  fi
+
+  local perms_to_remove=(
+    'Bash(ccb ask *)'
+    'Bash(ccb ping *)'
+    'Bash(ccb pend *)'
+    'Bash(ask *)'
+    'Bash(ccb provider ping *)'
+    'Bash(ccb provider pend *)'
+    'Bash(ping *)'
+    'Bash(ccb-ping *)'
+    'Bash(pend *)'
+    'Bash(bask:*)'
+    'Bash(bpend)'
+    'Bash(bping)'
+    'Bash(cask:*)'
+    'Bash(cpend)'
+    'Bash(cping)'
+    'Bash(dask:*)'
+    'Bash(dpend)'
+    'Bash(dping)'
+    'Bash(gask:*)'
+    'Bash(gpend)'
+    'Bash(gping)'
+    'Bash(hask:*)'
+    'Bash(hpend)'
+    'Bash(hping)'
+    'Bash(lask:*)'
+    'Bash(lpend)'
+    'Bash(lping)'
+    'Bash(oask:*)'
+    'Bash(opend)'
+    'Bash(oping)'
+    'Bash(qask:*)'
+    'Bash(qpend)'
+    'Bash(qping)'
+  )
+
+  if pick_any_python_bin; then
+    local has_perms=0
+    for perm in "${perms_to_remove[@]}"; do
+      if grep -q "$perm" "$settings_file" 2>/dev/null; then
+        has_perms=1
+        break
+      fi
+    done
+
+    if [[ $has_perms -eq 1 ]]; then
+      echo "Removing permission configuration from settings.json..."
+      "$PYTHON_BIN" -c "
+import json
+import sys
+
+path = '$settings_file'
+perms_to_remove = [
+    'Bash(ccb ask *)',
+    'Bash(ccb ping *)',
+    'Bash(ccb pend *)',
+    'Bash(ask *)',
+    'Bash(ccb provider ping *)',
+    'Bash(ccb provider pend *)',
+    'Bash(ping *)',
+    'Bash(ccb-ping *)',
+    'Bash(pend *)',
+    'Bash(bask:*)',
+    'Bash(bpend)',
+    'Bash(bping)',
+    'Bash(cask:*)',
+    'Bash(cpend)',
+    'Bash(cping)',
+    'Bash(dask:*)',
+    'Bash(dpend)',
+    'Bash(dping)',
+    'Bash(gask:*)',
+    'Bash(gpend)',
+    'Bash(gping)',
+    'Bash(hask:*)',
+    'Bash(hpend)',
+    'Bash(hping)',
+    'Bash(lask:*)',
+    'Bash(lpend)',
+    'Bash(lping)',
+    'Bash(oask:*)',
+    'Bash(opend)',
+    'Bash(oping)',
+    'Bash(qask:*)',
+    'Bash(qpend)',
+    'Bash(qping)',
+]
+try:
+    with open(path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        sys.exit(0)
+    perms = data.get('permissions')
+    if not isinstance(perms, dict):
+        sys.exit(0)
+    allow = perms.get('allow')
+    if not isinstance(allow, list):
+        sys.exit(0)
+    perms['allow'] = [p for p in allow if p not in perms_to_remove]
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2)
+except Exception:
+    sys.exit(0)
+"
+      echo "Removed permission configuration from settings.json"
+    fi
+  else
+    echo "WARN: python required to clean settings.json, please manually remove related permissions"
+  fi
+}
+
+uninstall_claude_skills() {
+  local skills_dst="$HOME/.claude/skills"
+  local ccb_skills="ask ping pend autonew all-plan docs tp tr file-op review continue"
+
+  if [[ ! -d "$skills_dst" ]]; then
+    return
+  fi
+
+  echo "Removing CCB Claude skills..."
+  for skill in $ccb_skills; do
+    if [[ -d "$skills_dst/$skill" ]]; then
+      rm -rf "$skills_dst/$skill"
+      echo "  Removed skill: $skill"
+    fi
+  done
+}
+
+uninstall_codex_skills() {
+  local skills_dst="${CODEX_HOME:-$HOME/.codex}/skills"
+  local ccb_skills="ask ping pend autonew all-plan file-op"
+
+  if [[ ! -d "$skills_dst" ]]; then
+    return
+  fi
+
+  echo "Removing CCB Codex skills..."
+  for skill in $ccb_skills; do
+    if [[ -d "$skills_dst/$skill" ]]; then
+      rm -rf "$skills_dst/$skill"
+      echo "  Removed skill: $skill"
+    fi
+  done
+}
+
+uninstall_droid_skills() {
+  local skills_dst="${FACTORY_HOME:-$HOME/.factory}/skills"
+  local ccb_skills="ask ping pend autonew all-plan"
+
+  if [[ ! -d "$skills_dst" ]]; then
+    return
+  fi
+
+  echo "Removing CCB Droid skills..."
+  for skill in $ccb_skills; do
+    if [[ -d "$skills_dst/$skill" ]]; then
+      rm -rf "$skills_dst/$skill"
+      echo "  Removed skill: $skill"
+    fi
+  done
+}
+
+uninstall_droid_delegation() {
+  if ! command -v droid >/dev/null 2>&1; then
+    return
+  fi
+
+  echo "Removing Droid MCP delegation..."
+  if droid mcp remove ccb-delegation >/dev/null 2>&1; then
+    echo "  Removed ccb-delegation MCP"
+  fi
+}
+
+uninstall_droid_commands() {
+  local cmds_dst="${FACTORY_HOME:-$HOME/.factory}/commands"
+  local ccb_cmds="ask.md ping.md pend.md"
+
+  if [[ ! -d "$cmds_dst" ]]; then
+    return
+  fi
+
+  echo "Removing CCB Droid commands..."
+  for cmd in $ccb_cmds; do
+    if [[ -f "$cmds_dst/$cmd" ]]; then
+      rm -f "$cmds_dst/$cmd"
+      echo "  Removed command: $cmd"
+    fi
+  done
+}
+
+uninstall_all() {
+  echo "INFO: Starting ccb uninstall..."
+
+  # 1. Remove project directory
+  if [[ -d "$INSTALL_PREFIX" ]]; then
+    rm -rf "$INSTALL_PREFIX"
+    echo "Removed project directory: $INSTALL_PREFIX"
+  fi
+
+  # 2. Remove bin links
+  for path in "${SCRIPTS_TO_LINK[@]}"; do
+    local name
+    name="$(basename "$path")"
+    if [[ -L "$BIN_DIR/$name" || -f "$BIN_DIR/$name" ]]; then
+      rm -f "$BIN_DIR/$name"
+    fi
+  done
+  for legacy in "${LEGACY_SCRIPTS[@]}"; do
+    rm -f "$BIN_DIR/$legacy"
+  done
+  echo "Removed bin links: $BIN_DIR"
+
+  # 3. Remove Claude command files (clean all possible locations)
+  local cmd_dirs=(
+    "$HOME/.claude/commands"
+    "$HOME/.config/claude/commands"
+    "$HOME/.local/share/claude/commands"
+  )
+  for dir in "${cmd_dirs[@]}"; do
+    if [[ -d "$dir" ]]; then
+      for doc in "${CLAUDE_MARKDOWN[@]+"${CLAUDE_MARKDOWN[@]}"}"; do
+        rm -f "$dir/$doc"
+      done
+      echo "Cleaned commands directory: $dir"
+    fi
+  done
+
+  # 4. Remove collaboration rules from CLAUDE.md
+  uninstall_claude_md_config
+
+  # 5. Remove permission configuration from settings.json
+  uninstall_settings_permissions
+
+  # 6. Remove tmux configuration
+  uninstall_tmux_config
+
+  # 7. Remove Claude skills
+  uninstall_claude_skills
+
+  # 8. Remove Codex skills
+  uninstall_codex_skills
+
+  # 9. Remove Droid skills
+  uninstall_droid_skills
+
+  # 10. Remove Droid MCP delegation
+  uninstall_droid_delegation
+
+  # 11. Remove Droid commands
+  uninstall_droid_commands
+
+  echo "OK: Uninstall complete"
+  echo "   NOTE: Dependencies (python, tmux) were not removed"
+}
+
+main() {
+  if [[ $# -ne 1 ]]; then
+    usage
+    exit 1
+  fi
+
+  case "$1" in
+    install)
+      install_all
+      ;;
+    uninstall)
+      uninstall_all
+      ;;
+    *)
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

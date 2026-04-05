@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""
+ccb (Claude Code Bridge) - Unified AI Launcher
+Supports Claude + Codex / Claude + Gemini / all three simultaneously
+Uses tmux as the project UI backend
+"""
+
+import sys
+import os
+import getpass
+import shlex
+import subprocess
+import tempfile
+import time
+from pathlib import Path
+
+script_dir = Path(__file__).resolve().parent
+sys.path.insert(0, str(script_dir / "lib"))
+from terminal_runtime import TmuxBackend, detect_terminal
+from compat import setup_windows_encoding
+from terminal_runtime.backend_env import get_backend_env
+from provider_core.runtime_specs import CLIENT_SPECS_BY_PROVIDER
+from cli.entrypoint import run_cli_entrypoint
+
+setup_windows_encoding()
+
+backend_env = get_backend_env()
+if backend_env and not os.environ.get("CCB_BACKEND_ENV"):
+    os.environ["CCB_BACKEND_ENV"] = backend_env
+
+VERSION = "5.2.8"
+GIT_COMMIT = "fd920aa"
+GIT_DATE = "2026-03-21"
+SUPPORTED_CLIENT_SPECS = dict(CLIENT_SPECS_BY_PROVIDER)
+
+
+class AILauncher:
+    def __init__(
+        self,
+        providers: list,
+        resume: bool = False,
+        auto: bool = False,
+        cmd_config: dict | None = None,
+    ) -> None:
+        from launcher.app import LauncherApp
+
+        object.__setattr__(
+            self,
+            "_launcher",
+            LauncherApp(
+                providers,
+                resume=resume,
+                auto=auto,
+                cmd_config=cmd_config,
+                script_dir=script_dir,
+                version=VERSION,
+                supported_client_specs=SUPPORTED_CLIENT_SPECS,
+                tmux_backend_cls=TmuxBackend,
+                detect_terminal_fn=detect_terminal,
+                os_module=os,
+                subprocess_module=subprocess,
+                tempfile_module=tempfile,
+                time_module=time,
+                getpass_module=getpass,
+                shlex_module=shlex,
+            ),
+        )
+
+    def __getattr__(self, name: str):
+        return getattr(self._launcher, name)
+
+    def __setattr__(self, name: str, value) -> None:
+        if name == "_launcher":
+            object.__setattr__(self, name, value)
+            return
+        setattr(self._launcher, name, value)
+
+    def __dir__(self):
+        return sorted(set(super().__dir__()) | set(dir(self._launcher)))
+
+
+def main():
+    return run_cli_entrypoint(
+        sys.argv[1:],
+        version=VERSION,
+        script_root=script_dir,
+        cwd=Path.cwd(),
+        stdout=sys.stdout,
+        stderr=sys.stderr,
+    )
+
+
+if __name__ == "__main__":
+    sys.exit(main())

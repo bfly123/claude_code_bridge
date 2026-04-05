@@ -1,0 +1,30 @@
+---
+name: pend
+description: Inspect the latest CCB mailbox/job reply for a named agent or `job_id`.
+metadata:
+  short-description: Inspect CCB reply
+---
+
+# Pend Job Or Agent
+
+Inspect the latest mailbox/job reply for a named agent or a specific `job_id`.
+
+## Usage
+
+The first argument must be:
+- an agent name from `.ccb/ccb.config`, or
+- a `job_id`
+
+Optional: Add a number N to show the latest N conversations.
+
+## Execution (MANDATORY)
+
+```powershell
+ccb pend $ARGUMENTS
+```
+
+## Examples
+
+- `/pend agent1`
+- `/pend agent2 3`
+- `/pend job_1234567890ab`

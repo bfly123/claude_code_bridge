@@ -1,0 +1,51 @@
+{
+  "schema_version": 2,
+  "record_type": "ccbd_startup_report",
+  "api_version": 2,
+  "project_id": "e06ef1a6cde2e694ef3379d18a7f3794e21946934a534a8e117f1068c806a452",
+  "generated_at": "2026-04-03T11:53:40.978171Z",
+  "trigger": "daemon_boot",
+  "status": "failed",
+  "requested_agents": [],
+  "desired_agents": [
+    "demo"
+  ],
+  "restore_requested": false,
+  "auto_permission": false,
+  "daemon_generation": 1,
+  "daemon_started": true,
+  "config_signature": "c3b071c258ad8f001bbeca837f9012584aa40db33f4c044cc7510f4df8182ad1",
+  "inspection": {
+    "health": "unmounted",
+    "pid_alive": true,
+    "socket_connectable": false,
+    "heartbeat_fresh": true,
+    "takeover_allowed": true,
+    "reason": "lease_unmounted",
+    "lease": {
+      "schema_version": 2,
+      "record_type": "ccbd_lease",
+      "api_version": 2,
+      "project_id": "e06ef1a6cde2e694ef3379d18a7f3794e21946934a534a8e117f1068c806a452",
+      "ccbd_pid": 1822551,
+      "socket_path": "/home/bfly/yunwei/ccb_source/.tmp_pytest/pytest-of-bfly/pytest-2/test_ccbd_socket_droid_legacy_0/repo-droid/.ccb/ccbd/ccbd.sock",
+      "owner_uid": 1000,
+      "boot_id": "42a04432-fc77-4321-8953-ad3edf51616f",
+      "started_at": "2026-04-03T11:53:40.977335Z",
+      "last_heartbeat_at": "2026-04-03T11:53:40.977872Z",
+      "mount_state": "unmounted",
+      "generation": 1,
+      "config_signature": "c3b071c258ad8f001bbeca837f9012584aa40db33f4c044cc7510f4df8182ad1",
+      "keeper_pid": null,
+      "daemon_instance_id": "b06211c43f2b4db69eeb3625a391fc6a"
+    }
+  },
+  "restore_summary": {},
+  "actions_taken": [
+    "mount_backend",
+    "listen_socket_failed"
+  ],
+  "cleanup_summaries": [],
+  "agent_results": [],
+  "failure_reason": "AF_UNIX path too long"
+}

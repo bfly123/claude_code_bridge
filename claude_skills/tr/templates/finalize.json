@@ -1,0 +1,21 @@
+{
+  "proto": "autoflow.fileops.v1",
+  "id": "TR-FINALIZE",
+  "purpose": "finalize_step",
+  "summary": "Finalize current step, then auto-loop to the next step if any",
+  "done": ["State advanced (or task complete) and auto-loop triggered when needed"],
+  "ops": [
+    { "op": "autoflow_state_finalize", "verification": "{{verification}}", "changedFiles": "{{changedFiles}}" },
+    { "op": "run", "cmd": "git add -A && git commit -m \"Step {{stepIndex}}: {{stepTitle}}\" --allow-empty || true", "cwd": ".", "timeoutMs": 600000 },
+    { "op": "run", "cmd": "python3 ~/.claude/skills/tr/scripts/autoloop.py --repo-root . --once", "cwd": ".", "timeoutMs": 600000 }
+  ],
+  "report": { "changedFiles": true, "diffSummary": true, "commandOutputs": "on_failure" },
+  "_meta": {
+    "placeholders": {
+      "verification": "short description of how step was verified (from /review output)",
+      "changedFiles": "optional array of changed file paths (from FileOpsRES.changedFiles)",
+      "stepIndex": "step number for commit message (prefer 1-based; if state uses 0-based, use stepIndex+1)",
+      "stepTitle": "current step title for commit message"
+    }
+  }
+}

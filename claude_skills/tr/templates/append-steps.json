@@ -1,0 +1,16 @@
+{
+  "proto": "autoflow.fileops.v1",
+  "id": "TR-APPEND-STEPS",
+  "purpose": "execute_step",
+  "summary": "Append fix steps to current task",
+  "done": ["Steps appended, current pointer updated"],
+  "ops": [
+    { "op": "autoflow_state_append_steps", "steps": "{{steps}}", "maxAllowed": 2 }
+  ],
+  "report": { "changedFiles": true },
+  "_meta": {
+    "placeholders": {
+      "steps": "array of 1-2 step titles to append (from Claude design in Step 9.2)"
+    }
+  }
+}

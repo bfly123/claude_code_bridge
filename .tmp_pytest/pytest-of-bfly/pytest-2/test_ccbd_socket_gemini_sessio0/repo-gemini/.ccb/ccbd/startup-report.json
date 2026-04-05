@@ -1,0 +1,51 @@
+{
+  "schema_version": 2,
+  "record_type": "ccbd_startup_report",
+  "api_version": 2,
+  "project_id": "1b23a413d73f400ef31920a4bec22447ad22faf18de6f6ec6ba0829dd2f2bacd",
+  "generated_at": "2026-04-03T11:53:30.259163Z",
+  "trigger": "daemon_boot",
+  "status": "failed",
+  "requested_agents": [],
+  "desired_agents": [
+    "demo"
+  ],
+  "restore_requested": false,
+  "auto_permission": false,
+  "daemon_generation": 1,
+  "daemon_started": true,
+  "config_signature": "4c502572f8a46988477dbd91183e3eaa53d7c6297b8a105cbb5120caf2e99048",
+  "inspection": {
+    "health": "unmounted",
+    "pid_alive": true,
+    "socket_connectable": false,
+    "heartbeat_fresh": true,
+    "takeover_allowed": true,
+    "reason": "lease_unmounted",
+    "lease": {
+      "schema_version": 2,
+      "record_type": "ccbd_lease",
+      "api_version": 2,
+      "project_id": "1b23a413d73f400ef31920a4bec22447ad22faf18de6f6ec6ba0829dd2f2bacd",
+      "ccbd_pid": 1822551,
+      "socket_path": "/home/bfly/yunwei/ccb_source/.tmp_pytest/pytest-of-bfly/pytest-2/test_ccbd_socket_gemini_sessio0/repo-gemini/.ccb/ccbd/ccbd.sock",
+      "owner_uid": 1000,
+      "boot_id": "42a04432-fc77-4321-8953-ad3edf51616f",
+      "started_at": "2026-04-03T11:53:30.258335Z",
+      "last_heartbeat_at": "2026-04-03T11:53:30.258801Z",
+      "mount_state": "unmounted",
+      "generation": 1,
+      "config_signature": "4c502572f8a46988477dbd91183e3eaa53d7c6297b8a105cbb5120caf2e99048",
+      "keeper_pid": null,
+      "daemon_instance_id": "dfbee509f7164ba7bb99d03e00ca57a5"
+    }
+  },
+  "restore_summary": {},
+  "actions_taken": [
+    "mount_backend",
+    "listen_socket_failed"
+  ],
+  "cleanup_summaries": [],
+  "agent_results": [],
+  "failure_reason": "AF_UNIX path too long"
+}

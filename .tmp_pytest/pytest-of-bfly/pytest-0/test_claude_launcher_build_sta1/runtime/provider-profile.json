@@ -1,0 +1,15 @@
+{
+  "provider": "claude",
+  "agent_name": "reviewer",
+  "mode": "isolated",
+  "profile_root": "/home/bfly/yunwei/ccb_source/.tmp_pytest/pytest-of-bfly/pytest-0/test_claude_launcher_build_sta1/profile",
+  "runtime_home": null,
+  "env": {
+    "ANTHROPIC_AUTH_TOKEN": "profile-token"
+  },
+  "inherit_api": false,
+  "inherit_auth": true,
+  "inherit_config": true,
+  "inherit_skills": true,
+  "inherit_commands": true
+}

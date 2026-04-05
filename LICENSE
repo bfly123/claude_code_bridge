@@ -1,0 +1,48 @@
+# AGPL-3.0 - GNU Affero General Public License v3.0
+
+## English
+
+This software is licensed under the AGPL-3.0 license, which means:
+
+- **Attribution Required**: You must give appropriate credit, provide a link to the license, and indicate if changes were made. When using Claude Code Bridge (CCB), please credit the original project.
+
+- **Open Source Required**: If you modify this software and distribute it or run it as a service, you must release your source code under AGPL-3.0.
+
+- **Network Use (Copyleft)**: If you run this software as a network service (e.g., SaaS), users interacting with it over the network must be able to receive the source code.
+
+- **No Closed-Source Use**: You cannot use this software in proprietary/closed-source projects unless you open-source the entire project under AGPL-3.0.
+
+**In short**: You can use Claude Code Bridge for free, but if you build upon it, your code must also be open-sourced under AGPL-3.0 with attribution to this project. Closed-source commercial use requires a separate license.
+
+For commercial licensing inquiries (closed-source use), please contact the maintainer.
+
+---
+
+## 中文
+
+本软件采用 AGPL-3.0 许可协议，这意味着：
+
+- **署名要求**：您必须注明出处，提供许可协议链接，并说明是否进行了修改。使用 Claude Code Bridge (CCB) 时，请注明项目来源。
+
+- **开源要求**：如果您修改此软件并将其分发或作为服务运行，则必须根据 AGPL-3.0 发布您的源代码。
+
+- **网络使用（Copyleft）**：如果您将此软件作为网络服务（例如 SaaS）运行，则通过网络与其交互的用户必须能够接收源代码。
+
+- **禁止闭源使用**：您不能在专有/闭源项目中使用此软件，除非您将整个项目根据 AGPL-3.0 开源。
+
+**简单来说**：您可以免费使用 Claude Code Bridge，但如果您基于它进行开发，您的代码也必须根据 AGPL-3.0 开源，并注明本项目。闭源商业用途需要单独的许可证。
+
+对于商业许可咨询（闭源使用），请联系维护者。
+
+---
+
+## Full License Text
+
+GNU AFFERO GENERAL PUBLIC LICENSE
+Version 3, 19 November 2007
+
+Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
+
+Everyone is permitted to copy and distribute verbatim copies of this license document, but changing it is not allowed.
+
+For the complete license text, see: https://www.gnu.org/licenses/agpl-3.0.txt

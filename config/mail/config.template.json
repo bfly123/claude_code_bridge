@@ -1,0 +1,43 @@
+{
+  "version": 3,
+  "enabled": false,
+  "service_account": {
+    "provider": "qq",
+    "email": "YOUR_SERVICE_EMAIL",
+    "imap": {
+      "host": "imap.qq.com",
+      "port": 993,
+      "ssl": true
+    },
+    "smtp": {
+      "host": "smtp.qq.com",
+      "port": 465,
+      "ssl": true,
+      "starttls": false
+    }
+  },
+  "target_email": "YOUR_TARGET_EMAIL",
+  "pane_hooks": {
+    "claude": {"enabled": false, "notify_mode": "on_completion"},
+    "codex": {"enabled": false, "notify_mode": "on_completion"},
+    "gemini": {"enabled": false, "notify_mode": "on_completion"},
+    "opencode": {"enabled": false, "notify_mode": "on_completion"},
+    "droid": {"enabled": false, "notify_mode": "on_completion"}
+  },
+  "notification": {
+    "include_context_lines": 50,
+    "max_email_length": 10000,
+    "subject_prefix": "[CCB]"
+  },
+  "polling": {
+    "interval_seconds": 30,
+    "folder": "INBOX",
+    "mark_as_read": true,
+    "use_idle": true,
+    "idle_timeout": 300
+  },
+  "default_work_dir": "",
+  "default_agent": "agent1",
+  "agent_prefix_pattern": "^(\\w+)",
+  "case_insensitive": true
+}

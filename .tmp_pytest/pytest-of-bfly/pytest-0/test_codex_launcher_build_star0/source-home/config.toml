@@ -1,0 +1,4 @@
+[mcp_servers.puppeteer]
+foo=1
+[mcp_servers.puppeteer]
+bar=2

@@ -1,0 +1,48 @@
+---
+name: ask
+description: Async via `ccb ask` by default; use wait only when the user explicitly asks for the reply in the same turn.
+metadata:
+  short-description: Ask agent
+---
+
+# Ask Agent (Async)
+
+Send the user's request to a specified CCB agent asynchronously.
+
+## Usage
+
+The skill signature is exactly `/ask <target> <message...>`.
+Parse only once:
+
+- `TARGET` = first token after `/ask`
+- `MESSAGE` = exact raw remainder after `TARGET`
+
+Everything after `TARGET` belongs to `MESSAGE` and must be forwarded verbatim.
+This skill does not accept a sender argument.
+
+## Execution (MANDATORY)
+
+```powershell
+Start-Process -NoNewWindow -FilePath "ccb" -ArgumentList @("ask", "$TARGET") -RedirectStandardInput (New-TemporaryFile | ForEach-Object { $MESSAGE | Set-Content $_; $_.FullName })
+```
+
+This returns only an acceptance receipt in the current turn.
+The reply is not echoed into the same command stdout.
+Use `ccb ask --wait "$TARGET"` only when the user explicitly wants the reply now.
+
+## Rules
+
+- After running the command, end your turn immediately.
+- Use `--wait` only when the user explicitly wants the reply in the same turn.
+- Prefer implicit sender inference; use `from system` only for deliberate overrides.
+
+## Examples
+
+- `/ask agent1 What is 12+12?`
+- `/ask agent2 Refactor this code`
+- `/ask reviewer Analyze this bug`
+- `/ask worker Execute this task`
+
+## Notes
+
+- If it fails, report the command failure output and stop.

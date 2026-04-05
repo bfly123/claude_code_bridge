@@ -1,0 +1,4732 @@
+from __future__ import annotations
+
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+from io import StringIO
+from pathlib import Path
+import threading
+from types import SimpleNamespace
+
+import pytest
+
+from ccbd.app import CcbdApp
+from ccbd.services.health import HealthMonitor
+import cli.phase2 as phase2_module
+from cli.phase2 import maybe_handle_phase2
+import project.resolver as project_resolver_module
+from storage.paths import PathLayout
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _run_ccb(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+    env = dict(os.environ)
+    return subprocess.run(
+        [sys.executable, str(_repo_root() / 'ccb'), *args],
+        cwd=str(cwd),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
+def _write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding='utf-8')
+
+
+def _config_text() -> str:
+    return 'codex:codex\n'
+
+
+def _single_agent_config_text(provider: str) -> str:
+    return f'demo:{provider}\n'
+
+
+def _named_agent_config_text(agent_name: str, provider: str) -> str:
+    return f'{agent_name}:{provider}\n'
+
+
+def _dual_named_agent_config_text(agent1: str, provider1: str, agent2: str, provider2: str) -> str:
+    return f'{agent1}:{provider1},{agent2}:{provider2}\n'
+
+
+def _wait_for_status(cwd: Path, target: str, expected: str, *, timeout: float = 3.0) -> subprocess.CompletedProcess[str]:
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        last = _run_ccb(['pend', target], cwd=cwd)
+        if last.returncode == 0 and f'status: {expected}' in last.stdout:
+            return last
+        time.sleep(0.1)
+    raise AssertionError(f'expected status {expected!r}; last stdout={last.stdout!r} stderr={last.stderr!r}')
+
+
+def _wait_for_any_status(cwd: Path, target: str, expected: tuple[str, ...], *, timeout: float = 3.0) -> subprocess.CompletedProcess[str]:
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        last = _run_ccb(['pend', target], cwd=cwd)
+        if last.returncode == 0 and any(f'status: {item}' in last.stdout for item in expected):
+            return last
+        time.sleep(0.1)
+    raise AssertionError(f'expected any status {expected!r}; last stdout={last.stdout!r} stderr={last.stderr!r}')
+
+
+def _run_phase2_local(args: list[str], *, cwd: Path) -> tuple[int, str, str]:
+    stdout = StringIO()
+    stderr = StringIO()
+    code = maybe_handle_phase2(args, cwd=cwd, stdout=stdout, stderr=stderr)
+    return code, stdout.getvalue(), stderr.getvalue()
+
+
+def _extract_accepted_job_id(stdout: str, *, target: str) -> str:
+    patterns = (
+        re.compile(rf'^accepted job=(job_[a-f0-9]+) target={re.escape(target)}$', re.MULTILINE),
+        re.compile(rf'^job: (job_[a-f0-9]+) {re.escape(target)} accepted$', re.MULTILINE),
+    )
+    for pattern in patterns:
+        match = pattern.search(stdout)
+        if match is not None:
+            return match.group(1)
+    raise AssertionError(f'expected accepted receipt for target={target!r}; stdout={stdout!r}')
+
+
+def _freeze_job_ids(app: CcbdApp, monkeypatch: pytest.MonkeyPatch, *job_ids: str) -> None:
+    original_new_id = app.dispatcher._new_id
+    remaining = iter(job_ids)
+
+    def _new_id(kind: str) -> str:
+        if kind == 'job':
+            return next(remaining)
+        return original_new_id(kind)
+
+    monkeypatch.setattr(app.dispatcher, '_new_id', _new_id)
+
+
+class _TtyStringIO(StringIO):
+    def isatty(self) -> bool:  # pragma: no cover - trivial
+        return True
+
+
+class _TtyInput(StringIO):
+    def isatty(self) -> bool:  # pragma: no cover - trivial
+        return True
+
+
+@pytest.fixture(autouse=True)
+def _disable_health_monitor_in_phase2_blackbox_tests(monkeypatch) -> None:
+    monkeypatch.setattr(HealthMonitor, 'check_all', lambda self: {})
+
+
+@pytest.fixture(autouse=True)
+def _ignore_host_level_tmp_anchor(monkeypatch, tmp_path_factory) -> None:
+    original = project_resolver_module.find_parent_project_anchor_dir
+    pytest_tmp_root = tmp_path_factory.getbasetemp().resolve()
+
+    def _patched(path: Path):
+        result = original(path)
+        if result is None:
+            return None
+        anchor_root = result.parent.resolve()
+        if pytest_tmp_root.is_relative_to(anchor_root) and not anchor_root.is_relative_to(pytest_tmp_root):
+            return None
+        return result
+
+    monkeypatch.setattr(project_resolver_module, 'find_parent_project_anchor_dir', _patched)
+
+
+def test_phase2_start_bootstraps_missing_project_and_default_config(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-bootstrap'
+    project_root.mkdir()
+    seen: dict[str, object] = {}
+
+    def _fake_start(context, command):
+        del command
+        seen['source'] = context.project.source
+        seen['project_root'] = context.project.project_root
+        return SimpleNamespace(
+            project_root=str(context.project.project_root),
+            project_id=context.project.project_id,
+            started=('codex', 'claude'),
+            daemon_started=False,
+            socket_path=str(context.paths.ccbd_socket_path),
+        )
+
+    monkeypatch.setattr(phase2_module, 'start_agents', _fake_start)
+
+    code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+
+    assert code == 0, stderr
+    assert seen['source'] == 'bootstrapped'
+    assert seen['project_root'] == project_root.resolve()
+    assert (project_root / '.ccb').is_dir()
+    assert (project_root / '.ccb' / 'ccb.config').is_file()
+    assert (project_root / '.ccb' / 'ccb.config').read_text(encoding='utf-8') == 'cmd, agent1:codex; agent2:codex, agent3:claude\n'
+    assert 'start_status: ok' in stdout
+    assert 'agents: codex, claude' in stdout
+
+
+def test_phase2_interactive_start_auto_opens_namespace(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-auto-open'
+    project_root.mkdir()
+    events: list[str] = []
+
+    def _fake_start(context, command):
+        del context, command
+        events.append('start')
+        return SimpleNamespace(
+            project_root=str(project_root),
+            project_id='proj-1',
+            started=('agent1',),
+            daemon_started=True,
+            socket_path=str(project_root / '.ccb' / 'ccbd' / 'ccbd.sock'),
+        )
+
+    def _fake_open(context, command):
+        del context, command
+        events.append('open')
+        return SimpleNamespace(
+            project_id='proj-1',
+            tmux_socket_path=str(project_root / '.ccb' / 'ccbd' / 'tmux.sock'),
+            tmux_session_name='ccb-repo-auto-open-proj1',
+        )
+
+    monkeypatch.setattr(phase2_module, 'start_agents', _fake_start)
+    monkeypatch.setattr(phase2_module, 'open_project', _fake_open)
+    monkeypatch.setattr(sys.stdin, 'isatty', lambda: True)
+
+    stdout = _TtyStringIO()
+    stderr = StringIO()
+    code = maybe_handle_phase2([], cwd=project_root, stdout=stdout, stderr=stderr)
+
+    assert code == 0, stderr.getvalue()
+    assert events == ['start', 'open']
+    assert 'open_status: ok' in stdout.getvalue()
+    assert 'start_status: ok' not in stdout.getvalue()
+
+
+def test_phase2_noninteractive_start_keeps_start_output(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-no-auto-open'
+    project_root.mkdir()
+    events: list[str] = []
+
+    def _fake_start(context, command):
+        del context, command
+        events.append('start')
+        return SimpleNamespace(
+            project_root=str(project_root),
+            project_id='proj-2',
+            started=('agent1',),
+            daemon_started=True,
+            socket_path=str(project_root / '.ccb' / 'ccbd' / 'ccbd.sock'),
+        )
+
+    def _fake_open(context, command):
+        del context, command
+        events.append('open')
+        raise AssertionError('open should not be called in noninteractive mode')
+
+    monkeypatch.setattr(phase2_module, 'start_agents', _fake_start)
+    monkeypatch.setattr(phase2_module, 'open_project', _fake_open)
+    monkeypatch.setattr(sys.stdin, 'isatty', lambda: False)
+
+    stdout = StringIO()
+    stderr = StringIO()
+    code = maybe_handle_phase2([], cwd=project_root, stdout=stdout, stderr=stderr)
+
+    assert code == 0, stderr.getvalue()
+    assert events == ['start']
+    assert 'start_status: ok' in stdout.getvalue()
+
+
+def test_phase2_start_with_new_context_requires_interactive_confirmation(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-reset-noninteractive'
+    project_root.mkdir()
+    monkeypatch.setattr(sys.stdin, 'isatty', lambda: False)
+
+    code, stdout, stderr = _run_phase2_local(['-n'], cwd=project_root)
+
+    assert code == 1
+    assert stdout == ''
+    assert 'requires interactive confirmation' in stderr
+    assert not (project_root / '.ccb').exists()
+
+
+def test_phase2_start_with_new_context_cancelled_does_not_bootstrap(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-reset-cancelled'
+    project_root.mkdir()
+    monkeypatch.setattr(sys, 'stdin', _TtyInput('n\n'))
+
+    stdout = _TtyStringIO()
+    stderr = StringIO()
+    code = maybe_handle_phase2(['-n'], cwd=project_root, stdout=stdout, stderr=stderr)
+
+    assert code == 1
+    assert 'Refresh project memory/context under' in stdout.getvalue()
+    assert 'project reset cancelled' in stderr.getvalue()
+    assert not (project_root / '.ccb').exists()
+
+
+def test_phase2_start_with_new_context_rebuilds_stale_anchor_before_bootstrap(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-reset-rebuild'
+    stale_dir = project_root / '.ccb'
+    (stale_dir / 'agents' / 'ghost').mkdir(parents=True)
+    (stale_dir / 'agents' / 'ghost' / 'runtime.json').write_text('{}', encoding='utf-8')
+
+    seen: dict[str, object] = {}
+
+    def _fake_start(context, command):
+        seen['config_text'] = (context.project.project_root / '.ccb' / 'ccb.config').read_text(encoding='utf-8')
+        seen['ghost_exists'] = (context.project.project_root / '.ccb' / 'agents' / 'ghost').exists()
+        seen['restore'] = command.restore
+        return SimpleNamespace(
+            project_root=str(context.project.project_root),
+            project_id=context.project.project_id,
+            started=('agent1', 'agent2', 'agent3'),
+            daemon_started=False,
+            socket_path=str(context.paths.ccbd_socket_path),
+        )
+
+    monkeypatch.setattr(phase2_module, 'start_agents', _fake_start)
+    monkeypatch.setattr(sys, 'stdin', _TtyInput('y\n'))
+
+    stdout = StringIO()
+    stderr = StringIO()
+    code = maybe_handle_phase2(['-n'], cwd=project_root, stdout=stdout, stderr=stderr)
+
+    assert code == 0, stderr.getvalue()
+    assert seen['ghost_exists'] is False
+    assert seen['config_text'] == 'cmd, agent1:codex; agent2:codex, agent3:claude\n'
+    assert seen['restore'] is False
+    assert 'start_status: ok' in stdout.getvalue()
+
+
+def test_phase2_start_blocks_nested_directory_under_parent_anchor(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-parent'
+    nested = project_root / 'nested'
+    nested.mkdir(parents=True)
+    (project_root / '.ccb').mkdir()
+
+    code, stdout, stderr = _run_phase2_local([], cwd=nested)
+
+    assert code == 1
+    assert stdout == ''
+    assert 'auto-create blocked' in stderr
+
+
+def test_phase2_reports_subprocess_failure_without_traceback(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-subprocess'
+    _write(project_root / '.ccb' / 'ccb.config', 'agent1:codex\n')
+
+    def _raise_subprocess_error(context, command):
+        del context, command
+        raise subprocess.CalledProcessError(1, ['tmux', 'attach-session'])
+
+    monkeypatch.setattr(phase2_module, 'open_project', _raise_subprocess_error)
+
+    code, stdout, stderr = _run_phase2_local(['open'], cwd=project_root)
+
+    assert code == 1
+    assert stdout == ''
+    assert 'command_status: failed' in stderr
+    assert 'returned non-zero exit status 1' in stderr
+    assert 'Traceback' not in stderr
+
+
+def test_phase2_trace_renders_control_plane_payload(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-trace-render'
+    project_root.mkdir()
+    seen: dict[str, object] = {}
+
+    def _fake_trace(context, command):
+        seen['project_root'] = context.project.project_root
+        seen['target'] = command.target
+        return {
+            'target': command.target,
+            'resolved_kind': 'job',
+            'submission_id': None,
+            'message_id': 'msg_1',
+            'attempt_id': 'att_1',
+            'reply_id': 'rep_1',
+            'job_id': command.target,
+            'submission': None,
+            'message_count': 1,
+            'attempt_count': 1,
+            'reply_count': 1,
+            'event_count': 2,
+            'job_count': 1,
+            'messages': (
+                {
+                    'message_id': 'msg_1',
+                    'origin_message_id': None,
+                    'submission_id': None,
+                    'from_actor': 'claude',
+                    'target_scope': 'single',
+                    'target_agents': ['codex'],
+                    'message_class': 'task_request',
+                    'message_state': 'completed',
+                    'priority': 100,
+                    'created_at': '2026-03-30T00:00:00Z',
+                    'updated_at': '2026-03-30T00:00:10Z',
+                },
+            ),
+            'attempts': (
+                {
+                    'attempt_id': 'att_1',
+                    'message_id': 'msg_1',
+                    'agent_name': 'codex',
+                    'provider': 'codex',
+                    'job_id': command.target,
+                    'retry_index': 0,
+                    'attempt_state': 'completed',
+                    'started_at': '2026-03-30T00:00:01Z',
+                    'updated_at': '2026-03-30T00:00:10Z',
+                },
+            ),
+            'replies': (
+                {
+                    'reply_id': 'rep_1',
+                    'message_id': 'msg_1',
+                    'attempt_id': 'att_1',
+                    'agent_name': 'codex',
+                    'terminal_status': 'completed',
+                    'reply_preview': 'done',
+                    'reply_size': 4,
+                    'reason': 'task_complete',
+                    'status': 'completed',
+                    'provider_turn_ref': 'turn-1',
+                    'finished_at': '2026-03-30T00:00:10Z',
+                },
+            ),
+            'events': (
+                {
+                    'inbound_event_id': 'iev_1',
+                    'agent_name': 'codex',
+                    'event_type': 'task_request',
+                    'message_id': 'msg_1',
+                    'attempt_id': 'att_1',
+                    'payload_ref': 'message:msg_1',
+                    'priority': 100,
+                    'status': 'consumed',
+                    'mailbox_state': 'idle',
+                    'mailbox_active': False,
+                    'created_at': '2026-03-30T00:00:00Z',
+                    'started_at': '2026-03-30T00:00:01Z',
+                    'finished_at': '2026-03-30T00:00:10Z',
+                },
+                {
+                    'inbound_event_id': 'iev_2',
+                    'agent_name': 'claude',
+                    'event_type': 'task_reply',
+                    'message_id': 'msg_1',
+                    'attempt_id': 'att_1',
+                    'payload_ref': 'reply:rep_1',
+                    'priority': 10,
+                    'status': 'queued',
+                    'mailbox_state': 'blocked',
+                    'mailbox_active': False,
+                    'created_at': '2026-03-30T00:00:10Z',
+                    'started_at': None,
+                    'finished_at': None,
+                },
+            ),
+            'jobs': (
+                {
+                    'job_id': command.target,
+                    'agent_name': 'codex',
+                    'provider': 'codex',
+                    'status': 'completed',
+                    'submission_id': None,
+                    'created_at': '2026-03-30T00:00:00Z',
+                    'updated_at': '2026-03-30T00:00:10Z',
+                },
+            ),
+        }
+
+    monkeypatch.setattr(phase2_module, 'trace_target', _fake_trace)
+
+    code, stdout, stderr = _run_phase2_local(['trace', 'job_123'], cwd=project_root)
+
+    assert code == 0, stderr
+    assert seen['project_root'] == project_root.resolve()
+    assert seen['target'] == 'job_123'
+    assert 'trace_status: ok' in stdout
+    assert 'resolved_kind: job' in stdout
+    assert 'message_count: 1' in stdout
+    assert 'attempt_count: 1' in stdout
+    assert 'reply_count: 1' in stdout
+    assert 'event_count: 2' in stdout
+    assert 'job_count: 1' in stdout
+    assert 'reply: id=rep_1 message=msg_1 attempt=att_1 agent=codex terminal=completed size=4 notice=false kind=None reason=task_complete finished=2026-03-30T00:00:10Z preview=done' in stdout
+
+
+def test_phase2_doctor_bundle_renders_export_summary(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-doctor-bundle'
+    project_root.mkdir()
+
+    monkeypatch.setattr(
+        phase2_module,
+        'export_diagnostic_bundle',
+        lambda context, command: SimpleNamespace(
+            project_root=str(context.project.project_root),
+            project_id=context.project.project_id,
+            bundle_id='bundle-1',
+            bundle_path=str(context.paths.ccbd_support_dir / 'bundle-1.tar.gz'),
+            file_count=7,
+            included_count=6,
+            missing_count=1,
+            truncated_count=2,
+            doctor_error=None,
+        ),
+    )
+
+    code, stdout, stderr = _run_phase2_local(['doctor', '--bundle'], cwd=project_root)
+
+    assert code == 0, stderr
+    assert 'doctor_bundle_status: ok' in stdout
+    assert 'bundle_id: bundle-1' in stdout
+    assert 'truncated_count: 2' in stdout
+
+
+def test_phase2_resubmit_renders_new_message_chain(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-resubmit-render'
+    project_root.mkdir()
+    seen: dict[str, object] = {}
+
+    def _fake_resubmit(context, command):
+        seen['project_root'] = context.project.project_root
+        seen['message_id'] = command.message_id
+        return SimpleNamespace(
+            project_id=context.project.project_id,
+            original_message_id=command.message_id,
+            message_id='msg_new',
+            submission_id='sub_new',
+            jobs=(
+                {'job_id': 'job_1', 'agent_name': 'codex', 'target_name': 'codex', 'status': 'accepted'},
+                {'job_id': 'job_2', 'agent_name': 'claude', 'target_name': 'claude', 'status': 'queued'},
+            ),
+        )
+
+    monkeypatch.setattr(phase2_module, 'resubmit_message', _fake_resubmit)
+
+    code, stdout, stderr = _run_phase2_local(['resubmit', 'msg_old'], cwd=project_root)
+
+    assert code == 0, stderr
+    assert seen['project_root'] == project_root.resolve()
+    assert seen['message_id'] == 'msg_old'
+    assert 'resubmit_status: accepted' in stdout
+    assert 'original_message_id: msg_old' in stdout
+    assert 'message_id: msg_new' in stdout
+    assert 'submission_id: sub_new' in stdout
+    assert 'job: job_1 codex accepted' in stdout
+    assert 'job: job_2 claude queued' in stdout
+
+
+def test_phase2_retry_renders_attempt_retry_chain(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-retry-render'
+    project_root.mkdir()
+    seen: dict[str, object] = {}
+
+    def _fake_retry(context, command):
+        seen['project_root'] = context.project.project_root
+        seen['target'] = command.target
+        return SimpleNamespace(
+            project_id=context.project.project_id,
+            target=command.target,
+            message_id='msg_1',
+            original_attempt_id='att_old',
+            attempt_id='att_new',
+            job_id='job_new',
+            agent_name='codex',
+            status='accepted',
+        )
+
+    monkeypatch.setattr(phase2_module, 'retry_attempt', _fake_retry)
+
+    code, stdout, stderr = _run_phase2_local(['retry', 'att_old'], cwd=project_root)
+
+    assert code == 0, stderr
+    assert seen['project_root'] == project_root.resolve()
+    assert seen['target'] == 'att_old'
+    assert 'retry_status: accepted' in stdout
+    assert 'target: att_old' in stdout
+    assert 'message_id: msg_1' in stdout
+    assert 'original_attempt_id: att_old' in stdout
+    assert 'attempt_id: att_new' in stdout
+    assert 'job_id: job_new' in stdout
+    assert 'agent_name: codex' in stdout
+    assert 'status: accepted' in stdout
+
+
+def test_phase2_wait_renders_satisfied_reply_summary(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-wait-render'
+    project_root.mkdir()
+    seen: dict[str, object] = {}
+
+    def _fake_wait(context, command):
+        seen['project_root'] = context.project.project_root
+        seen['target'] = command.target
+        seen['mode'] = command.mode
+        return SimpleNamespace(
+            project_id=context.project.project_id,
+            mode=command.mode,
+            target=command.target,
+            resolved_kind='message',
+            expected_count=2,
+            received_count=2,
+            waited_s=0.125,
+            replies=(
+                {
+                    'reply_id': 'rep_1',
+                    'message_id': 'msg_1',
+                    'attempt_id': 'att_1',
+                    'agent_name': 'codex',
+                    'terminal_status': 'completed',
+                    'reason': 'task_complete',
+                    'finished_at': '2026-03-30T00:00:10Z',
+                    'reply': 'done',
+                },
+            ),
+        )
+
+    monkeypatch.setattr(phase2_module, 'wait_for_replies', _fake_wait)
+
+    code, stdout, stderr = _run_phase2_local(['wait-all', 'msg_1'], cwd=project_root)
+
+    assert code == 0, stderr
+    assert seen['project_root'] == project_root.resolve()
+    assert seen['target'] == 'msg_1'
+    assert seen['mode'] == 'all'
+    assert 'wait_status: satisfied' in stdout
+    assert 'mode: all' in stdout
+    assert 'target: msg_1' in stdout
+    assert 'resolved_kind: message' in stdout
+    assert 'expected_count: 2' in stdout
+    assert 'received_count: 2' in stdout
+    assert 'reply_text: done' in stdout
+
+
+def test_phase2_inbox_and_ack_render_control_plane_payload(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-inbox-render'
+    project_root.mkdir()
+    seen: dict[str, object] = {}
+
+    def _fake_inbox(context, command):
+        seen['inbox_project_root'] = context.project.project_root
+        seen['inbox_agent_name'] = command.agent_name
+        return {
+            'target': command.agent_name,
+            'agent': {
+                'agent_name': command.agent_name,
+                'mailbox_id': f'mbx_{command.agent_name}',
+                'mailbox_state': 'blocked',
+                'lease_version': 0,
+                'queue_depth': 1,
+                'pending_reply_count': 1,
+                'active_inbound_event_id': None,
+            },
+            'item_count': 1,
+            'head': {
+                'inbound_event_id': 'iev_1',
+                'event_type': 'task_reply',
+                'status': 'queued',
+                'reply_id': 'rep_1',
+                'source_actor': 'codex',
+                'reply_terminal_status': 'completed',
+                'reply_finished_at': '2026-03-30T00:00:10Z',
+                'reply': 'done',
+            },
+            'items': (
+                {
+                    'position': 1,
+                    'inbound_event_id': 'iev_1',
+                    'event_type': 'task_reply',
+                    'status': 'queued',
+                    'priority': 10,
+                    'message_id': 'msg_1',
+                    'attempt_id': 'att_1',
+                    'job_id': 'job_123',
+                    'source_actor': 'codex',
+                    'reply_id': 'rep_1',
+                    'reply_terminal_status': 'completed',
+                    'reply_preview': 'done',
+                },
+            ),
+        }
+
+    def _fake_ack(context, command):
+        seen['ack_project_root'] = context.project.project_root
+        seen['ack_agent_name'] = command.agent_name
+        seen['ack_event'] = command.inbound_event_id
+        return {
+            'target': command.agent_name,
+            'agent_name': command.agent_name,
+            'acknowledged_inbound_event_id': command.inbound_event_id,
+            'message_id': 'msg_1',
+            'attempt_id': 'att_1',
+            'reply_id': 'rep_1',
+            'reply_from_agent': 'codex',
+            'reply_terminal_status': 'completed',
+            'reply_finished_at': '2026-03-30T00:00:10Z',
+            'next_inbound_event_id': None,
+            'next_event_type': None,
+            'mailbox': {
+                'mailbox_state': 'idle',
+                'queue_depth': 0,
+                'pending_reply_count': 0,
+            },
+            'reply': 'done',
+        }
+
+    monkeypatch.setattr(phase2_module, 'inbox_target', _fake_inbox)
+    monkeypatch.setattr(phase2_module, 'ack_reply', _fake_ack)
+
+    inbox_code, inbox_stdout, inbox_stderr = _run_phase2_local(['inbox', 'claude'], cwd=project_root)
+    ack_code, ack_stdout, ack_stderr = _run_phase2_local(['ack', 'claude', 'iev_1'], cwd=project_root)
+
+    assert inbox_code == 0, inbox_stderr
+    assert seen['inbox_project_root'] == project_root.resolve()
+    assert seen['inbox_agent_name'] == 'claude'
+    assert 'inbox_status: ok' in inbox_stdout
+    assert 'head_reply_id: rep_1' in inbox_stdout
+    assert 'reply: done' in inbox_stdout
+
+    assert ack_code == 0, ack_stderr
+    assert seen['ack_project_root'] == project_root.resolve()
+    assert seen['ack_agent_name'] == 'claude'
+    assert seen['ack_event'] == 'iev_1'
+    assert 'ack_status: ok' in ack_stdout
+    assert 'acknowledged_inbound_event_id: iev_1' in ack_stdout
+
+
+def _wait_for_phase2_status(cwd: Path, target: str, expected: str, *, timeout: float = 5.0) -> str:
+    deadline = time.time() + timeout
+    last_stdout = ''
+    last_stderr = ''
+    while time.time() < deadline:
+        code, stdout, stderr = _run_phase2_local(['pend', target], cwd=cwd)
+        last_stdout, last_stderr = stdout, stderr
+        if code == 0 and f'status: {expected}' in stdout:
+            return stdout
+        time.sleep(0.05)
+    raise AssertionError(f'expected status {expected!r}; last stdout={last_stdout!r} stderr={last_stderr!r}')
+
+
+def _wait_for_path(path: Path, timeout: float = 2.0) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if path.exists():
+            return
+        time.sleep(0.02)
+    raise AssertionError(f'timed out waiting for {path}')
+
+
+def _assert_phase2_app_shutdown_clean(project_root: Path, app: CcbdApp, thread: threading.Thread) -> None:
+    app.shutdown()
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert not app.paths.ccbd_socket_path.exists()
+    lease_path = app.paths.ccbd_lease_path
+    assert lease_path.exists()
+    lease = json.loads(lease_path.read_text(encoding='utf-8'))
+    assert lease['mount_state'] == 'unmounted'
+    runtime_root = PathLayout(project_root).agents_dir
+    pid_files = sorted(runtime_root.glob('*/provider-runtime/**/*.pid'))
+    assert pid_files == []
+
+
+def _wait_for_pid_exit(pid: int, timeout: float = 2.0) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.02)
+    raise AssertionError(f'timed out waiting for pid {pid} to exit')
+
+
+def test_ccb_v2_project_lifecycle(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    _write(project_root / '.ccb' / 'ccb.config', _config_text())
+
+    proc = _run_ccb([], cwd=project_root)
+    assert proc.returncode == 0, proc.stderr
+    assert 'start_status: ok' in proc.stdout
+    assert 'agents: codex' in proc.stdout
+
+    ping = _run_ccb(['ping', 'codex'], cwd=project_root)
+    assert ping.returncode == 0, ping.stderr
+    assert 'agent_name: codex' in ping.stdout
+    assert 'provider: codex' in ping.stdout
+
+    ps = _run_ccb(['ps', '--alive'], cwd=project_root)
+    assert ps.returncode == 0, ps.stderr
+    assert 'ccbd_state: mounted' in ps.stdout
+    assert 'agent: name=codex state=idle provider=codex queue=0' in ps.stdout
+    assert f'workspace={project_root / ".ccb" / "workspaces" / "codex"}' in ps.stdout
+
+    doctor = _run_ccb(['doctor'], cwd=project_root)
+    assert doctor.returncode == 0, doctor.stderr
+    assert f'project: {project_root.resolve()}' in doctor.stdout
+    assert 'ccbd_generation: 1' in doctor.stdout
+    assert 'ccbd_reason: healthy' in doctor.stdout
+    assert 'agent: name=codex health=restored provider=codex completion=protocol_turn' in doctor.stdout
+    assert f'workspace={project_root / ".ccb" / "workspaces" / "codex"}' in doctor.stdout
+
+    ask = _run_ccb(['ask', 'codex', 'from', 'user', 'hello from test'], cwd=project_root)
+    assert ask.returncode == 0, ask.stderr
+    job_id = _extract_accepted_job_id(ask.stdout, target='codex')
+
+    running = _wait_for_status(project_root, 'codex', 'running')
+    assert f'job_id: {job_id}' in running.stdout
+
+    queue = _run_ccb(['queue', 'codex'], cwd=project_root)
+    assert queue.returncode == 0, queue.stderr
+    assert 'queue_status: ok' in queue.stdout
+    assert 'target: codex' in queue.stdout
+    assert 'mailbox_state: delivering' in queue.stdout
+    assert 'runtime_state: busy' in queue.stdout
+    assert 'runtime_health: restored' in queue.stdout
+    assert f'job={job_id}' in queue.stdout
+
+    cancel = _run_ccb(['cancel', job_id], cwd=project_root)
+    assert cancel.returncode == 0, cancel.stderr
+    assert 'cancel_status: ok' in cancel.stdout
+    assert 'status: cancelled' in cancel.stdout
+
+    cancelled = _wait_for_status(project_root, job_id, 'cancelled')
+    assert 'completion_reason: cancel_info' in cancelled.stdout
+
+    watch = _run_ccb(['watch', job_id], cwd=project_root)
+    assert watch.returncode == 0, watch.stderr
+    assert 'event:' in watch.stdout
+    assert 'watch_status: terminal' in watch.stdout
+    assert f'job_id: {job_id}' in watch.stdout
+    assert 'status: cancelled' in watch.stdout
+
+    watch_agent = _run_ccb(['watch', 'codex'], cwd=project_root)
+    assert watch_agent.returncode == 0, watch_agent.stderr
+    assert 'watch_status: terminal' in watch_agent.stdout
+    assert f'job_id: {job_id}' in watch_agent.stdout
+
+    kill = _run_ccb(['kill'], cwd=project_root)
+    assert kill.returncode == 0, kill.stderr
+    assert 'kill_status: ok' in kill.stdout
+    assert 'state: unmounted' in kill.stdout
+
+    ping_after = _run_ccb(['ping', 'codex'], cwd=project_root)
+    assert ping_after.returncode == 0, ping_after.stderr
+    assert 'mount_state: unmounted' in ping_after.stdout
+    assert 'health: unmounted' in ping_after.stdout
+
+
+def test_ccb_logs_reads_agent_runtime_logs(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-logs'
+    _write(project_root / '.ccb' / 'ccb.config', _named_agent_config_text('demo', 'codex'))
+    _write(
+        project_root / '.ccb' / 'agents' / 'demo' / 'provider-runtime' / 'codex' / 'bridge_output.log',
+        'first line\nsecond line\n',
+    )
+
+    proc = _run_ccb(['logs', 'demo'], cwd=project_root)
+
+    assert proc.returncode == 0, proc.stderr
+    assert 'logs_status: ok' in proc.stdout
+    assert 'agent_name: demo' in proc.stdout
+    assert 'log_count: 1' in proc.stdout
+    assert 'log: runtime ' in proc.stdout
+    assert 'log_line: first line' in proc.stdout
+    assert 'log_line: second line' in proc.stdout
+
+
+def test_ccb_ping_ccbd_recovers_from_stale_mount_and_bumps_generation(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-stale-ccbd'
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('fake'))
+
+    start = _run_ccb([], cwd=project_root)
+    assert start.returncode == 0, start.stderr
+
+    lease_path = project_root / '.ccb' / 'ccbd' / 'lease.json'
+    lease = json.loads(lease_path.read_text(encoding='utf-8'))
+    stale_pid = int(lease['ccbd_pid'])
+    os.kill(stale_pid, signal.SIGTERM)
+    _wait_for_pid_exit(stale_pid)
+
+    socket_path = Path(str(lease['socket_path']))
+    try:
+        socket_path.unlink()
+    except FileNotFoundError:
+        pass
+
+    lease['last_heartbeat_at'] = '2026-03-01T00:00:00Z'
+    lease_path.write_text(json.dumps(lease, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+
+    ping = _run_ccb(['ping', 'ccbd'], cwd=project_root)
+    assert ping.returncode == 0, ping.stderr
+    assert 'mount_state: mounted' in ping.stdout
+    assert 'health: healthy' in ping.stdout
+    assert 'generation: 2' in ping.stdout
+    assert 'pid_alive: True' in ping.stdout
+    assert 'socket_connectable: True' in ping.stdout
+    assert 'heartbeat_fresh: True' in ping.stdout
+    assert 'takeover_allowed: False' in ping.stdout
+    assert 'reason: healthy' in ping.stdout
+
+    doctor = _run_ccb(['doctor'], cwd=project_root)
+    assert doctor.returncode == 0, doctor.stderr
+    assert 'ccbd_state: mounted' in doctor.stdout
+    assert 'ccbd_health: healthy' in doctor.stdout
+    assert 'ccbd_generation: 2' in doctor.stdout
+    assert 'ccbd_reason: healthy' in doctor.stdout
+
+    kill = _run_ccb(['kill'], cwd=project_root)
+    assert kill.returncode == 0, kill.stderr
+
+
+def test_ccb_long_running_job_keeps_heartbeat_and_doctor_healthy(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-heartbeat'
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('fake'))
+
+    start = _run_ccb([], cwd=project_root)
+    assert start.returncode == 0, start.stderr
+
+    ask = _run_ccb(
+        ['ask', '--task-id', 'fake;latency_ms=1800', 'demo', 'from', 'user', 'heartbeat probe'],
+        cwd=project_root,
+    )
+    assert ask.returncode == 0, ask.stderr
+    job_id = _extract_accepted_job_id(ask.stdout, target='demo')
+
+    running = _wait_for_status(project_root, 'demo', 'running', timeout=2.0)
+    assert f'job_id: {job_id}' in running.stdout
+
+    lease_path = project_root / '.ccb' / 'ccbd' / 'lease.json'
+    lease_before = json.loads(lease_path.read_text(encoding='utf-8'))
+    doctor_1 = _run_ccb(['doctor'], cwd=project_root)
+    assert doctor_1.returncode == 0, doctor_1.stderr
+    assert 'ccbd_state: mounted' in doctor_1.stdout
+    assert 'ccbd_health: healthy' in doctor_1.stdout
+    assert 'ccbd_pid_alive: True' in doctor_1.stdout
+    assert 'ccbd_socket_connectable: True' in doctor_1.stdout
+    assert 'ccbd_heartbeat_fresh: True' in doctor_1.stdout
+    assert 'ccbd_takeover_allowed: False' in doctor_1.stdout
+    assert 'ccbd_reason: healthy' in doctor_1.stdout
+    assert 'ccbd_active_execution_count: 1' in doctor_1.stdout
+    assert 'ccbd_recoverable_execution_count: 1' in doctor_1.stdout
+    assert 'ccbd_nonrecoverable_execution_count: 0' in doctor_1.stdout
+    assert 'ccbd_pending_items_count:' in doctor_1.stdout
+    assert 'ccbd_terminal_pending_count:' in doctor_1.stdout
+
+    ping = _run_ccb(['ping', 'ccbd'], cwd=project_root)
+    assert ping.returncode == 0, ping.stderr
+    assert 'active_execution_count: 1' in ping.stdout
+    assert 'recoverable_execution_count: 1' in ping.stdout
+    assert 'nonrecoverable_execution_count: 0' in ping.stdout
+    assert 'pending_items_count:' in ping.stdout
+    assert 'terminal_pending_count:' in ping.stdout
+
+    time.sleep(0.5)
+
+    lease_after = json.loads(lease_path.read_text(encoding='utf-8'))
+    assert lease_after['last_heartbeat_at'] != lease_before['last_heartbeat_at']
+
+    doctor_2 = _run_ccb(['doctor'], cwd=project_root)
+    assert doctor_2.returncode == 0, doctor_2.stderr
+    assert f'ccbd_last_heartbeat_at: {lease_after["last_heartbeat_at"]}' in doctor_2.stdout or 'ccbd_last_heartbeat_at:' in doctor_2.stdout
+    assert 'ccbd_health: healthy' in doctor_2.stdout
+
+    completed = _wait_for_status(project_root, job_id, 'completed', timeout=5.0)
+    assert 'reply: FAKE[demo] heartbeat probe' in completed.stdout
+
+    kill = _run_ccb(['kill'], cwd=project_root)
+    assert kill.returncode == 0, kill.stderr
+
+
+def test_ccb_fake_provider_recovers_running_execution_after_ccbd_restart(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-resume-fake'
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('fake'))
+
+    start = _run_ccb([], cwd=project_root)
+    assert start.returncode == 0, start.stderr
+
+    ask = _run_ccb(
+        ['ask', '--task-id', 'fake;latency_ms=1500', 'demo', 'from', 'user', 'resume after restart'],
+        cwd=project_root,
+    )
+    assert ask.returncode == 0, ask.stderr
+    job_id = _extract_accepted_job_id(ask.stdout, target='demo')
+
+    running = _wait_for_status(project_root, 'demo', 'running', timeout=2.0)
+    assert f'job_id: {job_id}' in running.stdout
+    execution_path = project_root / '.ccb' / 'ccbd' / 'executions' / f'{job_id}.json'
+    _wait_for_path(execution_path)
+
+    lease_path = project_root / '.ccb' / 'ccbd' / 'lease.json'
+    lease = json.loads(lease_path.read_text(encoding='utf-8'))
+    stale_pid = int(lease['ccbd_pid'])
+    os.kill(stale_pid, signal.SIGTERM)
+    _wait_for_pid_exit(stale_pid)
+
+    ping = _run_ccb(['ping', 'ccbd'], cwd=project_root)
+    assert ping.returncode == 0, ping.stderr
+    assert 'mount_state: mounted' in ping.stdout
+    assert 'health: healthy' in ping.stdout
+    assert 'generation: 2' in ping.stdout
+    assert 'last_restore_running_job_count: 1' in ping.stdout
+    assert 'last_restore_restored_execution_count: 1' in ping.stdout
+    assert 'last_restore_replay_pending_count: 0' in ping.stdout
+    assert 'last_restore_abandoned_execution_count: 0' in ping.stdout
+    assert 'last_restore_results_text: demo/fake:restored(provider_resumed)' in ping.stdout
+
+    doctor = _run_ccb(['doctor'], cwd=project_root)
+    assert doctor.returncode == 0, doctor.stderr
+    assert 'ccbd_last_restore_running_job_count: 1' in doctor.stdout
+    assert 'ccbd_last_restore_restored_execution_count: 1' in doctor.stdout
+    assert 'ccbd_last_restore_results_text: demo/fake:restored(provider_resumed)' in doctor.stdout
+
+    completed = _wait_for_status(project_root, job_id, 'completed', timeout=5.0)
+    assert 'reply: FAKE[demo] resume after restart' in completed.stdout
+    assert not execution_path.exists()
+
+    watch = _run_ccb(['watch', job_id], cwd=project_root)
+    assert watch.returncode == 0, watch.stderr
+    assert 'watch_status: terminal' in watch.stdout
+    assert f'job_id: {job_id}' in watch.stdout
+
+    kill = _run_ccb(['kill'], cwd=project_root)
+    assert kill.returncode == 0, kill.stderr
+
+
+def test_ccb_doctor_and_ping_expose_opencode_restore_degradation(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-opencode-capability'
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('opencode'))
+
+    start = _run_ccb([], cwd=project_root)
+    assert start.returncode == 0, start.stderr
+
+    doctor = _run_ccb(['doctor'], cwd=project_root)
+    assert doctor.returncode == 0, doctor.stderr
+    assert 'restore: supported=False mode=resubmit_required reason=provider_resume_unsupported' in doctor.stdout
+    assert 'restore_detail: opencode live polling works, but restart-time execution resume is not implemented yet' in doctor.stdout
+
+    ping = _run_ccb(['ping', 'demo'], cwd=project_root)
+    assert ping.returncode == 0, ping.stderr
+    assert "'resume_supported': False" in ping.stdout
+    assert "'restore_mode': 'resubmit_required'" in ping.stdout
+    assert "'restore_reason': 'provider_resume_unsupported'" in ping.stdout
+
+    kill = _run_ccb(['kill'], cwd=project_root)
+    assert kill.returncode == 0, kill.stderr
+
+
+def test_ccb_opencode_real_adapter_blackbox_pane_dead_fails_degraded(monkeypatch, tmp_path: Path) -> None:
+    from provider_execution import opencode as opencode_adapter_module
+
+    fixed_req_id = 'job_0dea0d'
+    project_root = tmp_path / 'repo-opencode-dead'
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('opencode'))
+
+    class DeadBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            self.sent = (pane_id, text)
+
+        def is_alive(self, pane_id: str) -> bool:
+            del pane_id
+            return False
+
+    class FakeSession:
+        data = {}
+        opencode_project_id = 'proj-demo'
+        opencode_session_id_filter = 'ses-demo'
+        work_dir = str(project_root)
+
+        def ensure_pane(self):
+            return True, '%4'
+
+    class EmptyReader:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+
+        def capture_state(self):
+            return {'session_path': str(tmp_path / 'opencode-session.json'), 'session_id': 'ses-demo'}
+
+        def try_get_message(self, state):
+            return None, state
+
+    monkeypatch.setattr(opencode_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(opencode_adapter_module, 'get_backend_for_session', lambda data: DeadBackend())
+    monkeypatch.setattr(opencode_adapter_module, 'OpenCodeLogReader', EmptyReader)
+    app = CcbdApp(project_root)
+    _freeze_job_ids(app, monkeypatch, fixed_req_id)
+    thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread.start()
+    _wait_for_path(app.paths.ccbd_socket_path)
+
+    try:
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        assert code == 0, stderr
+
+        code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'hello opencode dead'], cwd=project_root)
+        assert code == 0, stderr
+        job_id = _extract_accepted_job_id(stdout, target='demo')
+
+        pend = _wait_for_phase2_status(project_root, job_id, 'failed', timeout=5.0)
+        assert 'reply: \n' in pend or pend.rstrip().endswith('reply:')
+        assert 'completion_reason: pane_dead' in pend
+        assert 'completion_confidence: degraded' in pend
+
+        code, stdout, stderr = _run_phase2_local(['watch', job_id], cwd=project_root)
+        assert code == 0, stderr
+        assert 'watch_status: terminal' in stdout
+        assert f'job_id: {job_id}' in stdout
+        assert 'status: failed' in stdout
+    finally:
+        app.shutdown()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+
+
+def test_ccb_opencode_real_adapter_blackbox_legacy_done_marker_completion(monkeypatch, tmp_path: Path) -> None:
+    from provider_execution import opencode as opencode_adapter_module
+
+    project_root = tmp_path / 'repo-opencode-legacy'
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('opencode'))
+    anchor: dict[str, str | None] = {'req_id': None}
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            self.sent = (pane_id, text)
+            match = re.search(r'^CCB_REQ_ID:\s*(\S+)\s*$', text, re.MULTILINE)
+            anchor['req_id'] = match.group(1) if match else None
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%4'
+
+    class FakeSession:
+        data = {}
+        opencode_project_id = 'proj-demo'
+        opencode_session_id_filter = 'ses-demo'
+        work_dir = str(project_root)
+
+        def ensure_pane(self):
+            return True, '%4'
+
+    class FakeReader:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+
+        def capture_state(self):
+            return {'session_path': str(tmp_path / 'opencode-session.json'), 'session_id': 'ses-demo'}
+
+        def try_get_message(self, state):
+            return f'legacy final\nCCB_DONE: {anchor["req_id"]}', state
+
+    monkeypatch.setattr(opencode_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(opencode_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(opencode_adapter_module, 'OpenCodeLogReader', FakeReader)
+
+    app = CcbdApp(project_root)
+    thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread.start()
+    _wait_for_path(app.paths.ccbd_socket_path)
+
+    try:
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        assert code == 0, stderr
+
+        code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'hello opencode'], cwd=project_root)
+        assert code == 0, stderr
+        job_id = _extract_accepted_job_id(stdout, target='demo')
+
+        pend = _wait_for_phase2_status(project_root, job_id, 'completed', timeout=5.0)
+        assert 'reply: legacy final' in pend
+        assert 'completion_reason: legacy_done_marker' in pend
+        assert 'completion_confidence: degraded' in pend
+
+        code, stdout, stderr = _run_phase2_local(['watch', job_id], cwd=project_root)
+        assert code == 0, stderr
+        assert 'watch_status: terminal' in stdout
+        assert f'job_id: {job_id}' in stdout
+        assert 'status: completed' in stdout
+    finally:
+        app.shutdown()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+
+
+def test_ccb_opencode_real_adapter_blackbox_cancel_stops_legacy_completion(monkeypatch, tmp_path: Path) -> None:
+    from provider_execution import opencode as opencode_adapter_module
+
+    project_root = tmp_path / 'repo-opencode-cancel'
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('opencode'))
+    anchor: dict[str, str | None] = {'req_id': None}
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            self.sent = (pane_id, text)
+            match = re.search(r'^CCB_REQ_ID:\s*(\S+)\s*$', text, re.MULTILINE)
+            anchor['req_id'] = match.group(1) if match else None
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%4'
+
+    class FakeSession:
+        data = {}
+        opencode_project_id = 'proj-demo'
+        opencode_session_id_filter = 'ses-demo'
+        work_dir = str(project_root)
+
+        def ensure_pane(self):
+            return True, '%4'
+
+    class FakeReader:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+            self._calls = 0
+
+        def capture_state(self):
+            return {'session_path': str(tmp_path / 'opencode-session.json'), 'session_id': 'ses-demo'}
+
+        def try_get_message(self, state):
+            self._calls += 1
+            if self._calls == 1:
+                return 'partial before cancel', state
+            if self._calls < 50:
+                return None, state
+            return f'final after cancel\nCCB_DONE: {anchor["req_id"]}', state
+
+    monkeypatch.setattr(opencode_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(opencode_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(opencode_adapter_module, 'OpenCodeLogReader', FakeReader)
+
+    app = CcbdApp(project_root)
+    thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread.start()
+    _wait_for_path(app.paths.ccbd_socket_path)
+
+    try:
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        assert code == 0, stderr
+
+        code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'hello opencode cancel'], cwd=project_root)
+        assert code == 0, stderr
+        job_id = _extract_accepted_job_id(stdout, target='demo')
+
+        running = _wait_for_phase2_status(project_root, 'demo', 'running', timeout=3.0)
+        assert f'job_id: {job_id}' in running
+        assert 'reply: partial before cancel' in running
+
+        code, stdout, stderr = _run_phase2_local(['cancel', job_id], cwd=project_root)
+        assert code == 0, stderr
+        assert 'cancel_status: ok' in stdout
+        assert 'status: cancelled' in stdout
+
+        pend = _wait_for_phase2_status(project_root, job_id, 'cancelled', timeout=5.0)
+        assert 'reply: partial before cancel' in pend
+        assert 'completion_reason: cancel_info' in pend
+        assert 'completion_confidence: degraded' in pend
+        assert 'final after cancel' not in pend
+
+        code, stdout, stderr = _run_phase2_local(['watch', job_id], cwd=project_root)
+        assert code == 0, stderr
+        assert 'watch_status: terminal' in stdout
+        assert 'status: cancelled' in stdout
+    finally:
+        app.shutdown()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+
+
+def test_ccb_droid_real_adapter_blackbox_pane_dead_fails_degraded(monkeypatch, tmp_path: Path) -> None:
+    from provider_execution import droid as droid_adapter_module
+
+    fixed_req_id = 'job_d00d10'
+    project_root = tmp_path / 'repo-droid-dead'
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('droid'))
+    _write(
+        project_root / '.ccb' / '.droid-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%5',
+                'work_dir': str(project_root),
+                'droid_session_id': 'droid-session-id',
+                'droid_session_path': str(tmp_path / 'droid-session.jsonl'),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+
+    class DeadBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            self.sent = (pane_id, text)
+
+        def is_alive(self, pane_id: str) -> bool:
+            del pane_id
+            return False
+
+    class FakeSession:
+        data = {}
+        droid_session_path = str(tmp_path / 'droid-session.jsonl')
+        droid_session_id = 'droid-session-id'
+        work_dir = str(project_root)
+
+        def ensure_pane(self):
+            return True, '%5'
+
+    class EmptyReader:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+
+        def set_preferred_session(self, session_path) -> None:
+            del session_path
+
+        def set_session_id_hint(self, session_id) -> None:
+            del session_id
+
+        def capture_state(self):
+            return {'session_path': str(tmp_path / 'droid-session.jsonl'), 'offset': 0}
+
+        def try_get_events(self, state):
+            return [], state
+
+    monkeypatch.setattr(droid_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(droid_adapter_module, 'get_backend_for_session', lambda data: DeadBackend())
+    monkeypatch.setattr(droid_adapter_module, 'DroidLogReader', EmptyReader)
+    app = CcbdApp(project_root)
+    _freeze_job_ids(app, monkeypatch, fixed_req_id)
+    thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread.start()
+    _wait_for_path(app.paths.ccbd_socket_path)
+
+    try:
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        assert code == 0, stderr
+
+        code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'hello droid dead'], cwd=project_root)
+        assert code == 0, stderr
+        job_id = _extract_accepted_job_id(stdout, target='demo')
+
+        pend = _wait_for_phase2_status(project_root, job_id, 'failed', timeout=5.0)
+        assert 'reply: \n' in pend or pend.rstrip().endswith('reply:')
+        assert 'completion_reason: pane_dead' in pend
+        assert 'completion_confidence: degraded' in pend
+
+        code, stdout, stderr = _run_phase2_local(['watch', job_id], cwd=project_root)
+        assert code == 0, stderr
+        assert 'watch_status: terminal' in stdout
+        assert f'job_id: {job_id}' in stdout
+        assert 'status: failed' in stdout
+    finally:
+        app.shutdown()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+
+
+def test_ccb_droid_real_adapter_blackbox_legacy_done_marker_completion(monkeypatch, tmp_path: Path) -> None:
+    from provider_execution import droid as droid_adapter_module
+
+    project_root = tmp_path / 'repo-droid-legacy'
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('droid'))
+    anchor: dict[str, str | None] = {'req_id': None}
+    _write(
+        project_root / '.ccb' / '.droid-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%5',
+                'work_dir': str(project_root),
+                'droid_session_id': 'droid-session-id',
+                'droid_session_path': str(tmp_path / 'droid-session.jsonl'),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            self.sent = (pane_id, text)
+            match = re.search(r'^CCB_REQ_ID:\s*(\S+)\s*$', text, re.MULTILINE)
+            anchor['req_id'] = match.group(1) if match else None
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%5'
+
+    class FakeSession:
+        data = {}
+        droid_session_path = str(tmp_path / 'droid-session.jsonl')
+        droid_session_id = 'droid-session-id'
+        work_dir = str(project_root)
+
+        def ensure_pane(self):
+            return True, '%5'
+
+    class FakeReader:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+
+        def set_preferred_session(self, session_path) -> None:
+            del session_path
+
+        def set_session_id_hint(self, session_id) -> None:
+            del session_id
+
+        def capture_state(self):
+            return {'session_path': str(tmp_path / 'droid-session.jsonl'), 'offset': 0}
+
+        def try_get_events(self, state):
+            events = [
+                ('user', f'CCB_REQ_ID: {anchor["req_id"]}\n\nprompt'),
+                ('assistant', 'partial'),
+                ('assistant', f'final\nCCB_DONE: {anchor["req_id"]}'),
+            ]
+            index = int(state.get('index', 0))
+            if index >= len(events):
+                return [], state
+            return [events[index]], {**state, 'index': index + 1}
+
+    monkeypatch.setattr(droid_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(droid_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(droid_adapter_module, 'DroidLogReader', FakeReader)
+
+    app = CcbdApp(project_root)
+    thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread.start()
+    _wait_for_path(app.paths.ccbd_socket_path)
+
+    try:
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        assert code == 0, stderr
+
+        code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'hello droid'], cwd=project_root)
+        assert code == 0, stderr
+        job_id = _extract_accepted_job_id(stdout, target='demo')
+
+        pend = _wait_for_phase2_status(project_root, job_id, 'completed', timeout=5.0)
+        assert 'reply: partial\nfinal' in pend
+        assert 'completion_reason: legacy_done_marker' in pend
+        assert 'completion_confidence: degraded' in pend
+
+        code, stdout, stderr = _run_phase2_local(['watch', job_id], cwd=project_root)
+        assert code == 0, stderr
+        assert 'watch_status: terminal' in stdout
+        assert f'job_id: {job_id}' in stdout
+        assert 'status: completed' in stdout
+    finally:
+        app.shutdown()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+
+
+def test_ccb_droid_real_adapter_blackbox_cancel_stops_legacy_completion(monkeypatch, tmp_path: Path) -> None:
+    from provider_execution import droid as droid_adapter_module
+
+    project_root = tmp_path / 'repo-droid-cancel'
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('droid'))
+    anchor: dict[str, str | None] = {'req_id': None}
+    _write(
+        project_root / '.ccb' / '.droid-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%5',
+                'work_dir': str(project_root),
+                'droid_session_id': 'droid-session-id',
+                'droid_session_path': str(tmp_path / 'droid-session.jsonl'),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            self.sent = (pane_id, text)
+            match = re.search(r'^CCB_REQ_ID:\s*(\S+)\s*$', text, re.MULTILINE)
+            anchor['req_id'] = match.group(1) if match else None
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%5'
+
+    class FakeSession:
+        data = {}
+        droid_session_path = str(tmp_path / 'droid-session.jsonl')
+        droid_session_id = 'droid-session-id'
+        work_dir = str(project_root)
+
+        def ensure_pane(self):
+            return True, '%5'
+
+    class FakeReader:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+            self._calls = 0
+
+        def set_preferred_session(self, session_path) -> None:
+            del session_path
+
+        def set_session_id_hint(self, session_id) -> None:
+            del session_id
+
+        def capture_state(self):
+            return {'session_path': str(tmp_path / 'droid-session.jsonl'), 'offset': 0}
+
+        def try_get_events(self, state):
+            events = [
+                ('user', f'CCB_REQ_ID: {anchor["req_id"]}\n\nprompt'),
+                ('assistant', 'partial before cancel'),
+                ('assistant', f'final after cancel\nCCB_DONE: {anchor["req_id"]}'),
+            ]
+            self._calls += 1
+            index = int(state.get('index', 0))
+            if index >= len(events):
+                return [], state
+            if index >= 2 and self._calls < 50:
+                return [], state
+            return [events[index]], {**state, 'index': index + 1}
+
+    monkeypatch.setattr(droid_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(droid_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(droid_adapter_module, 'DroidLogReader', FakeReader)
+
+    app = CcbdApp(project_root)
+    thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread.start()
+    _wait_for_path(app.paths.ccbd_socket_path)
+
+    try:
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        assert code == 0, stderr
+
+        code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'hello droid cancel'], cwd=project_root)
+        assert code == 0, stderr
+        job_id = _extract_accepted_job_id(stdout, target='demo')
+
+        running = _wait_for_phase2_status(project_root, 'demo', 'running', timeout=3.0)
+        assert f'job_id: {job_id}' in running
+        assert 'reply: partial before cancel' in running
+
+        code, stdout, stderr = _run_phase2_local(['cancel', job_id], cwd=project_root)
+        assert code == 0, stderr
+        assert 'cancel_status: ok' in stdout
+        assert 'status: cancelled' in stdout
+
+        pend = _wait_for_phase2_status(project_root, job_id, 'cancelled', timeout=5.0)
+        assert 'reply: partial before cancel' in pend
+        assert 'completion_reason: cancel_info' in pend
+        assert 'completion_confidence: degraded' in pend
+        assert 'final after cancel' not in pend
+
+        code, stdout, stderr = _run_phase2_local(['watch', job_id], cwd=project_root)
+        assert code == 0, stderr
+        assert 'watch_status: terminal' in stdout
+        assert 'status: cancelled' in stdout
+    finally:
+        app.shutdown()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+
+
+
+def test_ccb_start_restore_preserves_existing_restore_state(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    _write(project_root / '.ccb' / 'ccb.config', _config_text())
+    restore_path = project_root / '.ccb' / 'agents' / 'codex' / 'restore.json'
+    restore_path.parent.mkdir(parents=True, exist_ok=True)
+    restore_path.write_text(
+        json.dumps(
+            {
+                'schema_version': 2,
+                'record_type': 'agent_restore_state',
+                'restore_mode': 'auto',
+                'last_checkpoint': 'cp-1',
+                'conversation_summary': 'keep this summary',
+                'open_tasks': ['task-a'],
+                'files_touched': ['README.md'],
+                'base_commit': None,
+                'head_commit': None,
+                'last_restore_status': 'checkpoint',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+        encoding='utf-8',
+    )
+
+    proc = _run_ccb(['-r'], cwd=project_root)
+    assert proc.returncode == 0, proc.stderr
+    assert 'start_status: ok' in proc.stdout
+
+    doctor = _run_ccb(['doctor'], cwd=project_root)
+    assert doctor.returncode == 0, doctor.stderr
+    assert 'agent: name=codex health=restored provider=codex completion=protocol_turn' in doctor.stdout
+
+    payload = json.loads(restore_path.read_text(encoding='utf-8'))
+    assert payload['conversation_summary'] == 'keep this summary'
+    assert payload['last_checkpoint'] == 'cp-1'
+    assert payload['last_restore_status'] == 'checkpoint'
+
+    kill = _run_ccb(['kill'], cwd=project_root)
+    assert kill.returncode == 0, kill.stderr
+
+
+
+def test_ccb_start_prefers_instance_scoped_codex_binding(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-codex-binding'
+    _write(project_root / '.ccb' / 'ccb.config', _named_agent_config_text('demo', 'codex'))
+    _write(
+        project_root / '.ccb' / '.codex-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%1',
+                'work_dir': str(project_root),
+                'codex_session_id': 'base-session-id',
+                'codex_session_path': str(tmp_path / 'base-session.jsonl'),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+    _write(
+        project_root / '.ccb' / '.codex-demo-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%9',
+                'work_dir': str(project_root),
+                'codex_session_id': 'demo-session-id',
+                'codex_session_path': str(tmp_path / 'demo-session.jsonl'),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+
+    proc = _run_ccb([], cwd=project_root)
+    assert proc.returncode == 0, proc.stderr
+    assert 'agents: demo' in proc.stdout
+
+    runtime_path = project_root / '.ccb' / 'agents' / 'demo' / 'runtime.json'
+    runtime = json.loads(runtime_path.read_text(encoding='utf-8'))
+    assert runtime['runtime_ref'] == 'tmux:%9'
+    assert runtime['session_ref'] == 'demo-session-id'
+    assert runtime['workspace_path'] == str(project_root / '.ccb' / 'workspaces' / 'demo')
+
+    kill = _run_ccb(['kill'], cwd=project_root)
+    assert kill.returncode == 0, kill.stderr
+
+
+def test_ccb_start_loads_claude_binding_from_project_anchor(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-claude-binding'
+    _write(project_root / '.ccb' / 'ccb.config', _named_agent_config_text('claude', 'claude'))
+    _write(
+        project_root / '.ccb' / '.claude-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%2',
+                'work_dir': str(project_root),
+                'work_dir_norm': str(project_root),
+                'claude_session_id': 'claude-session-id',
+                'claude_session_path': str(tmp_path / 'claude-session.jsonl'),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+
+    proc = _run_ccb([], cwd=project_root)
+    assert proc.returncode == 0, proc.stderr
+    assert 'agents: claude' in proc.stdout
+
+    runtime_path = project_root / '.ccb' / 'agents' / 'claude' / 'runtime.json'
+    runtime = json.loads(runtime_path.read_text(encoding='utf-8'))
+    assert runtime['runtime_ref'] == 'tmux:%2'
+    assert runtime['session_ref'] == 'claude-session-id'
+    assert runtime['workspace_path'] == str(project_root / '.ccb' / 'workspaces' / 'claude')
+
+    kill = _run_ccb(['kill'], cwd=project_root)
+    assert kill.returncode == 0, kill.stderr
+
+
+def test_ccb_start_restore_keeps_bound_runtime_refs(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-restore-binding'
+    _write(project_root / '.ccb' / 'ccb.config', _named_agent_config_text('demo', 'codex'))
+    _write(
+        project_root / '.ccb' / '.codex-demo-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%9',
+                'work_dir': str(project_root),
+                'codex_session_id': 'demo-session-id',
+                'codex_session_path': str(tmp_path / 'demo-session.jsonl'),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+
+    proc = _run_ccb([], cwd=project_root)
+    assert proc.returncode == 0, proc.stderr
+
+    restore = _run_ccb(['-r'], cwd=project_root)
+    assert restore.returncode == 0, restore.stderr
+
+    runtime_path = project_root / '.ccb' / 'agents' / 'demo' / 'runtime.json'
+    runtime = json.loads(runtime_path.read_text(encoding='utf-8'))
+    assert runtime['runtime_ref'] == 'tmux:%9'
+    assert runtime['session_ref'] == 'demo-session-id'
+
+    doctor = _run_ccb(['doctor'], cwd=project_root)
+    assert doctor.returncode == 0, doctor.stderr
+    assert 'binding: status=bound runtime=tmux:%9 session=demo-session-id' in doctor.stdout
+
+    kill = _run_ccb(['kill'], cwd=project_root)
+    assert kill.returncode == 0, kill.stderr
+
+
+def test_ccb_start_gemini_binding_does_not_fall_back_to_default_session(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-gemini-binding'
+    _write(project_root / '.ccb' / 'ccb.config', _named_agent_config_text('demo', 'gemini'))
+    _write(
+        project_root / '.ccb' / '.gemini-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%7',
+                'work_dir': str(project_root),
+                'gemini_session_id': 'gemini-default-id',
+                'gemini_session_path': str(tmp_path / 'gemini-session.jsonl'),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+
+    proc = _run_ccb([], cwd=project_root)
+    assert proc.returncode == 0, proc.stderr
+    assert 'agents: demo' in proc.stdout
+
+    runtime_path = project_root / '.ccb' / 'agents' / 'demo' / 'runtime.json'
+    runtime = json.loads(runtime_path.read_text(encoding='utf-8'))
+    assert runtime['runtime_ref'] != 'tmux:%7'
+    assert runtime['session_ref'] != 'gemini-default-id'
+    assert runtime['workspace_path'] == str(project_root / '.ccb' / 'workspaces' / 'demo')
+
+    kill = _run_ccb(['kill'], cwd=project_root)
+    assert kill.returncode == 0, kill.stderr
+
+
+def test_ccb_fake_provider_auto_completes(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-fake'
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('fake'))
+
+    start = _run_ccb([], cwd=project_root)
+    assert start.returncode == 0, start.stderr
+    assert 'agents: demo' in start.stdout
+
+    ask = _run_ccb(['ask', 'demo', 'from', 'user', 'auto complete'], cwd=project_root)
+    assert ask.returncode == 0, ask.stderr
+    job_id = _extract_accepted_job_id(ask.stdout, target='demo')
+
+    completed = _wait_for_status(project_root, job_id, 'completed', timeout=5.0)
+    assert 'reply: FAKE[demo] auto complete' in completed.stdout
+    assert 'completion_reason: result_message' in completed.stdout
+    assert 'completion_confidence: exact' in completed.stdout
+
+    watch = _run_ccb(['watch', job_id], cwd=project_root)
+    assert watch.returncode == 0, watch.stderr
+    assert 'watch_status: terminal' in watch.stdout
+    assert 'status: completed' in watch.stdout
+    assert 'reply: FAKE[demo] auto complete' in watch.stdout
+    assert 'completion_item' in watch.stdout
+    assert 'completion_state_updated' in watch.stdout
+
+    kill = _run_ccb(['kill'], cwd=project_root)
+    assert kill.returncode == 0, kill.stderr
+
+
+
+def test_ccb_fake_codex_provider_blackbox_watch_chain(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-fake-codex'
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('fake-codex'))
+
+    start = _run_ccb([], cwd=project_root)
+    assert start.returncode == 0, start.stderr
+    assert 'agents: demo' in start.stdout
+
+    doctor = _run_ccb(['doctor'], cwd=project_root)
+    assert doctor.returncode == 0, doctor.stderr
+    assert 'agent: name=demo health=restored provider=fake-codex completion=protocol_turn' in doctor.stdout
+
+    ask = _run_ccb(
+        [
+            'ask',
+            '--task-id',
+            'fake;latency_ms=400',
+            'demo',
+            'from',
+            'user',
+            'protocol flow',
+        ],
+        cwd=project_root,
+    )
+    assert ask.returncode == 0, ask.stderr
+    job_id = _extract_accepted_job_id(ask.stdout, target='demo')
+
+    observed = _wait_for_any_status(project_root, 'demo', ('running', 'completed'), timeout=3.0)
+    assert f'job_id: {job_id}' in observed.stdout
+
+    watch = _run_ccb(['watch', 'demo'], cwd=project_root)
+    assert watch.returncode == 0, watch.stderr
+    assert 'watch_status: terminal' in watch.stdout
+    assert f'job_id: {job_id}' in watch.stdout
+    assert 'agent_name: demo' in watch.stdout
+    assert 'status: completed' in watch.stdout
+    assert 'reply: FAKE[demo] protocol flow' in watch.stdout
+    assert 'completion_item' in watch.stdout
+    assert 'completion_terminal' in watch.stdout
+    assert 'job_completed' in watch.stdout
+
+    completed = _wait_for_status(project_root, job_id, 'completed', timeout=3.0)
+    assert 'reply: FAKE[demo] protocol flow' in completed.stdout
+    assert 'completion_reason: task_complete' in completed.stdout
+    assert 'completion_confidence: exact' in completed.stdout
+
+    kill = _run_ccb(['kill'], cwd=project_root)
+    assert kill.returncode == 0, kill.stderr
+
+
+def test_ccb_codex_real_adapter_blackbox_watch_chain_without_done_marker(monkeypatch, tmp_path: Path) -> None:
+    from provider_execution import codex as codex_adapter_module
+
+    fixed_req_id = 'job_c0de11'
+    sent: list[tuple[str, str]] = []
+    project_root = tmp_path / 'repo-codex-real'
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('codex'))
+    _write(
+        project_root / '.ccb' / '.codex-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%1',
+                'work_dir': str(project_root),
+                'codex_session_id': 'codex-session-id',
+                'codex_session_path': str(tmp_path / 'codex-session.jsonl'),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            sent.append((pane_id, text))
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%1'
+
+    class FakeSession:
+        data = {}
+        codex_session_path = str(tmp_path / 'codex-session.jsonl')
+        codex_session_id = 'codex-session-id'
+        work_dir = str(project_root)
+
+        def ensure_pane(self):
+            return True, '%1'
+
+    class FakeReader:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+            self._events = [
+                {
+                    'role': 'user',
+                    'text': f'CCB_REQ_ID: {fixed_req_id}\n\nprompt',
+                    'entry_type': 'response_item',
+                    'payload_type': 'message',
+                    'timestamp': '2026-03-18T00:00:00Z',
+                },
+                {
+                    'role': 'assistant',
+                    'text': 'partial',
+                    'entry_type': 'event_msg',
+                    'payload_type': 'agent_message',
+                    'timestamp': '2026-03-18T00:00:01Z',
+                },
+                {
+                    'role': 'assistant',
+                    'text': 'final without done',
+                    'entry_type': 'event_msg',
+                    'payload_type': 'agent_message',
+                    'phase': 'final_answer',
+                    'timestamp': '2026-03-18T00:00:02Z',
+                },
+                {
+                    'role': 'assistant',
+                    'text': 'final without done',
+                    'entry_type': 'response_item',
+                    'payload_type': 'message',
+                    'phase': 'final_answer',
+                    'timestamp': '2026-03-18T00:00:02Z',
+                },
+                {
+                    'role': 'system',
+                    'text': 'partial\nfinal without done',
+                    'entry_type': 'event_msg',
+                    'payload_type': 'task_complete',
+                    'turn_id': 'turn-codex-phase2',
+                    'last_agent_message': 'partial\nfinal without done',
+                    'timestamp': '2026-03-18T00:00:03Z',
+                },
+            ]
+
+        def capture_state(self):
+            return {'index': 0, 'log_path': str(tmp_path / 'codex-session.jsonl')}
+
+        def try_get_entries(self, state):
+            index = int(state.get('index', 0))
+            if index >= len(self._events):
+                return [], state
+            return [self._events[index]], {**state, 'index': index + 1}
+
+    monkeypatch.setattr(codex_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(codex_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(codex_adapter_module, 'CodexLogReader', FakeReader)
+    app = CcbdApp(project_root)
+    _freeze_job_ids(app, monkeypatch, fixed_req_id)
+    thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread.start()
+    _wait_for_path(app.paths.ccbd_socket_path)
+
+    try:
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        assert code == 0, stderr
+        assert 'start_status: ok' in stdout
+
+        code, stdout, stderr = _run_phase2_local(['doctor'], cwd=project_root)
+        assert code == 0, stderr
+        assert 'agent: name=demo health=restored provider=codex completion=protocol_turn' in stdout
+
+        code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'hello codex'], cwd=project_root)
+        assert code == 0, stderr
+        job_id = _extract_accepted_job_id(stdout, target='demo')
+
+        pend = _wait_for_phase2_status(project_root, 'demo', 'completed')
+        assert f'job_id: {job_id}' in pend
+        assert 'reply: partial\nfinal without done' in pend
+        assert 'completion_reason: task_complete' in pend
+        assert 'completion_confidence: exact' in pend
+        assert sent and sent[0][0] == '%1'
+        assert fixed_req_id in sent[0][1]
+        assert 'CCB_DONE:' not in sent[0][1]
+
+        code, stdout, stderr = _run_phase2_local(['watch', job_id], cwd=project_root)
+        assert code == 0, stderr
+        assert 'watch_status: terminal' in stdout
+        assert f'job_id: {job_id}' in stdout
+        assert 'status: completed' in stdout
+
+        code, stdout, stderr = _run_phase2_local(['watch', 'demo'], cwd=project_root)
+        assert code == 0, stderr
+        assert 'watch_status: terminal' in stdout
+        assert f'job_id: {job_id}' in stdout
+    finally:
+        app.shutdown()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+
+
+def test_ccb_codex_real_adapter_recovers_after_ccbd_restart(monkeypatch, tmp_path: Path) -> None:
+    from provider_execution import codex as codex_adapter_module
+
+    fixed_req_id = 'job_c0de12'
+    project_root = tmp_path / 'repo-codex-resume'
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('codex'))
+    _write(
+        project_root / '.ccb' / '.codex-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%1',
+                'work_dir': str(project_root),
+                'codex_session_id': 'codex-session-id',
+                'codex_session_path': str(tmp_path / 'codex-session.jsonl'),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            self.sent = (pane_id, text)
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%1'
+
+    class FakeSession:
+        data = {}
+        codex_session_path = str(tmp_path / 'codex-session.jsonl')
+        codex_session_id = 'codex-session-id'
+        work_dir = str(project_root)
+
+        def ensure_pane(self):
+            return True, '%1'
+
+    class FakeReader:
+        instances = 0
+
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+            FakeReader.instances += 1
+            self.instance_id = FakeReader.instances
+            self._events = [
+                {
+                    'role': 'user',
+                    'text': f'CCB_REQ_ID: {fixed_req_id}\n\nprompt',
+                    'entry_type': 'response_item',
+                    'payload_type': 'message',
+                    'timestamp': '2026-03-18T00:00:00Z',
+                },
+                {
+                    'role': 'assistant',
+                    'text': 'partial before restart',
+                    'entry_type': 'event_msg',
+                    'payload_type': 'agent_message',
+                    'timestamp': '2026-03-18T00:00:01Z',
+                },
+                {
+                    'role': 'system',
+                    'text': 'partial before restart',
+                    'entry_type': 'event_msg',
+                    'payload_type': 'task_complete',
+                    'turn_id': 'turn-codex-resume',
+                    'last_agent_message': 'partial before restart',
+                    'timestamp': '2026-03-18T00:00:02Z',
+                },
+            ]
+
+        def capture_state(self):
+            return {'index': 0, 'log_path': str(tmp_path / 'codex-session.jsonl')}
+
+        def try_get_entries(self, state):
+            index = int(state.get('index', 0))
+            limit = 2 if self.instance_id == 1 else len(self._events)
+            if index >= limit:
+                return [], state
+            return [self._events[index]], {**state, 'index': index + 1}
+
+    monkeypatch.setattr(codex_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(codex_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(codex_adapter_module, 'CodexLogReader', FakeReader)
+    app1 = CcbdApp(project_root)
+    _freeze_job_ids(app1, monkeypatch, fixed_req_id)
+    thread1 = threading.Thread(target=app1.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread1.start()
+    _wait_for_path(app1.paths.ccbd_socket_path)
+
+    try:
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        assert code == 0, stderr
+
+        code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'resume codex'], cwd=project_root)
+        assert code == 0, stderr
+        job_id = _extract_accepted_job_id(stdout, target='demo')
+
+        running = _wait_for_phase2_status(project_root, 'demo', 'running')
+        assert f'job_id: {job_id}' in running
+
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            events_path = project_root / '.ccb' / 'agents' / 'demo' / 'events.jsonl'
+            if events_path.exists() and 'assistant_chunk' in events_path.read_text(encoding='utf-8'):
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError('expected assistant_chunk before restart')
+
+        app1.shutdown()
+        thread1.join(timeout=2)
+        assert not thread1.is_alive()
+
+        app2 = CcbdApp(project_root)
+        thread2 = threading.Thread(target=app2.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+        thread2.start()
+        _wait_for_path(app2.paths.ccbd_socket_path)
+        try:
+            pend = _wait_for_phase2_status(project_root, job_id, 'completed')
+            assert 'reply: partial before restart' in pend
+            assert 'completion_reason: task_complete' in pend
+        finally:
+            app2.shutdown()
+            thread2.join(timeout=2)
+            assert not thread2.is_alive()
+    finally:
+        if thread1.is_alive():
+            app1.shutdown()
+            thread1.join(timeout=2)
+            assert not thread1.is_alive()
+
+
+def test_ccb_two_named_codex_agents_concurrent_ask_isolated(monkeypatch, tmp_path: Path) -> None:
+    from jobs.store import JobEventStore, JobStore
+    from provider_execution import codex as codex_adapter_module
+    from storage.paths import PathLayout
+
+    project_root = tmp_path / 'repo-dual-codex'
+    _write(project_root / '.ccb' / 'ccb.config', _dual_named_agent_config_text('agent1', 'codex', 'agent2', 'codex'))
+    _write(
+        project_root / '.ccb' / '.codex-agent1-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%11',
+                'work_dir': str(project_root / '.ccb' / 'workspaces' / 'agent1'),
+                'work_dir_norm': str(project_root / '.ccb' / 'workspaces' / 'agent1'),
+                'codex_session_id': 'agent1-session-id',
+                'codex_session_path': str(tmp_path / 'agent1-session.jsonl'),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+    _write(
+        project_root / '.ccb' / '.codex-agent2-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%22',
+                'work_dir': str(project_root / '.ccb' / 'workspaces' / 'agent2'),
+                'work_dir_norm': str(project_root / '.ccb' / 'workspaces' / 'agent2'),
+                'codex_session_id': 'agent2-session-id',
+                'codex_session_path': str(tmp_path / 'agent2-session.jsonl'),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+
+    request_ids = ('job_a11ce1', 'job_b0b001')
+    sent: list[tuple[str, str]] = []
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            sent.append((pane_id, text))
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id in {'%11', '%22'}
+
+    class FakeSession:
+        def __init__(self, *, pane_id: str, session_id: str, log_path: Path, work_dir: Path) -> None:
+            self.data = {'pane_id': pane_id}
+            self.codex_session_path = str(log_path)
+            self.codex_session_id = session_id
+            self.work_dir = str(work_dir)
+
+        def ensure_pane(self):
+            return True, self.data['pane_id']
+
+    class FakeReader:
+        def __init__(self, *args, **kwargs) -> None:
+            self.session_id = str(kwargs.get('session_id_filter') or '')
+            self.log_path = str(kwargs.get('log_path') or '')
+            if self.session_id == 'agent1-session-id':
+                self._events = [
+                    {
+                        'role': 'user',
+                        'text': f'CCB_REQ_ID: {request_ids[0]}\n\nprompt',
+                        'entry_type': 'response_item',
+                        'payload_type': 'message',
+                        'timestamp': '2026-03-18T00:00:00Z',
+                    },
+                    {
+                        'role': 'assistant',
+                        'text': 'agent1 partial',
+                        'entry_type': 'event_msg',
+                        'payload_type': 'agent_message',
+                        'timestamp': '2026-03-18T00:00:01Z',
+                    },
+                    {
+                        'role': 'system',
+                        'text': 'agent1 partial\nagent1 final',
+                        'entry_type': 'event_msg',
+                        'payload_type': 'task_complete',
+                        'turn_id': 'turn-agent1',
+                        'last_agent_message': 'agent1 partial\nagent1 final',
+                        'timestamp': '2026-03-18T00:00:02Z',
+                    },
+                ]
+            elif self.session_id == 'agent2-session-id':
+                self._events = [
+                    {
+                        'role': 'user',
+                        'text': f'CCB_REQ_ID: {request_ids[1]}\n\nprompt',
+                        'entry_type': 'response_item',
+                        'payload_type': 'message',
+                        'timestamp': '2026-03-18T00:00:00Z',
+                    },
+                    {
+                        'role': 'assistant',
+                        'text': 'agent2 partial',
+                        'entry_type': 'event_msg',
+                        'payload_type': 'agent_message',
+                        'timestamp': '2026-03-18T00:00:01Z',
+                    },
+                    {
+                        'role': 'system',
+                        'text': 'agent2 partial\nagent2 final',
+                        'entry_type': 'event_msg',
+                        'payload_type': 'task_complete',
+                        'turn_id': 'turn-agent2',
+                        'last_agent_message': 'agent2 partial\nagent2 final',
+                        'timestamp': '2026-03-18T00:00:02Z',
+                    },
+                ]
+            else:
+                raise AssertionError(f'unexpected session: {self.session_id} {self.log_path}')
+
+        def capture_state(self):
+            return {'index': 0, 'log_path': self.log_path}
+
+        def try_get_entries(self, state):
+            index = int(state.get('index', 0))
+            if index >= len(self._events):
+                return [], state
+            return [self._events[index]], {**state, 'index': index + 1}
+
+    def _load_fake_session(work_dir, instance=None):
+        work_dir = Path(work_dir)
+        if instance is None:
+            return None
+        if instance == 'agent1':
+            return FakeSession(
+                pane_id='%11',
+                session_id='agent1-session-id',
+                log_path=tmp_path / 'agent1-session.jsonl',
+                work_dir=work_dir,
+            )
+        if instance == 'agent2':
+            return FakeSession(
+                pane_id='%22',
+                session_id='agent2-session-id',
+                log_path=tmp_path / 'agent2-session.jsonl',
+                work_dir=work_dir,
+            )
+        raise AssertionError(f'unexpected instance: {instance}')
+
+    monkeypatch.setattr(codex_adapter_module, 'load_project_session', _load_fake_session)
+    monkeypatch.setattr(codex_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(codex_adapter_module, 'CodexLogReader', FakeReader)
+    app = CcbdApp(project_root)
+    _freeze_job_ids(app, monkeypatch, *request_ids)
+    monkeypatch.setattr(app.health_monitor, 'check_all', lambda: {})
+    thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread.start()
+    _wait_for_path(app.paths.ccbd_socket_path)
+
+    try:
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        assert code == 0, stderr
+        assert 'agents: agent1, agent2' in stdout
+
+        runtime_agent1 = json.loads((project_root / '.ccb' / 'agents' / 'agent1' / 'runtime.json').read_text(encoding='utf-8'))
+        runtime_agent2 = json.loads((project_root / '.ccb' / 'agents' / 'agent2' / 'runtime.json').read_text(encoding='utf-8'))
+        assert runtime_agent1['session_ref'] == 'agent1-session-id'
+        assert runtime_agent2['session_ref'] == 'agent2-session-id'
+        assert runtime_agent1['workspace_path'].endswith('/.ccb/workspaces/agent1')
+        assert runtime_agent2['workspace_path'].endswith('/.ccb/workspaces/agent2')
+
+        code, stdout1, stderr = _run_phase2_local(['ask', 'agent1', 'from', 'user', 'hello agent1'], cwd=project_root)
+        assert code == 0, stderr
+        job1 = _extract_accepted_job_id(stdout1, target='agent1')
+
+        code, stdout2, stderr = _run_phase2_local(['ask', 'agent2', 'from', 'user', 'hello agent2'], cwd=project_root)
+        assert code == 0, stderr
+        job2 = _extract_accepted_job_id(stdout2, target='agent2')
+
+        pend1 = _wait_for_phase2_status(project_root, 'agent1', 'completed')
+        pend2 = _wait_for_phase2_status(project_root, 'agent2', 'completed')
+        assert f'job_id: {job1}' in pend1
+        assert f'job_id: {job2}' in pend2
+        assert 'reply: agent1 partial\nagent1 final' in pend1
+        assert 'reply: agent2 partial\nagent2 final' in pend2
+        assert 'agent2 final' not in pend1
+        assert 'agent1 final' not in pend2
+
+        code, watch1, stderr = _run_phase2_local(['watch', job1], cwd=project_root)
+        assert code == 0, stderr
+        code, watch2, stderr = _run_phase2_local(['watch', job2], cwd=project_root)
+        assert code == 0, stderr
+        assert 'agent_name: agent1' in watch1
+        assert 'agent_name: agent2' in watch2
+        assert f'job_id: {job1}' in watch1
+        assert f'job_id: {job2}' in watch2
+        assert 'agent2 final' not in watch1
+        assert 'agent1 final' not in watch2
+
+        layout = PathLayout(project_root)
+        event_store = JobEventStore(layout)
+        line1, events1 = event_store.read_since('agent1', 0)
+        line2, events2 = event_store.read_since('agent2', 0)
+        assert line1 > 0 and line2 > 0
+        assert all(event.agent_name == 'agent1' for event in events1)
+        assert all(event.agent_name == 'agent2' for event in events2)
+        assert any(event.job_id == job1 for event in events1)
+        assert any(event.job_id == job2 for event in events2)
+        assert not any(event.job_id == job2 for event in events1)
+        assert not any(event.job_id == job1 for event in events2)
+
+        job_store = JobStore(layout)
+        latest1 = job_store.get_latest('agent1', job1)
+        latest2 = job_store.get_latest('agent2', job2)
+        assert latest1 is not None and latest1.status.value == 'completed'
+        assert latest2 is not None and latest2.status.value == 'completed'
+
+        assert any(pane_id == '%11' and request_ids[0] in text for pane_id, text in sent)
+        assert any(pane_id == '%22' and request_ids[1] in text for pane_id, text in sent)
+        assert not any('CCB_DONE:' in text for _, text in sent)
+    finally:
+        _assert_phase2_app_shutdown_clean(project_root, app, thread)
+
+
+def test_ccb_two_named_codex_agents_recover_after_ccbd_restart(monkeypatch, tmp_path: Path) -> None:
+    from provider_execution import codex as codex_adapter_module
+
+    project_root = tmp_path / 'repo-dual-codex-resume'
+    _write(project_root / '.ccb' / 'ccb.config', _dual_named_agent_config_text('agent1', 'codex', 'agent2', 'codex'))
+    _write(
+        project_root / '.ccb' / '.codex-agent1-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%11',
+                'work_dir': str(project_root / '.ccb' / 'workspaces' / 'agent1'),
+                'work_dir_norm': str(project_root / '.ccb' / 'workspaces' / 'agent1'),
+                'codex_session_id': 'agent1-session-id',
+                'codex_session_path': str(tmp_path / 'agent1-session.jsonl'),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+    _write(
+        project_root / '.ccb' / '.codex-agent2-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%22',
+                'work_dir': str(project_root / '.ccb' / 'workspaces' / 'agent2'),
+                'work_dir_norm': str(project_root / '.ccb' / 'workspaces' / 'agent2'),
+                'codex_session_id': 'agent2-session-id',
+                'codex_session_path': str(tmp_path / 'agent2-session.jsonl'),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+
+    request_ids = ('job_a11ce2', 'job_b0b002')
+    reader_instances = {'agent1-session-id': 0, 'agent2-session-id': 0}
+    sent: list[tuple[str, str]] = []
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            sent.append((pane_id, text))
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id in {'%11', '%22'}
+
+    class FakeSession:
+        def __init__(self, *, pane_id: str, session_id: str, log_path: Path, work_dir: Path) -> None:
+            self.data = {'pane_id': pane_id}
+            self.codex_session_path = str(log_path)
+            self.codex_session_id = session_id
+            self.work_dir = str(work_dir)
+
+        def ensure_pane(self):
+            return True, self.data['pane_id']
+
+    class FakeReader:
+        def __init__(self, *args, **kwargs) -> None:
+            self.session_id = str(kwargs.get('session_id_filter') or '')
+            self.log_path = str(kwargs.get('log_path') or '')
+            reader_instances[self.session_id] = reader_instances.get(self.session_id, 0) + 1
+            if self.session_id == 'agent1-session-id':
+                self._events = [
+                    {
+                        'role': 'user',
+                        'text': f'CCB_REQ_ID: {request_ids[0]}\n\nprompt',
+                        'entry_type': 'response_item',
+                        'payload_type': 'message',
+                        'timestamp': '2026-03-18T00:00:00Z',
+                    },
+                    {
+                        'role': 'assistant',
+                        'text': 'agent1 before restart',
+                        'entry_type': 'event_msg',
+                        'payload_type': 'agent_message',
+                        'timestamp': '2026-03-18T00:00:01Z',
+                    },
+                    {
+                        'role': 'system',
+                        'text': 'agent1 before restart\nagent1 after restart',
+                        'entry_type': 'event_msg',
+                        'payload_type': 'task_complete',
+                        'turn_id': 'turn-agent1-restart',
+                        'last_agent_message': 'agent1 before restart\nagent1 after restart',
+                        'timestamp': '2026-03-18T00:00:02Z',
+                    },
+                ]
+            elif self.session_id == 'agent2-session-id':
+                self._events = [
+                    {
+                        'role': 'user',
+                        'text': f'CCB_REQ_ID: {request_ids[1]}\n\nprompt',
+                        'entry_type': 'response_item',
+                        'payload_type': 'message',
+                        'timestamp': '2026-03-18T00:00:00Z',
+                    },
+                    {
+                        'role': 'assistant',
+                        'text': 'agent2 before restart',
+                        'entry_type': 'event_msg',
+                        'payload_type': 'agent_message',
+                        'timestamp': '2026-03-18T00:00:01Z',
+                    },
+                    {
+                        'role': 'system',
+                        'text': 'agent2 before restart\nagent2 after restart',
+                        'entry_type': 'event_msg',
+                        'payload_type': 'task_complete',
+                        'turn_id': 'turn-agent2-restart',
+                        'last_agent_message': 'agent2 before restart\nagent2 after restart',
+                        'timestamp': '2026-03-18T00:00:02Z',
+                    },
+                ]
+            else:
+                raise AssertionError(f'unexpected session: {self.session_id} {self.log_path}')
+
+        def capture_state(self):
+            return {'index': 0, 'log_path': self.log_path}
+
+        def try_get_entries(self, state):
+            index = int(state.get('index', 0))
+            limit = 2 if reader_instances[self.session_id] == 1 else len(self._events)
+            if index >= limit:
+                return [], state
+            return [self._events[index]], {**state, 'index': index + 1}
+
+    def _load_fake_session(work_dir, instance=None):
+        work_dir = Path(work_dir)
+        if instance is None:
+            return None
+        if instance == 'agent1':
+            return FakeSession(
+                pane_id='%11',
+                session_id='agent1-session-id',
+                log_path=tmp_path / 'agent1-session.jsonl',
+                work_dir=work_dir,
+            )
+        if instance == 'agent2':
+            return FakeSession(
+                pane_id='%22',
+                session_id='agent2-session-id',
+                log_path=tmp_path / 'agent2-session.jsonl',
+                work_dir=work_dir,
+            )
+        raise AssertionError(f'unexpected instance: {instance}')
+
+    monkeypatch.setattr(codex_adapter_module, 'load_project_session', _load_fake_session)
+    monkeypatch.setattr(codex_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(codex_adapter_module, 'CodexLogReader', FakeReader)
+    app1 = CcbdApp(project_root)
+    _freeze_job_ids(app1, monkeypatch, *request_ids)
+    thread1 = threading.Thread(target=app1.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread1.start()
+    _wait_for_path(app1.paths.ccbd_socket_path)
+
+    try:
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        assert code == 0, stderr
+        assert 'agents: agent1, agent2' in stdout
+
+        code, stdout, stderr = _run_phase2_local(['ask', 'agent1', 'from', 'user', 'restart agent1'], cwd=project_root)
+        assert code == 0, stderr
+        job1 = _extract_accepted_job_id(stdout, target='agent1')
+
+        code, stdout, stderr = _run_phase2_local(['ask', 'agent2', 'from', 'user', 'restart agent2'], cwd=project_root)
+        assert code == 0, stderr
+        job2 = _extract_accepted_job_id(stdout, target='agent2')
+
+        running1 = _wait_for_phase2_status(project_root, 'agent1', 'running')
+        running2 = _wait_for_phase2_status(project_root, 'agent2', 'running')
+        assert f'job_id: {job1}' in running1
+        assert f'job_id: {job2}' in running2
+
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            agent1_events = project_root / '.ccb' / 'agents' / 'agent1' / 'events.jsonl'
+            agent2_events = project_root / '.ccb' / 'agents' / 'agent2' / 'events.jsonl'
+            if (
+                agent1_events.exists()
+                and agent2_events.exists()
+                and 'assistant_chunk' in agent1_events.read_text(encoding='utf-8')
+                and 'assistant_chunk' in agent2_events.read_text(encoding='utf-8')
+            ):
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError('expected assistant_chunk for both agents before restart')
+
+        _assert_phase2_app_shutdown_clean(project_root, app1, thread1)
+
+        app2 = CcbdApp(project_root)
+        thread2 = threading.Thread(target=app2.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+        thread2.start()
+        _wait_for_path(app2.paths.ccbd_socket_path)
+        try:
+            pend1 = _wait_for_phase2_status(project_root, 'agent1', 'completed')
+            pend2 = _wait_for_phase2_status(project_root, 'agent2', 'completed')
+            assert f'job_id: {job1}' in pend1
+            assert f'job_id: {job2}' in pend2
+            assert 'reply: agent1 before restart\nagent1 after restart' in pend1
+            assert 'reply: agent2 before restart\nagent2 after restart' in pend2
+            assert 'agent2 after restart' not in pend1
+            assert 'agent1 after restart' not in pend2
+            assert reader_instances['agent1-session-id'] >= 2
+            assert reader_instances['agent2-session-id'] >= 2
+            assert any(pane_id == '%11' and request_ids[0] in text for pane_id, text in sent)
+            assert any(pane_id == '%22' and request_ids[1] in text for pane_id, text in sent)
+        finally:
+            _assert_phase2_app_shutdown_clean(project_root, app2, thread2)
+    finally:
+        if thread1.is_alive():
+            _assert_phase2_app_shutdown_clean(project_root, app1, thread1)
+
+
+def test_ccb_two_named_claude_agents_concurrent_ask_isolated(monkeypatch, tmp_path: Path) -> None:
+    from jobs.store import JobEventStore, JobStore
+    from provider_execution import claude as claude_adapter_module
+    from storage.paths import PathLayout
+
+    project_root = tmp_path / 'repo-dual-claude'
+    _write(project_root / '.ccb' / 'ccb.config', _dual_named_agent_config_text('agent1', 'claude', 'agent2', 'claude'))
+    _write(
+        project_root / '.ccb' / '.claude-agent1-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%31',
+                'work_dir': str(project_root / '.ccb' / 'workspaces' / 'agent1'),
+                'claude_session_id': 'claude-agent1-session-id',
+                'claude_session_path': str(tmp_path / 'claude-agent1.jsonl'),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+    _write(
+        project_root / '.ccb' / '.claude-agent2-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%32',
+                'work_dir': str(project_root / '.ccb' / 'workspaces' / 'agent2'),
+                'claude_session_id': 'claude-agent2-session-id',
+                'claude_session_path': str(tmp_path / 'claude-agent2.jsonl'),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+
+    request_ids = ('job_ca1de6', 'job_ca1de7')
+    sent: list[tuple[str, str]] = []
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            sent.append((pane_id, text))
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id in {'%31', '%32'}
+
+    class FakeSession:
+        def __init__(self, *, pane_id: str, session_id: str, session_path: Path, work_dir: Path) -> None:
+            self.data = {'pane_id': pane_id}
+            self.claude_session_id = session_id
+            self.claude_session_path = str(session_path)
+            self.work_dir = str(work_dir)
+
+        def ensure_pane(self):
+            return True, self.data['pane_id']
+
+    class FakeReader:
+        def __init__(self, *args, **kwargs) -> None:
+            work_dir = Path(kwargs.get('work_dir') or '')
+            self.agent_name = work_dir.name
+            if self.agent_name == 'agent1':
+                self._events = [
+                    {'role': 'user', 'text': f'CCB_REQ_ID: {request_ids[0]}\n\nprompt', 'entry_type': 'user'},
+                    {'role': 'assistant', 'text': 'claude agent1 partial', 'entry_type': 'assistant', 'uuid': 'claude-agent1-uuid'},
+                    {
+                        'role': 'system',
+                        'text': '',
+                        'entry_type': 'system',
+                        'subtype': 'turn_duration',
+                        'parent_uuid': 'claude-agent1-uuid',
+                    },
+                ]
+            elif self.agent_name == 'agent2':
+                self._events = [
+                    {'role': 'user', 'text': f'CCB_REQ_ID: {request_ids[1]}\n\nprompt', 'entry_type': 'user'},
+                    {'role': 'assistant', 'text': 'claude agent2 partial', 'entry_type': 'assistant', 'uuid': 'claude-agent2-uuid'},
+                    {
+                        'role': 'system',
+                        'text': '',
+                        'entry_type': 'system',
+                        'subtype': 'turn_duration',
+                        'parent_uuid': 'claude-agent2-uuid',
+                    },
+                ]
+            else:
+                raise AssertionError(f'unexpected claude work_dir: {work_dir}')
+
+        def set_preferred_session(self, session_path) -> None:
+            del session_path
+
+        def capture_state(self):
+            return {'index': 0, 'session_path': f'{self.agent_name}.jsonl'}
+
+        def try_get_entries(self, state):
+            index = int(state.get('index', 0))
+            if index >= len(self._events):
+                return [], state
+            return [self._events[index]], {**state, 'index': index + 1}
+
+    def _load_fake_session(work_dir, instance=None):
+        work_dir = Path(work_dir)
+        if instance is None:
+            return None
+        if instance == 'agent1':
+            return FakeSession(
+                pane_id='%31',
+                session_id='claude-agent1-session-id',
+                session_path=tmp_path / 'claude-agent1.jsonl',
+                work_dir=work_dir,
+            )
+        if instance == 'agent2':
+            return FakeSession(
+                pane_id='%32',
+                session_id='claude-agent2-session-id',
+                session_path=tmp_path / 'claude-agent2.jsonl',
+                work_dir=work_dir,
+            )
+        raise AssertionError(f'unexpected instance: {instance}')
+
+    monkeypatch.setattr(claude_adapter_module, 'load_project_session', _load_fake_session)
+    monkeypatch.setattr(claude_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(claude_adapter_module, 'ClaudeLogReader', FakeReader)
+    app = CcbdApp(project_root)
+    _freeze_job_ids(app, monkeypatch, *request_ids)
+    thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread.start()
+    _wait_for_path(app.paths.ccbd_socket_path)
+
+    try:
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        assert code == 0, stderr
+        assert 'agents: agent1, agent2' in stdout
+
+        runtime_agent1 = json.loads((project_root / '.ccb' / 'agents' / 'agent1' / 'runtime.json').read_text(encoding='utf-8'))
+        runtime_agent2 = json.loads((project_root / '.ccb' / 'agents' / 'agent2' / 'runtime.json').read_text(encoding='utf-8'))
+        assert runtime_agent1['agent_name'] == 'agent1'
+        assert runtime_agent2['agent_name'] == 'agent2'
+        assert runtime_agent1['runtime_ref'] != runtime_agent2['runtime_ref']
+        assert runtime_agent1['workspace_path'].endswith('/.ccb/workspaces/agent1')
+        assert runtime_agent2['workspace_path'].endswith('/.ccb/workspaces/agent2')
+
+        code, stdout1, stderr = _run_phase2_local(['ask', 'agent1', 'from', 'user', 'hello claude agent1'], cwd=project_root)
+        assert code == 0, stderr
+        job1 = _extract_accepted_job_id(stdout1, target='agent1')
+
+        code, stdout2, stderr = _run_phase2_local(['ask', 'agent2', 'from', 'user', 'hello claude agent2'], cwd=project_root)
+        assert code == 0, stderr
+        job2 = _extract_accepted_job_id(stdout2, target='agent2')
+
+        pend1 = _wait_for_phase2_status(project_root, 'agent1', 'completed')
+        pend2 = _wait_for_phase2_status(project_root, 'agent2', 'completed')
+        assert f'job_id: {job1}' in pend1
+        assert f'job_id: {job2}' in pend2
+        assert 'reply: claude agent1 partial' in pend1
+        assert 'reply: claude agent2 partial' in pend2
+        assert 'completion_reason: turn_duration' in pend1
+        assert 'completion_reason: turn_duration' in pend2
+        assert 'claude agent2 partial' not in pend1
+        assert 'claude agent1 partial' not in pend2
+
+        code, watch1, stderr = _run_phase2_local(['watch', job1], cwd=project_root)
+        assert code == 0, stderr
+        code, watch2, stderr = _run_phase2_local(['watch', job2], cwd=project_root)
+        assert code == 0, stderr
+        assert 'agent_name: agent1' in watch1
+        assert 'agent_name: agent2' in watch2
+        assert 'claude agent2 partial' not in watch1
+        assert 'claude agent1 partial' not in watch2
+
+        layout = PathLayout(project_root)
+        event_store = JobEventStore(layout)
+        _, events1 = event_store.read_since('agent1', 0)
+        _, events2 = event_store.read_since('agent2', 0)
+        assert all(event.agent_name == 'agent1' for event in events1)
+        assert all(event.agent_name == 'agent2' for event in events2)
+        assert any(event.job_id == job1 for event in events1)
+        assert any(event.job_id == job2 for event in events2)
+        assert not any(event.job_id == job2 for event in events1)
+        assert not any(event.job_id == job1 for event in events2)
+
+        job_store = JobStore(layout)
+        latest1 = job_store.get_latest('agent1', job1)
+        latest2 = job_store.get_latest('agent2', job2)
+        assert latest1 is not None and latest1.status.value == 'completed'
+        assert latest2 is not None and latest2.status.value == 'completed'
+
+        assert any(pane_id == '%31' and request_ids[0] in text for pane_id, text in sent)
+        assert any(pane_id == '%32' and request_ids[1] in text for pane_id, text in sent)
+    finally:
+        _assert_phase2_app_shutdown_clean(project_root, app, thread)
+
+
+def test_ccb_two_named_gemini_agents_concurrent_ask_isolated(monkeypatch, tmp_path: Path) -> None:
+    from jobs.store import JobEventStore, JobStore
+    from provider_execution import gemini as gemini_adapter_module
+    from storage.paths import PathLayout
+
+    project_root = tmp_path / 'repo-dual-gemini'
+    _write(project_root / '.ccb' / 'ccb.config', _dual_named_agent_config_text('agent1', 'gemini', 'agent2', 'gemini'))
+    _write(
+        project_root / '.ccb' / '.gemini-agent1-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%41',
+                'work_dir': str(project_root / '.ccb' / 'workspaces' / 'agent1'),
+                'gemini_session_id': 'gemini-agent1-session-id',
+                'gemini_session_path': str(tmp_path / 'gemini-agent1.json'),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+    _write(
+        project_root / '.ccb' / '.gemini-agent2-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%42',
+                'work_dir': str(project_root / '.ccb' / 'workspaces' / 'agent2'),
+                'gemini_session_id': 'gemini-agent2-session-id',
+                'gemini_session_path': str(tmp_path / 'gemini-agent2.json'),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+
+    request_ids = ('job_6e11a1', 'job_6e11a2')
+    sent: list[tuple[str, str]] = []
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            sent.append((pane_id, text))
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id in {'%41', '%42'}
+
+    class FakeSession:
+        def __init__(self, *, pane_id: str, session_id: str, session_path: Path, work_dir: Path) -> None:
+            self.data = {'pane_id': pane_id}
+            self.gemini_session_id = session_id
+            self.gemini_session_path = str(session_path)
+            self.work_dir = str(work_dir)
+
+        def ensure_pane(self):
+            return True, self.data['pane_id']
+
+    class FakeReader:
+        def __init__(self, *args, **kwargs) -> None:
+            work_dir = Path(kwargs.get('work_dir') or '')
+            self.agent_name = work_dir.name
+            self._emitted = False
+            if self.agent_name == 'agent1':
+                self.reply = 'gemini agent1 stable reply'
+                self.message_id = 'gemini-msg-1'
+            elif self.agent_name == 'agent2':
+                self.reply = 'gemini agent2 stable reply'
+                self.message_id = 'gemini-msg-2'
+            else:
+                raise AssertionError(f'unexpected gemini work_dir: {work_dir}')
+
+        def set_preferred_session(self, session_path) -> None:
+            del session_path
+
+        def capture_state(self):
+            return {'session_path': f'{self.agent_name}.json', 'msg_count': 0}
+
+        def try_get_message(self, state):
+            if self._emitted:
+                return None, state
+            self._emitted = True
+            return (
+                self.reply,
+                {
+                    **state,
+                    'msg_count': 1,
+                    'last_gemini_id': self.message_id,
+                    'mtime_ns': 123456789,
+                },
+            )
+
+    def _load_fake_session(work_dir, instance=None):
+        work_dir = Path(work_dir)
+        if instance is None:
+            return None
+        if instance == 'agent1':
+            return FakeSession(
+                pane_id='%41',
+                session_id='gemini-agent1-session-id',
+                session_path=tmp_path / 'gemini-agent1.json',
+                work_dir=work_dir,
+            )
+        if instance == 'agent2':
+            return FakeSession(
+                pane_id='%42',
+                session_id='gemini-agent2-session-id',
+                session_path=tmp_path / 'gemini-agent2.json',
+                work_dir=work_dir,
+            )
+        raise AssertionError(f'unexpected instance: {instance}')
+
+    monkeypatch.setattr(gemini_adapter_module, 'load_project_session', _load_fake_session)
+    monkeypatch.setattr(gemini_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(gemini_adapter_module, 'GeminiLogReader', FakeReader)
+    app = CcbdApp(project_root)
+    _freeze_job_ids(app, monkeypatch, *request_ids)
+    thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread.start()
+    _wait_for_path(app.paths.ccbd_socket_path)
+
+    try:
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        assert code == 0, stderr
+        assert 'agents: agent1, agent2' in stdout
+
+        runtime_agent1 = json.loads((project_root / '.ccb' / 'agents' / 'agent1' / 'runtime.json').read_text(encoding='utf-8'))
+        runtime_agent2 = json.loads((project_root / '.ccb' / 'agents' / 'agent2' / 'runtime.json').read_text(encoding='utf-8'))
+        assert runtime_agent1['agent_name'] == 'agent1'
+        assert runtime_agent2['agent_name'] == 'agent2'
+        assert runtime_agent1['runtime_ref'] != runtime_agent2['runtime_ref']
+        assert runtime_agent1['workspace_path'].endswith('/.ccb/workspaces/agent1')
+        assert runtime_agent2['workspace_path'].endswith('/.ccb/workspaces/agent2')
+
+        code, stdout1, stderr = _run_phase2_local(['ask', 'agent1', 'from', 'user', 'hello gemini agent1'], cwd=project_root)
+        assert code == 0, stderr
+        job1 = _extract_accepted_job_id(stdout1, target='agent1')
+
+        code, stdout2, stderr = _run_phase2_local(['ask', 'agent2', 'from', 'user', 'hello gemini agent2'], cwd=project_root)
+        assert code == 0, stderr
+        job2 = _extract_accepted_job_id(stdout2, target='agent2')
+
+        pend1 = _wait_for_phase2_status(project_root, 'agent1', 'completed')
+        pend2 = _wait_for_phase2_status(project_root, 'agent2', 'completed')
+        assert f'job_id: {job1}' in pend1
+        assert f'job_id: {job2}' in pend2
+        assert 'reply: gemini agent1 stable reply' in pend1
+        assert 'reply: gemini agent2 stable reply' in pend2
+        assert 'completion_reason: session_reply_stable' in pend1
+        assert 'completion_reason: session_reply_stable' in pend2
+        assert 'gemini agent2 stable reply' not in pend1
+        assert 'gemini agent1 stable reply' not in pend2
+
+        code, watch1, stderr = _run_phase2_local(['watch', job1], cwd=project_root)
+        assert code == 0, stderr
+        code, watch2, stderr = _run_phase2_local(['watch', job2], cwd=project_root)
+        assert code == 0, stderr
+        assert 'agent_name: agent1' in watch1
+        assert 'agent_name: agent2' in watch2
+        assert 'gemini agent2 stable reply' not in watch1
+        assert 'gemini agent1 stable reply' not in watch2
+
+        layout = PathLayout(project_root)
+        event_store = JobEventStore(layout)
+        _, events1 = event_store.read_since('agent1', 0)
+        _, events2 = event_store.read_since('agent2', 0)
+        assert all(event.agent_name == 'agent1' for event in events1)
+        assert all(event.agent_name == 'agent2' for event in events2)
+        assert any(event.job_id == job1 for event in events1)
+        assert any(event.job_id == job2 for event in events2)
+        assert not any(event.job_id == job2 for event in events1)
+        assert not any(event.job_id == job1 for event in events2)
+
+        job_store = JobStore(layout)
+        latest1 = job_store.get_latest('agent1', job1)
+        latest2 = job_store.get_latest('agent2', job2)
+        assert latest1 is not None and latest1.status.value == 'completed'
+        assert latest2 is not None and latest2.status.value == 'completed'
+
+        assert any(pane_id == '%41' and request_ids[0] in text for pane_id, text in sent)
+        assert any(pane_id == '%42' and request_ids[1] in text for pane_id, text in sent)
+    finally:
+        _assert_phase2_app_shutdown_clean(project_root, app, thread)
+
+
+def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart_and_rotate_clears_stale_preview(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from provider_execution import gemini as gemini_adapter_module
+
+    fixed_req_id = 'job_6e1101'
+    project_root = tmp_path / 'grr'
+    old_session_path = str(tmp_path / 'gso.json')
+    new_session_path = str(tmp_path / 'gsn.json')
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('gemini'))
+    _write(
+        project_root / '.ccb' / '.gemini-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%3',
+                'work_dir': str(project_root),
+                'gemini_session_id': 'gemini-session-id',
+                'gemini_session_path': old_session_path,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            self.sent = (pane_id, text)
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%3'
+
+    class FakeSession:
+        data = {}
+        gemini_session_path = old_session_path
+        gemini_session_id = 'gemini-session-id'
+        work_dir = str(project_root)
+
+        def ensure_pane(self):
+            return True, '%3'
+
+    class FakeReader:
+        instances = 0
+
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+            FakeReader.instances += 1
+            self.instance_id = FakeReader.instances
+            self._calls = 0
+
+        def set_preferred_session(self, session_path) -> None:
+            del session_path
+
+        def capture_state(self):
+            return {'session_path': old_session_path, 'msg_count': 0}
+
+        def try_get_message(self, state):
+            self._calls += 1
+            if self.instance_id == 1:
+                if self._calls == 1:
+                    return (
+                        'old preview reply',
+                        {
+                            **state,
+                            'session_path': old_session_path,
+                            'msg_count': 1,
+                            'last_gemini_id': 'msg-old',
+                            'mtime_ns': 111,
+                        },
+                    )
+                return None, state
+            if self._calls == 1:
+                return (
+                    None,
+                    {
+                        **state,
+                        'session_path': new_session_path,
+                        'msg_count': 0,
+                        'last_gemini_id': None,
+                        'mtime_ns': 222,
+                    },
+                )
+            if self._calls == 2:
+                return (
+                    'rotated final stable reply',
+                    {
+                        **state,
+                        'session_path': new_session_path,
+                        'msg_count': 1,
+                        'last_gemini_id': 'msg-new',
+                        'mtime_ns': 333,
+                    },
+                )
+            return None, state
+
+    monkeypatch.setattr(gemini_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(gemini_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(gemini_adapter_module, 'GeminiLogReader', FakeReader)
+    app1 = CcbdApp(project_root)
+    _freeze_job_ids(app1, monkeypatch, fixed_req_id)
+    thread1 = threading.Thread(target=app1.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread1.start()
+    _wait_for_path(app1.paths.ccbd_socket_path)
+
+    try:
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        assert code == 0, stderr
+
+        code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'resume gemini and rotate'], cwd=project_root)
+        assert code == 0, stderr
+        job_id = _extract_accepted_job_id(stdout, target='demo')
+
+        deadline = time.time() + 3.0
+        last_stdout = ''
+        while time.time() < deadline:
+            code, pend, stderr = _run_phase2_local(['pend', 'demo'], cwd=project_root)
+            assert code == 0, stderr
+            last_stdout = pend
+            if f'job_id: {job_id}' in pend and 'status: running' in pend and 'reply: old preview reply' in pend:
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError(f'expected stale preview before restart; last={last_stdout!r}')
+
+        app1.shutdown()
+        thread1.join(timeout=2)
+        assert not thread1.is_alive()
+
+        app2 = CcbdApp(project_root)
+        thread2 = threading.Thread(target=app2.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+        thread2.start()
+        _wait_for_path(app2.paths.ccbd_socket_path)
+        try:
+            deadline = time.time() + 3.0
+            last_stdout = ''
+            while time.time() < deadline:
+                code, pend, stderr = _run_phase2_local(['pend', 'demo'], cwd=project_root)
+                assert code == 0, stderr
+                last_stdout = pend
+                if f'job_id: {job_id}' in pend and 'status: running' in pend and 'reply: old preview reply' not in pend:
+                    assert 'reply: \n' in pend or pend.rstrip().endswith('reply:')
+                    break
+                time.sleep(0.05)
+            else:
+                raise AssertionError(f'expected rotate to clear stale preview after restart; last={last_stdout!r}')
+
+            pend = _wait_for_phase2_status(project_root, job_id, 'completed', timeout=5.0)
+            assert 'reply: rotated final stable reply' in pend
+            assert 'completion_reason: session_reply_stable' in pend
+            assert 'completion_confidence: observed' in pend
+        finally:
+            app2.shutdown()
+            thread2.join(timeout=2)
+            assert not thread2.is_alive()
+    finally:
+        if thread1.is_alive():
+            app1.shutdown()
+            thread1.join(timeout=2)
+            assert not thread1.is_alive()
+
+
+def test_ccb_fake_provider_can_fail(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-fake-fail'
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('fake'))
+
+    start = _run_ccb([], cwd=project_root)
+    assert start.returncode == 0, start.stderr
+
+    ask = _run_ccb(
+        [
+            'ask',
+            '--task-id',
+            'fake;status=failed;reason=api_error;confidence=exact;latency_ms=0',
+            'demo',
+            'from',
+            'user',
+            'explode',
+        ],
+        cwd=project_root,
+    )
+    assert ask.returncode == 0, ask.stderr
+    job_id = _extract_accepted_job_id(ask.stdout, target='demo')
+
+    failed = _wait_for_status(project_root, job_id, 'failed', timeout=5.0)
+    assert 'reply: FAKE[demo] explode' in failed.stdout
+    assert 'completion_reason: api_error' in failed.stdout
+    assert 'completion_confidence: exact' in failed.stdout
+
+    watch = _run_ccb(['watch', job_id], cwd=project_root)
+    assert watch.returncode == 0, watch.stderr
+    assert 'watch_status: terminal' in watch.stdout
+    assert 'status: failed' in watch.stdout
+
+    kill = _run_ccb(['kill'], cwd=project_root)
+    assert kill.returncode == 0, kill.stderr
+
+
+def test_ccb_fake_gemini_provider_observed_completion(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-fake-gemini'
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('fake-gemini'))
+
+    start = _run_ccb([], cwd=project_root)
+    assert start.returncode == 0, start.stderr
+
+    ask = _run_ccb(
+        [
+            'ask',
+            '--task-id',
+            'fake;script=[{"t":0,"type":"anchor_seen"},{"t":10,"type":"session_snapshot","reply":"stable reply"}]',
+            'demo',
+            'from',
+            'user',
+            'observe',
+        ],
+        cwd=project_root,
+    )
+    assert ask.returncode == 0, ask.stderr
+    job_id = _extract_accepted_job_id(ask.stdout, target='demo')
+
+    completed = _wait_for_status(project_root, job_id, 'completed', timeout=6.0)
+    assert 'reply: stable reply' in completed.stdout
+    assert 'completion_reason: session_reply_stable' in completed.stdout
+    assert 'completion_confidence: observed' in completed.stdout
+
+    watch = _run_ccb(['watch', job_id], cwd=project_root)
+    assert watch.returncode == 0, watch.stderr
+    assert 'completion_item' in watch.stdout
+    assert 'completion_state_updated' in watch.stdout
+    assert 'completion_terminal' in watch.stdout
+
+    kill = _run_ccb(['kill'], cwd=project_root)
+    assert kill.returncode == 0, kill.stderr
+
+
+def test_ccb_fake_legacy_provider_degraded_done_marker_completion(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-fake-legacy'
+    _write(
+        project_root / '.ccb' / 'ccb.config',
+        _single_agent_config_text('fake-legacy'),
+    )
+
+    start = _run_ccb([], cwd=project_root)
+    assert start.returncode == 0, start.stderr
+
+    ask = _run_ccb(
+        [
+            'ask',
+            '--task-id',
+            'fake;script=[{"t":0,"type":"assistant_final","text":"legacy reply","done_marker":true}]',
+            'demo',
+            'from',
+            'user',
+            'legacy',
+        ],
+        cwd=project_root,
+    )
+    assert ask.returncode == 0, ask.stderr
+    job_id = _extract_accepted_job_id(ask.stdout, target='demo')
+
+    completed = _wait_for_status(project_root, job_id, 'completed', timeout=5.0)
+    assert 'reply: legacy reply' in completed.stdout
+    assert 'completion_reason: legacy_done_marker' in completed.stdout
+    assert 'completion_confidence: degraded' in completed.stdout
+
+    kill = _run_ccb(['kill'], cwd=project_root)
+    assert kill.returncode == 0, kill.stderr
+
+
+def test_ccb_claude_real_adapter_blackbox_watch_chain(monkeypatch, tmp_path: Path) -> None:
+    from provider_execution import claude as claude_adapter_module
+
+    fixed_req_id = 'job_ca1de1'
+    project_root = tmp_path / 'repo-claude-blackbox'
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('claude'))
+    _write(
+        project_root / '.ccb' / '.claude-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%2',
+                'work_dir': str(project_root),
+                'claude_session_id': 'claude-session-id',
+                'claude_session_path': str(tmp_path / 'claude-session.jsonl'),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            self.sent = (pane_id, text)
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%2'
+
+    class FakeSession:
+        data = {}
+        claude_session_path = str(tmp_path / 'claude-session.jsonl')
+        claude_session_id = 'claude-session-id'
+        work_dir = str(project_root)
+
+        def ensure_pane(self):
+            return True, '%2'
+
+    class FakeReader:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+            self._events = [
+                ('user', f'CCB_REQ_ID: {fixed_req_id}\n\nprompt'),
+                ('assistant', 'partial'),
+                ('assistant', f'final\nCCB_DONE: {fixed_req_id}'),
+            ]
+
+        def set_preferred_session(self, session_path) -> None:
+            del session_path
+
+        def capture_state(self):
+            return {'session_path': str(tmp_path / 'claude-session.jsonl'), 'offset': 0}
+
+        def try_get_events(self, state):
+            index = int(state.get('index', 0))
+            if index >= len(self._events):
+                return [], state
+            return [self._events[index]], {**state, 'index': index + 1}
+
+    monkeypatch.setattr(claude_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(claude_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(claude_adapter_module, 'ClaudeLogReader', FakeReader)
+    app = CcbdApp(project_root)
+    _freeze_job_ids(app, monkeypatch, fixed_req_id)
+    thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread.start()
+    _wait_for_path(app.paths.ccbd_socket_path)
+
+    try:
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        assert code == 0, stderr
+        assert 'start_status: ok' in stdout
+
+        code, stdout, stderr = _run_phase2_local(['doctor'], cwd=project_root)
+        assert code == 0, stderr
+        assert 'completion=session_boundary' in stdout
+
+        code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'hello claude'], cwd=project_root)
+        assert code == 0, stderr
+        job_id = _extract_accepted_job_id(stdout, target='demo')
+
+        pend = _wait_for_phase2_status(project_root, 'demo', 'completed')
+        assert f'job_id: {job_id}' in pend
+        assert 'reply: partial\nfinal' in pend
+        assert 'completion_reason: task_complete' in pend
+        assert 'completion_confidence: observed' in pend
+
+        code, stdout, stderr = _run_phase2_local(['watch', job_id], cwd=project_root)
+        assert code == 0, stderr
+        assert 'watch_status: terminal' in stdout
+        assert f'job_id: {job_id}' in stdout
+        assert 'status: completed' in stdout
+
+        code, stdout, stderr = _run_phase2_local(['watch', 'demo'], cwd=project_root)
+        assert code == 0, stderr
+        assert 'watch_status: terminal' in stdout
+        assert f'job_id: {job_id}' in stdout
+    finally:
+        app.shutdown()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+
+
+def test_ccb_claude_real_adapter_blackbox_watch_chain_without_done_marker(monkeypatch, tmp_path: Path) -> None:
+    from provider_execution import claude as claude_adapter_module
+
+    fixed_req_id = 'job_ca1de2'
+    project_root = tmp_path / 'repo-claude-td'
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('claude'))
+    _write(
+        project_root / '.ccb' / '.claude-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%2',
+                'work_dir': str(project_root),
+                'claude_session_id': 'claude-session-id',
+                'claude_session_path': str(tmp_path / 'claude-session.jsonl'),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            self.sent = (pane_id, text)
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%2'
+
+    class FakeSession:
+        data = {}
+        claude_session_path = str(tmp_path / 'claude-session.jsonl')
+        claude_session_id = 'claude-session-id'
+        work_dir = str(project_root)
+
+        def ensure_pane(self):
+            return True, '%2'
+
+    class FakeReader:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+            self._events = [
+                {'role': 'user', 'text': f'CCB_REQ_ID: {fixed_req_id}\n\nprompt', 'entry_type': 'user'},
+                {'role': 'assistant', 'text': 'final without done', 'entry_type': 'assistant', 'uuid': 'assistant-1'},
+                {'role': 'system', 'text': '', 'entry_type': 'system', 'subtype': 'turn_duration', 'parent_uuid': 'assistant-1'},
+            ]
+
+        def set_preferred_session(self, session_path) -> None:
+            del session_path
+
+        def capture_state(self):
+            return {'session_path': str(tmp_path / 'claude-session.jsonl'), 'offset': 0}
+
+        def try_get_entries(self, state):
+            index = int(state.get('index', 0))
+            if index >= len(self._events):
+                return [], state
+            return [self._events[index]], {**state, 'index': index + 1}
+
+    monkeypatch.setattr(claude_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(claude_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(claude_adapter_module, 'ClaudeLogReader', FakeReader)
+    app = CcbdApp(project_root)
+    _freeze_job_ids(app, monkeypatch, fixed_req_id)
+    thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread.start()
+    _wait_for_path(app.paths.ccbd_socket_path)
+
+    try:
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        assert code == 0, stderr
+
+        code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'hello claude'], cwd=project_root)
+        assert code == 0, stderr
+        job_id = _extract_accepted_job_id(stdout, target='demo')
+
+        pend = _wait_for_phase2_status(project_root, 'demo', 'completed')
+        assert f'job_id: {job_id}' in pend
+        assert 'reply: final without done' in pend
+        assert 'completion_reason: turn_duration' in pend
+        assert 'completion_confidence: observed' in pend
+
+        code, stdout, stderr = _run_phase2_local(['watch', job_id], cwd=project_root)
+        assert code == 0, stderr
+        assert 'watch_status: terminal' in stdout
+        assert 'status: completed' in stdout
+    finally:
+        app.shutdown()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+
+
+def test_ccb_claude_real_adapter_recovers_after_ccbd_restart(monkeypatch, tmp_path: Path) -> None:
+    from provider_execution import claude as claude_adapter_module
+
+    fixed_req_id = 'job_ca1de3'
+    project_root = tmp_path / 'repo-claude-resume'
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('claude'))
+    _write(
+        project_root / '.ccb' / '.claude-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%2',
+                'work_dir': str(project_root),
+                'claude_session_id': 'claude-session-id',
+                'claude_session_path': str(tmp_path / 'claude-session.jsonl'),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            self.sent = (pane_id, text)
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%2'
+
+    class FakeSession:
+        data = {}
+        claude_session_path = str(tmp_path / 'claude-session.jsonl')
+        claude_session_id = 'claude-session-id'
+        work_dir = str(project_root)
+
+        def ensure_pane(self):
+            return True, '%2'
+
+    class FakeReader:
+        instances = 0
+
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+            FakeReader.instances += 1
+            self.instance_id = FakeReader.instances
+            self._events = [
+                {'role': 'user', 'text': f'CCB_REQ_ID: {fixed_req_id}\n\nprompt', 'entry_type': 'user'},
+                {'role': 'assistant', 'text': 'partial before restart', 'entry_type': 'assistant', 'uuid': 'assistant-resume'},
+                {'role': 'system', 'text': '', 'entry_type': 'system', 'subtype': 'turn_duration', 'parent_uuid': 'assistant-resume'},
+            ]
+
+        def set_preferred_session(self, session_path) -> None:
+            del session_path
+
+        def capture_state(self):
+            return {'session_path': str(tmp_path / 'claude-session.jsonl'), 'offset': 0, 'carry': b''}
+
+        def try_get_entries(self, state):
+            index = int(state.get('index', 0))
+            limit = 2 if self.instance_id == 1 else len(self._events)
+            if index >= limit:
+                return [], state
+            return [self._events[index]], {**state, 'index': index + 1}
+
+    monkeypatch.setattr(claude_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(claude_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(claude_adapter_module, 'ClaudeLogReader', FakeReader)
+    app1 = CcbdApp(project_root)
+    _freeze_job_ids(app1, monkeypatch, fixed_req_id)
+    thread1 = threading.Thread(target=app1.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread1.start()
+    _wait_for_path(app1.paths.ccbd_socket_path)
+
+    try:
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        assert code == 0, stderr
+
+        code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'resume claude'], cwd=project_root)
+        assert code == 0, stderr
+        job_id = _extract_accepted_job_id(stdout, target='demo')
+
+        running = _wait_for_phase2_status(project_root, 'demo', 'running')
+        assert f'job_id: {job_id}' in running
+
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            events_path = project_root / '.ccb' / 'agents' / 'demo' / 'events.jsonl'
+            if events_path.exists() and 'assistant_chunk' in events_path.read_text(encoding='utf-8'):
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError('expected assistant_chunk before restart')
+
+        app1.shutdown()
+        thread1.join(timeout=2)
+        assert not thread1.is_alive()
+
+        app2 = CcbdApp(project_root)
+        thread2 = threading.Thread(target=app2.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+        thread2.start()
+        _wait_for_path(app2.paths.ccbd_socket_path)
+        try:
+            pend = _wait_for_phase2_status(project_root, job_id, 'completed')
+            assert 'reply: partial before restart' in pend
+            assert 'completion_reason: turn_duration' in pend
+            assert 'completion_confidence: observed' in pend
+        finally:
+            app2.shutdown()
+            thread2.join(timeout=2)
+            assert not thread2.is_alive()
+    finally:
+        if thread1.is_alive():
+            app1.shutdown()
+            thread1.join(timeout=2)
+            assert not thread1.is_alive()
+
+
+def test_ccb_claude_real_adapter_blackbox_rotate_and_subagent_only_new_main_boundary_completes(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from provider_execution import claude as claude_adapter_module
+
+    fixed_req_id = 'job_ca1de4'
+    project_root = tmp_path / 'crs'
+    old_session_path = str(tmp_path / 'cso.jsonl')
+    new_session_path = str(tmp_path / 'csn.jsonl')
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('claude'))
+    _write(
+        project_root / '.ccb' / '.claude-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%2',
+                'work_dir': str(project_root),
+                'claude_session_id': 'claude-session-id',
+                'claude_session_path': old_session_path,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            self.sent = (pane_id, text)
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%2'
+
+    class FakeSession:
+        data = {}
+        claude_session_path = old_session_path
+        claude_session_id = 'claude-session-id'
+        work_dir = str(project_root)
+
+        def ensure_pane(self):
+            return True, '%2'
+
+    class FakeReader:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+            self._calls = 0
+
+        def set_preferred_session(self, session_path) -> None:
+            del session_path
+
+        def capture_state(self):
+            return {
+                'session_path': old_session_path,
+                'offset': 0,
+            }
+
+        def try_get_entries(self, state):
+            self._calls += 1
+            if self._calls == 1:
+                return [
+                    {'role': 'user', 'text': f'CCB_REQ_ID: {fixed_req_id}\n\nprompt', 'entry_type': 'user'},
+                    {'role': 'assistant', 'text': 'old partial', 'entry_type': 'assistant', 'uuid': 'assistant-old'},
+                    {
+                        'role': 'assistant',
+                        'text': 'old child work',
+                        'entry_type': 'assistant',
+                        'uuid': 'assistant-child-old',
+                        'subagent_id': 'child-old',
+                    },
+                    {
+                        'role': 'system',
+                        'text': '',
+                        'entry_type': 'system',
+                        'subtype': 'turn_duration',
+                        'parent_uuid': 'assistant-child-old',
+                    },
+                ], {**state, 'offset': 1}
+
+            if self._calls < 4:
+                return [], state
+
+            if self._calls == 4:
+                return [
+                    {'role': 'user', 'text': f'CCB_REQ_ID: {fixed_req_id}\n\nprompt again', 'entry_type': 'user'},
+                    {
+                        'role': 'system',
+                        'text': '',
+                        'entry_type': 'system',
+                        'subtype': 'turn_duration',
+                        'parent_uuid': 'assistant-old',
+                    },
+                    {'role': 'assistant', 'text': 'new partial', 'entry_type': 'assistant', 'uuid': 'assistant-new'},
+                    {
+                        'role': 'assistant',
+                        'text': 'new child work',
+                        'entry_type': 'assistant',
+                        'uuid': 'assistant-child-new',
+                        'subagent_id': 'child-new',
+                    },
+                    {
+                        'role': 'system',
+                        'text': '',
+                        'entry_type': 'system',
+                        'subtype': 'turn_duration',
+                        'parent_uuid': 'assistant-child-new',
+                    },
+                    {
+                        'role': 'system',
+                        'text': '',
+                        'entry_type': 'system',
+                        'subtype': 'turn_duration',
+                        'parent_uuid': 'assistant-new',
+                    },
+                ], {
+                    **state,
+                    'offset': 2,
+                    'session_path': new_session_path,
+                }
+
+            return [], state
+
+    monkeypatch.setattr(claude_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(claude_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(claude_adapter_module, 'ClaudeLogReader', FakeReader)
+    app = CcbdApp(project_root)
+    _freeze_job_ids(app, monkeypatch, fixed_req_id)
+    thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread.start()
+    _wait_for_path(app.paths.ccbd_socket_path)
+
+    try:
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        assert code == 0, stderr
+
+        code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'hello claude rotate'], cwd=project_root)
+        assert code == 0, stderr
+        job_id = _extract_accepted_job_id(stdout, target='demo')
+
+        deadline = time.time() + 3.0
+        last_stdout = ''
+        while time.time() < deadline:
+            code, pend, stderr = _run_phase2_local(['pend', 'demo'], cwd=project_root)
+            assert code == 0, stderr
+            last_stdout = pend
+            if f'job_id: {job_id}' in pend and 'status: running' in pend and 'reply: old partial' in pend:
+                assert 'completion_reason: None' in pend
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError(f'expected running old-session preview before rotate completion; last={last_stdout!r}')
+
+        pend = _wait_for_phase2_status(project_root, job_id, 'completed', timeout=5.0)
+        assert 'reply: old partial' not in pend
+        assert 'reply: new partial\nnew child work' in pend
+        assert 'completion_reason: turn_duration' in pend
+        assert 'completion_confidence: observed' in pend
+
+        code, stdout, stderr = _run_phase2_local(['watch', job_id], cwd=project_root)
+        assert code == 0, stderr
+        assert 'watch_status: terminal' in stdout
+        assert f'job_id: {job_id}' in stdout
+        assert 'status: completed' in stdout
+    finally:
+        app.shutdown()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+
+
+def test_ccb_claude_real_adapter_recovers_after_ccbd_restart_rotate_and_subagent_only_new_main_boundary_completes(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from provider_execution import claude as claude_adapter_module
+
+    fixed_req_id = 'job_ca1de5'
+    project_root = tmp_path / 'crsr'
+    old_session_path = str(tmp_path / 'rcso.jsonl')
+    new_session_path = str(tmp_path / 'rcsn.jsonl')
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('claude'))
+    _write(
+        project_root / '.ccb' / '.claude-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%2',
+                'work_dir': str(project_root),
+                'claude_session_id': 'claude-session-id',
+                'claude_session_path': old_session_path,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            self.sent = (pane_id, text)
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%2'
+
+    class FakeSession:
+        data = {}
+        claude_session_path = old_session_path
+        claude_session_id = 'claude-session-id'
+        work_dir = str(project_root)
+
+        def ensure_pane(self):
+            return True, '%2'
+
+    class FakeReader:
+        instances = 0
+
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+            FakeReader.instances += 1
+            self.instance_id = FakeReader.instances
+            self._events = [
+                {'role': 'user', 'text': f'CCB_REQ_ID: {fixed_req_id}\n\nprompt', 'entry_type': 'user'},
+                {'role': 'assistant', 'text': 'old partial', 'entry_type': 'assistant', 'uuid': 'assistant-old'},
+                {
+                    'role': 'assistant',
+                    'text': 'old child work',
+                    'entry_type': 'assistant',
+                    'uuid': 'assistant-child-old',
+                    'subagent_id': 'child-old',
+                },
+                {
+                    'role': 'system',
+                    'text': '',
+                    'entry_type': 'system',
+                    'subtype': 'turn_duration',
+                    'parent_uuid': 'assistant-child-old',
+                },
+                {'role': 'user', 'text': f'CCB_REQ_ID: {fixed_req_id}\n\nprompt again', 'entry_type': 'user'},
+                {
+                    'role': 'system',
+                    'text': '',
+                    'entry_type': 'system',
+                    'subtype': 'turn_duration',
+                    'parent_uuid': 'assistant-old',
+                },
+                {'role': 'assistant', 'text': 'new partial', 'entry_type': 'assistant', 'uuid': 'assistant-new'},
+                {
+                    'role': 'assistant',
+                    'text': 'new child work',
+                    'entry_type': 'assistant',
+                    'uuid': 'assistant-child-new',
+                    'subagent_id': 'child-new',
+                },
+                {
+                    'role': 'system',
+                    'text': '',
+                    'entry_type': 'system',
+                    'subtype': 'turn_duration',
+                    'parent_uuid': 'assistant-child-new',
+                },
+                {
+                    'role': 'system',
+                    'text': '',
+                    'entry_type': 'system',
+                    'subtype': 'turn_duration',
+                    'parent_uuid': 'assistant-new',
+                },
+            ]
+
+        def set_preferred_session(self, session_path) -> None:
+            del session_path
+
+        def capture_state(self):
+            return {'session_path': old_session_path, 'offset': 0, 'carry': b''}
+
+        def try_get_entries(self, state):
+            index = int(state.get('index', 0))
+            limit = 4 if self.instance_id == 1 else len(self._events)
+            if index >= limit:
+                return [], state
+            next_state = {**state, 'index': index + 1}
+            if self.instance_id != 1 and index >= 4:
+                next_state['session_path'] = new_session_path
+            return [self._events[index]], next_state
+
+    monkeypatch.setattr(claude_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(claude_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(claude_adapter_module, 'ClaudeLogReader', FakeReader)
+    app1 = CcbdApp(project_root)
+    _freeze_job_ids(app1, monkeypatch, fixed_req_id)
+    thread1 = threading.Thread(target=app1.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread1.start()
+    _wait_for_path(app1.paths.ccbd_socket_path)
+
+    try:
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        assert code == 0, stderr
+
+        code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'resume claude rotate'], cwd=project_root)
+        assert code == 0, stderr
+        job_id = _extract_accepted_job_id(stdout, target='demo')
+
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            events_path = project_root / '.ccb' / 'agents' / 'demo' / 'events.jsonl'
+            if events_path.exists() and 'assistant_chunk' in events_path.read_text(encoding='utf-8'):
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError('expected assistant_chunk before restart')
+
+        running = _wait_for_phase2_status(project_root, 'demo', 'running')
+        assert f'job_id: {job_id}' in running
+        assert 'reply: old partial\nold child work' in running
+        assert 'completion_reason: None' in running
+
+        app1.shutdown()
+        thread1.join(timeout=2)
+        assert not thread1.is_alive()
+
+        app2 = CcbdApp(project_root)
+        thread2 = threading.Thread(target=app2.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+        thread2.start()
+        _wait_for_path(app2.paths.ccbd_socket_path)
+        try:
+            pend = _wait_for_phase2_status(project_root, job_id, 'completed')
+            assert 'reply: old partial' not in pend
+            assert 'reply: new partial\nnew child work' in pend
+            assert 'completion_reason: turn_duration' in pend
+            assert 'completion_confidence: observed' in pend
+        finally:
+            app2.shutdown()
+            thread2.join(timeout=2)
+            assert not thread2.is_alive()
+    finally:
+        if thread1.is_alive():
+            app1.shutdown()
+            thread1.join(timeout=2)
+            assert not thread1.is_alive()
+
+
+def test_ccb_gemini_real_adapter_blackbox_watch_chain(monkeypatch, tmp_path: Path) -> None:
+    from provider_execution import gemini as gemini_adapter_module
+
+    fixed_req_id = 'job_6e1102'
+    project_root = tmp_path / 'repo-gemini-blackbox'
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('gemini'))
+    _write(
+        project_root / '.ccb' / '.gemini-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%3',
+                'work_dir': str(project_root),
+                'gemini_session_id': 'gemini-session-id',
+                'gemini_session_path': str(tmp_path / 'gemini-session.json'),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            self.sent = (pane_id, text)
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%3'
+
+    class FakeSession:
+        data = {}
+        gemini_session_path = str(tmp_path / 'gemini-session.json')
+        gemini_session_id = 'gemini-session-id'
+        work_dir = str(project_root)
+
+        def ensure_pane(self):
+            return True, '%3'
+
+    class FakeReader:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+            self._emitted = False
+
+        def set_preferred_session(self, session_path) -> None:
+            del session_path
+
+        def capture_state(self):
+            return {'session_path': str(tmp_path / 'gemini-session.json'), 'msg_count': 0}
+
+        def try_get_message(self, state):
+            if self._emitted:
+                return None, state
+            self._emitted = True
+            return (
+                'stable reply',
+                {
+                    **state,
+                    'msg_count': 2,
+                    'last_gemini_id': 'msg-2',
+                    'mtime_ns': 123456789,
+                },
+            )
+
+    monkeypatch.setattr(gemini_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(gemini_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(gemini_adapter_module, 'GeminiLogReader', FakeReader)
+    app = CcbdApp(project_root)
+    _freeze_job_ids(app, monkeypatch, fixed_req_id)
+    thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread.start()
+    _wait_for_path(app.paths.ccbd_socket_path)
+
+    try:
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        assert code == 0, stderr
+        assert 'start_status: ok' in stdout
+
+        code, stdout, stderr = _run_phase2_local(['doctor'], cwd=project_root)
+        assert code == 0, stderr
+        assert 'completion=anchored_session_stability' in stdout
+
+        code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'hello gemini'], cwd=project_root)
+        assert code == 0, stderr
+        job_id = _extract_accepted_job_id(stdout, target='demo')
+
+        pend = _wait_for_phase2_status(project_root, job_id, 'completed', timeout=5.0)
+        assert 'reply: stable reply' in pend
+        assert 'completion_reason: session_reply_stable' in pend
+        assert 'completion_confidence: observed' in pend
+
+        code, stdout, stderr = _run_phase2_local(['watch', job_id], cwd=project_root)
+        assert code == 0, stderr
+        assert 'watch_status: terminal' in stdout
+        assert 'status: completed' in stdout
+
+        code, stdout, stderr = _run_phase2_local(['watch', 'demo'], cwd=project_root)
+        assert code == 0, stderr
+        assert 'watch_status: terminal' in stdout
+        assert f'job_id: {job_id}' in stdout
+    finally:
+        app.shutdown()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+
+
+def test_ccb_gemini_real_adapter_blackbox_waits_for_last_snapshot_mutation_to_settle(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from provider_execution import gemini as gemini_adapter_module
+
+    fixed_req_id = 'job_6e1103'
+    project_root = tmp_path / 'gms'
+    session_path = str(tmp_path / 'gms.json')
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('gemini'))
+    _write(
+        project_root / '.ccb' / '.gemini-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%3',
+                'work_dir': str(project_root),
+                'gemini_session_id': 'gemini-session-id',
+                'gemini_session_path': session_path,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            self.sent = (pane_id, text)
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%3'
+
+    class FakeSession:
+        data = {}
+        gemini_session_path = session_path
+        gemini_session_id = 'gemini-session-id'
+        work_dir = str(project_root)
+
+        def ensure_pane(self):
+            return True, '%3'
+
+    class FakeReader:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+            self._calls = 0
+
+        def set_preferred_session(self, session_path) -> None:
+            del session_path
+
+        def capture_state(self):
+            return {'session_path': session_path, 'msg_count': 0}
+
+        def try_get_message(self, state):
+            self._calls += 1
+            if self._calls == 1:
+                return (
+                    'draft 1',
+                    {
+                        **state,
+                        'msg_count': 1,
+                        'last_gemini_id': 'msg-1',
+                        'mtime_ns': 100,
+                    },
+                )
+            if self._calls == 2:
+                return (
+                    'draft 1 expanded',
+                    {
+                        **state,
+                        'msg_count': 1,
+                        'last_gemini_id': 'msg-1',
+                        'mtime_ns': 200,
+                    },
+                )
+            return (
+                'final stable reply',
+                {
+                    **state,
+                    'msg_count': 1,
+                    'last_gemini_id': 'msg-1',
+                    'mtime_ns': 300,
+                },
+            )
+
+    monkeypatch.setattr(gemini_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(gemini_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(gemini_adapter_module, 'GeminiLogReader', FakeReader)
+    app = CcbdApp(project_root)
+    _freeze_job_ids(app, monkeypatch, fixed_req_id)
+    thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread.start()
+    _wait_for_path(app.paths.ccbd_socket_path)
+
+    try:
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        assert code == 0, stderr
+
+        code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'hello gemini mutate'], cwd=project_root)
+        assert code == 0, stderr
+        job_id = _extract_accepted_job_id(stdout, target='demo')
+
+        deadline = time.time() + 3.0
+        last_stdout = ''
+        while time.time() < deadline:
+            code, pend, stderr = _run_phase2_local(['pend', 'demo'], cwd=project_root)
+            assert code == 0, stderr
+            last_stdout = pend
+            if f'job_id: {job_id}' in pend and 'status: running' in pend and 'reply: final stable reply' in pend:
+                assert 'completion_reason: None' in pend
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError(f'expected running final preview before settle completion; last={last_stdout!r}')
+
+        pend = _wait_for_phase2_status(project_root, job_id, 'completed', timeout=6.0)
+        assert 'reply: final stable reply' in pend
+        assert 'completion_reason: session_reply_stable' in pend
+        assert 'completion_confidence: observed' in pend
+
+        code, stdout, stderr = _run_phase2_local(['watch', job_id], cwd=project_root)
+        assert code == 0, stderr
+        assert 'watch_status: terminal' in stdout
+        assert f'job_id: {job_id}' in stdout
+        assert 'status: completed' in stdout
+    finally:
+        app.shutdown()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+
+
+def test_ccb_gemini_real_adapter_blackbox_handles_long_silence_and_rotate(monkeypatch, tmp_path: Path) -> None:
+    from provider_execution import gemini as gemini_adapter_module
+
+    fixed_req_id = 'job_6e1104'
+    project_root = tmp_path / 'repo-gemini-rotate'
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('gemini'))
+    _write(
+        project_root / '.ccb' / '.gemini-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%3',
+                'work_dir': str(project_root),
+                'gemini_session_id': 'gemini-session-id',
+                'gemini_session_path': str(tmp_path / 'gemini-session-old.json'),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            self.sent = (pane_id, text)
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%3'
+
+    class FakeSession:
+        data = {}
+        gemini_session_path = str(tmp_path / 'gemini-session-old.json')
+        gemini_session_id = 'gemini-session-id'
+        work_dir = str(project_root)
+
+        def ensure_pane(self):
+            return True, '%3'
+
+    class FakeReader:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+            self._calls = 0
+
+        def set_preferred_session(self, session_path) -> None:
+            del session_path
+
+        def capture_state(self):
+            return {'session_path': str(tmp_path / 'gemini-session-old.json'), 'msg_count': 0}
+
+        def try_get_message(self, state):
+            self._calls += 1
+            if self._calls < 4:
+                return None, state
+            return (
+                'rotated stable reply',
+                {
+                    **state,
+                    'session_path': str(tmp_path / 'gemini-session-new.json'),
+                    'msg_count': 4,
+                    'last_gemini_id': 'msg-4',
+                    'mtime_ns': 987654321,
+                },
+            )
+
+    monkeypatch.setattr(gemini_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(gemini_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(gemini_adapter_module, 'GeminiLogReader', FakeReader)
+    app = CcbdApp(project_root)
+    _freeze_job_ids(app, monkeypatch, fixed_req_id)
+    thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread.start()
+    _wait_for_path(app.paths.ccbd_socket_path)
+
+    try:
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        assert code == 0, stderr
+
+        code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'hello gemini rotate'], cwd=project_root)
+        assert code == 0, stderr
+        job_id = _extract_accepted_job_id(stdout, target='demo')
+
+        time.sleep(0.15)
+        code, stdout, stderr = _run_phase2_local(['pend', 'demo'], cwd=project_root)
+        assert code == 0, stderr
+        assert f'job_id: {job_id}' in stdout
+        assert 'status: running' in stdout
+
+        pend = _wait_for_phase2_status(project_root, job_id, 'completed', timeout=5.0)
+        assert 'reply: rotated stable reply' in pend
+        assert 'completion_reason: session_reply_stable' in pend
+        assert 'completion_confidence: observed' in pend
+
+        code, stdout, stderr = _run_phase2_local(['watch', job_id], cwd=project_root)
+        assert code == 0, stderr
+        assert 'watch_status: terminal' in stdout
+        assert 'status: completed' in stdout
+    finally:
+        app.shutdown()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+
+
+def test_ccb_gemini_real_adapter_blackbox_clears_stale_reply_preview_after_rotate(monkeypatch, tmp_path: Path) -> None:
+    from provider_execution import gemini as gemini_adapter_module
+
+    fixed_req_id = 'job_6e1105'
+    project_root = tmp_path / 'gpr'
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('gemini'))
+    _write(
+        project_root / '.ccb' / '.gemini-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%3',
+                'work_dir': str(project_root),
+                'gemini_session_id': 'gemini-session-id',
+                'gemini_session_path': str(tmp_path / 'gemini-session-old.json'),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            self.sent = (pane_id, text)
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%3'
+
+    class FakeSession:
+        data = {}
+        gemini_session_path = str(tmp_path / 'gemini-session-old.json')
+        gemini_session_id = 'gemini-session-id'
+        work_dir = str(project_root)
+
+        def ensure_pane(self):
+            return True, '%3'
+
+    class FakeReader:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+            self._calls = 0
+
+        def set_preferred_session(self, session_path) -> None:
+            del session_path
+
+        def capture_state(self):
+            return {'session_path': str(tmp_path / 'gemini-session-old.json'), 'msg_count': 0}
+
+        def try_get_message(self, state):
+            self._calls += 1
+            if self._calls == 1:
+                return (
+                    'old preview reply',
+                    {
+                        **state,
+                        'msg_count': 1,
+                        'last_gemini_id': 'msg-old',
+                        'mtime_ns': 111,
+                    },
+                )
+            if self._calls == 2:
+                return (
+                    None,
+                    {
+                        **state,
+                        'session_path': str(tmp_path / 'gemini-session-new.json'),
+                        'msg_count': 0,
+                        'last_gemini_id': None,
+                        'mtime_ns': 222,
+                    },
+                )
+            return None, state
+
+    monkeypatch.setattr(gemini_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(gemini_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(gemini_adapter_module, 'GeminiLogReader', FakeReader)
+    app = CcbdApp(project_root)
+    _freeze_job_ids(app, monkeypatch, fixed_req_id)
+    thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread.start()
+    _wait_for_path(app.paths.ccbd_socket_path)
+
+    try:
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        assert code == 0, stderr
+
+        code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'hello gemini preview reset'], cwd=project_root)
+        assert code == 0, stderr
+        job_id = _extract_accepted_job_id(stdout, target='demo')
+
+        deadline = time.time() + 3.0
+        last_stdout = ''
+        while time.time() < deadline:
+            code, pend, stderr = _run_phase2_local(['pend', 'demo'], cwd=project_root)
+            assert code == 0, stderr
+            last_stdout = pend
+            if f'job_id: {job_id}' in pend and 'status: running' in pend and 'reply: ' in pend:
+                assert 'reply: old preview reply' not in pend
+                assert 'reply: \n' in pend or pend.rstrip().endswith('reply:')
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError(f'expected running pend without stale preview; last={last_stdout!r}')
+    finally:
+        app.shutdown()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+
+
+def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart(monkeypatch, tmp_path: Path) -> None:
+    from provider_execution import gemini as gemini_adapter_module
+
+    fixed_req_id = 'job_6e1106'
+    project_root = tmp_path / 'repo-gemini-resume'
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('gemini'))
+    _write(
+        project_root / '.ccb' / '.gemini-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%3',
+                'work_dir': str(project_root),
+                'gemini_session_id': 'gemini-session-id',
+                'gemini_session_path': str(tmp_path / 'gemini-session.json'),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            self.sent = (pane_id, text)
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%3'
+
+    class FakeSession:
+        data = {}
+        gemini_session_path = str(tmp_path / 'gemini-session.json')
+        gemini_session_id = 'gemini-session-id'
+        work_dir = str(project_root)
+
+        def ensure_pane(self):
+            return True, '%3'
+
+    class FakeReader:
+        instances = 0
+
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+            FakeReader.instances += 1
+            self.instance_id = FakeReader.instances
+
+        def set_preferred_session(self, session_path) -> None:
+            del session_path
+
+        def capture_state(self):
+            return {'session_path': str(tmp_path / 'gemini-session.json'), 'msg_count': 0}
+
+        def try_get_message(self, state):
+            if self.instance_id == 1:
+                if int(state.get('msg_count', 0) or 0) >= 1:
+                    return None, state
+                return (
+                    'partial stable',
+                    {
+                        **state,
+                        'msg_count': 1,
+                        'last_gemini_id': 'msg-1',
+                        'mtime_ns': 111,
+                    },
+                )
+            if int(state.get('msg_count', 0) or 0) >= 2:
+                return None, state
+            return (
+                'final stable reply',
+                {
+                    **state,
+                    'msg_count': 2,
+                    'last_gemini_id': 'msg-2',
+                    'mtime_ns': 222,
+                },
+            )
+
+    monkeypatch.setattr(gemini_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(gemini_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(gemini_adapter_module, 'GeminiLogReader', FakeReader)
+    app1 = CcbdApp(project_root)
+    _freeze_job_ids(app1, monkeypatch, fixed_req_id)
+    thread1 = threading.Thread(target=app1.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread1.start()
+    _wait_for_path(app1.paths.ccbd_socket_path)
+
+    try:
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        assert code == 0, stderr
+
+        code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'resume gemini'], cwd=project_root)
+        assert code == 0, stderr
+        job_id = _extract_accepted_job_id(stdout, target='demo')
+
+        running = _wait_for_phase2_status(project_root, 'demo', 'running')
+        assert f'job_id: {job_id}' in running
+
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            events_path = project_root / '.ccb' / 'agents' / 'demo' / 'events.jsonl'
+            if events_path.exists() and 'session_snapshot' in events_path.read_text(encoding='utf-8'):
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError('expected session_snapshot before restart')
+
+        app1.shutdown()
+        thread1.join(timeout=2)
+        assert not thread1.is_alive()
+
+        app2 = CcbdApp(project_root)
+        thread2 = threading.Thread(target=app2.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+        thread2.start()
+        _wait_for_path(app2.paths.ccbd_socket_path)
+        try:
+            pend = _wait_for_phase2_status(project_root, job_id, 'completed', timeout=5.0)
+            assert 'reply: final stable reply' in pend
+            assert 'completion_reason: session_reply_stable' in pend
+            assert 'completion_confidence: observed' in pend
+        finally:
+            app2.shutdown()
+            thread2.join(timeout=2)
+            assert not thread2.is_alive()
+    finally:
+        if thread1.is_alive():
+            app1.shutdown()
+            thread1.join(timeout=2)
+            assert not thread1.is_alive()
+
+
+def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart_and_waits_for_post_restart_mutation_settle(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from provider_execution import gemini as gemini_adapter_module
+
+    fixed_req_id = 'job_6e1107'
+    project_root = tmp_path / 'grm'
+    session_path = str(tmp_path / 'grm.json')
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('gemini'))
+    _write(
+        project_root / '.ccb' / '.gemini-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%3',
+                'work_dir': str(project_root),
+                'gemini_session_id': 'gemini-session-id',
+                'gemini_session_path': session_path,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            self.sent = (pane_id, text)
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%3'
+
+    class FakeSession:
+        data = {}
+        gemini_session_path = session_path
+        gemini_session_id = 'gemini-session-id'
+        work_dir = str(project_root)
+
+        def ensure_pane(self):
+            return True, '%3'
+
+    class FakeReader:
+        instances = 0
+
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+            FakeReader.instances += 1
+            self.instance_id = FakeReader.instances
+            self._calls = 0
+
+        def set_preferred_session(self, session_path) -> None:
+            del session_path
+
+        def capture_state(self):
+            return {'session_path': session_path, 'msg_count': 0}
+
+        def try_get_message(self, state):
+            self._calls += 1
+            if self.instance_id == 1:
+                if int(state.get('msg_count', 0) or 0) >= 1:
+                    return None, state
+                return (
+                    'partial stable',
+                    {
+                        **state,
+                        'msg_count': 1,
+                        'last_gemini_id': 'msg-1',
+                        'mtime_ns': 111,
+                    },
+                )
+            if self._calls == 1:
+                return (
+                    'partial stable expanded',
+                    {
+                        **state,
+                        'msg_count': 1,
+                        'last_gemini_id': 'msg-1',
+                        'mtime_ns': 222,
+                    },
+                )
+            return (
+                'final stable reply',
+                {
+                    **state,
+                    'msg_count': 1,
+                    'last_gemini_id': 'msg-1',
+                    'mtime_ns': 333,
+                },
+            )
+
+    monkeypatch.setattr(gemini_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(gemini_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(gemini_adapter_module, 'GeminiLogReader', FakeReader)
+    app1 = CcbdApp(project_root)
+    _freeze_job_ids(app1, monkeypatch, fixed_req_id)
+    thread1 = threading.Thread(target=app1.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread1.start()
+    _wait_for_path(app1.paths.ccbd_socket_path)
+
+    try:
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        assert code == 0, stderr
+
+        code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'resume gemini mutate'], cwd=project_root)
+        assert code == 0, stderr
+        job_id = _extract_accepted_job_id(stdout, target='demo')
+
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            events_path = project_root / '.ccb' / 'agents' / 'demo' / 'events.jsonl'
+            if events_path.exists() and 'session_snapshot' in events_path.read_text(encoding='utf-8'):
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError('expected session_snapshot before restart')
+
+        running = _wait_for_phase2_status(project_root, 'demo', 'running')
+        assert f'job_id: {job_id}' in running
+        assert 'reply: partial stable' in running
+        assert 'completion_reason: None' in running
+
+        app1.shutdown()
+        thread1.join(timeout=2)
+        assert not thread1.is_alive()
+
+        app2 = CcbdApp(project_root)
+        thread2 = threading.Thread(target=app2.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+        thread2.start()
+        _wait_for_path(app2.paths.ccbd_socket_path)
+        try:
+            deadline = time.time() + 3.0
+            last_stdout = ''
+            while time.time() < deadline:
+                code, pend, stderr = _run_phase2_local(['pend', 'demo'], cwd=project_root)
+                assert code == 0, stderr
+                last_stdout = pend
+                if f'job_id: {job_id}' in pend and 'status: running' in pend and 'reply: final stable reply' in pend:
+                    assert 'completion_reason: None' in pend
+                    break
+                time.sleep(0.05)
+            else:
+                raise AssertionError(f'expected running final preview after restart before settle completion; last={last_stdout!r}')
+
+            pend = _wait_for_phase2_status(project_root, job_id, 'completed', timeout=6.0)
+            assert 'reply: final stable reply' in pend
+            assert 'completion_reason: session_reply_stable' in pend
+            assert 'completion_confidence: observed' in pend
+        finally:
+            app2.shutdown()
+            thread2.join(timeout=2)
+            assert not thread2.is_alive()
+    finally:
+        if thread1.is_alive():
+            app1.shutdown()
+            thread1.join(timeout=2)
+            assert not thread1.is_alive()
+
+
+def test_ccb_gemini_real_adapter_recovers_after_restart_rotate_and_waits_for_new_session_mutation_settle(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from provider_execution import gemini as gemini_adapter_module
+
+    fixed_req_id = 'job_6e1108'
+    project_root = tmp_path / 'grrm'
+    old_session_path = str(tmp_path / 'grrmo.json')
+    new_session_path = str(tmp_path / 'grrmn.json')
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('gemini'))
+    _write(
+        project_root / '.ccb' / '.gemini-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%3',
+                'work_dir': str(project_root),
+                'gemini_session_id': 'gemini-session-id',
+                'gemini_session_path': old_session_path,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            self.sent = (pane_id, text)
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%3'
+
+    class FakeSession:
+        data = {}
+        gemini_session_path = old_session_path
+        gemini_session_id = 'gemini-session-id'
+        work_dir = str(project_root)
+
+        def ensure_pane(self):
+            return True, '%3'
+
+    class FakeReader:
+        instances = 0
+
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+            FakeReader.instances += 1
+            self.instance_id = FakeReader.instances
+            self._calls = 0
+
+        def set_preferred_session(self, session_path) -> None:
+            del session_path
+
+        def capture_state(self):
+            return {'session_path': old_session_path, 'msg_count': 0}
+
+        def try_get_message(self, state):
+            self._calls += 1
+            if self.instance_id == 1:
+                if int(state.get('msg_count', 0) or 0) >= 1:
+                    return None, state
+                return (
+                    'old preview reply',
+                    {
+                        **state,
+                        'session_path': old_session_path,
+                        'msg_count': 1,
+                        'last_gemini_id': 'msg-old',
+                        'mtime_ns': 111,
+                    },
+                )
+            if self._calls == 1:
+                return (
+                    None,
+                    {
+                        **state,
+                        'session_path': new_session_path,
+                        'msg_count': 0,
+                        'last_gemini_id': None,
+                        'mtime_ns': 222,
+                    },
+                )
+            if self._calls == 2:
+                return (
+                    'new draft 1',
+                    {
+                        **state,
+                        'session_path': new_session_path,
+                        'msg_count': 1,
+                        'last_gemini_id': 'msg-new',
+                        'mtime_ns': 333,
+                    },
+                )
+            if self._calls == 3:
+                return (
+                    'new draft 2',
+                    {
+                        **state,
+                        'session_path': new_session_path,
+                        'msg_count': 1,
+                        'last_gemini_id': 'msg-new',
+                        'mtime_ns': 444,
+                    },
+                )
+            return (
+                'new final stable reply',
+                {
+                    **state,
+                    'session_path': new_session_path,
+                    'msg_count': 1,
+                    'last_gemini_id': 'msg-new',
+                    'mtime_ns': 555,
+                },
+            )
+
+    monkeypatch.setattr(gemini_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(gemini_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(gemini_adapter_module, 'GeminiLogReader', FakeReader)
+    app1 = CcbdApp(project_root)
+    _freeze_job_ids(app1, monkeypatch, fixed_req_id)
+    thread1 = threading.Thread(target=app1.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread1.start()
+    _wait_for_path(app1.paths.ccbd_socket_path)
+
+    try:
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        assert code == 0, stderr
+
+        code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'resume gemini rotate mutate'], cwd=project_root)
+        assert code == 0, stderr
+        job_id = _extract_accepted_job_id(stdout, target='demo')
+
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            events_path = project_root / '.ccb' / 'agents' / 'demo' / 'events.jsonl'
+            if events_path.exists() and 'session_snapshot' in events_path.read_text(encoding='utf-8'):
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError('expected old-session snapshot before restart')
+
+        running = _wait_for_phase2_status(project_root, 'demo', 'running')
+        assert f'job_id: {job_id}' in running
+        assert 'reply: old preview reply' in running
+        assert 'completion_reason: None' in running
+
+        app1.shutdown()
+        thread1.join(timeout=2)
+        assert not thread1.is_alive()
+
+        app2 = CcbdApp(project_root)
+        thread2 = threading.Thread(target=app2.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+        thread2.start()
+        _wait_for_path(app2.paths.ccbd_socket_path)
+        try:
+            deadline = time.time() + 3.0
+            last_stdout = ''
+            while time.time() < deadline:
+                code, pend, stderr = _run_phase2_local(['pend', 'demo'], cwd=project_root)
+                assert code == 0, stderr
+                last_stdout = pend
+                if f'job_id: {job_id}' in pend and 'status: running' in pend and 'reply: old preview reply' not in pend:
+                    assert 'reply: \n' in pend or pend.rstrip().endswith('reply:')
+                    break
+                time.sleep(0.05)
+            else:
+                raise AssertionError(f'expected rotate to clear old preview after restart; last={last_stdout!r}')
+
+            deadline = time.time() + 3.0
+            last_stdout = ''
+            while time.time() < deadline:
+                code, pend, stderr = _run_phase2_local(['pend', 'demo'], cwd=project_root)
+                assert code == 0, stderr
+                last_stdout = pend
+                if f'job_id: {job_id}' in pend and 'status: running' in pend and 'reply: new final stable reply' in pend:
+                    assert 'completion_reason: None' in pend
+                    break
+                time.sleep(0.05)
+            else:
+                raise AssertionError(f'expected running new-session final preview before settle completion; last={last_stdout!r}')
+
+            pend = _wait_for_phase2_status(project_root, job_id, 'completed', timeout=6.0)
+            assert 'reply: old preview reply' not in pend
+            assert 'reply: new final stable reply' in pend
+            assert 'completion_reason: session_reply_stable' in pend
+            assert 'completion_confidence: observed' in pend
+        finally:
+            app2.shutdown()
+            thread2.join(timeout=2)
+            assert not thread2.is_alive()
+    finally:
+        if thread1.is_alive():
+            app1.shutdown()
+            thread1.join(timeout=2)
+            assert not thread1.is_alive()

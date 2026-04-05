@@ -1,0 +1,81 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install pytest
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+
+      - name: Syntax check
+        run: python -m compileall -q lib bin ccb
+
+      - name: Run tests
+        run: |
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            pytest test/ -v --tb=short -k "not tmux"
+          else
+            pytest test/ -v --tb=short
+          fi
+        shell: bash
+
+      - name: Debug on failure (Windows)
+        if: failure() && runner.os == 'Windows'
+        run: |
+          python --version
+          python -c "import sys; print('Platform:', sys.platform); print('Executable:', sys.executable)"
+          dir lib
+          type lib\terminal.py | findstr /N "import"
+        shell: cmd
+
+  test-wsl:
+    name: WSL / Ubuntu 22.04
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup WSL
+        uses: Vampire/setup-wsl@v3
+        with:
+          distribution: Ubuntu-22.04
+
+      - name: Install Python and dependencies in WSL
+        shell: wsl-bash {0}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-venv python3-pip tmux
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pytest
+
+      - name: Syntax check in WSL
+        shell: wsl-bash {0}
+        run: python3 -m compileall -q lib bin ccb
+
+      - name: Run tests in WSL with tmux
+        shell: wsl-bash {0}
+        run: |
+          export TERM=xterm-256color
+          python3 -m pytest test/ -v --tb=short

@@ -1,0 +1,15 @@
+{
+  "proto": "autoflow.fileops.v1",
+  "id": "TR-PREFLIGHT",
+  "purpose": "read_state",
+  "summary": "Load .ccb/state.json, validate current step, bump attempts if allowed",
+  "done": ["Returns current step context or a terminal status"],
+  "ops": [
+    { "op": "autoflow_state_preflight", "path": ".ccb/state.json", "maxAttempts": 2 }
+  ],
+  "report": { "changedFiles": true, "diffSummary": true, "commandOutputs": "never" },
+  "_meta": {
+    "placeholders": {},
+    "notes": "No placeholders needed - this template is ready to use as-is"
+  }
+}

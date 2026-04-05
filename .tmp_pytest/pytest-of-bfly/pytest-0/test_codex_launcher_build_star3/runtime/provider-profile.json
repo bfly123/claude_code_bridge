@@ -1,0 +1,15 @@
+{
+  "provider": "codex",
+  "agent_name": "agent1",
+  "mode": "isolated",
+  "profile_root": "/home/bfly/yunwei/ccb_source/.tmp_pytest/pytest-of-bfly/pytest-0/test_codex_launcher_build_star3/codex-profile-home",
+  "runtime_home": "/home/bfly/yunwei/ccb_source/.tmp_pytest/pytest-of-bfly/pytest-0/test_codex_launcher_build_star3/codex-profile-home",
+  "env": {
+    "OPENAI_API_KEY": "profile-key"
+  },
+  "inherit_api": false,
+  "inherit_auth": true,
+  "inherit_config": true,
+  "inherit_skills": true,
+  "inherit_commands": true
+}
