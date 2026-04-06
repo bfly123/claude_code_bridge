@@ -18,6 +18,7 @@ opencode.json
 .claude/
 *.mp4
 tmp/
+.tmp_test_env_arch1/
 compare_with_mcp/
 CLAUDE.md
 AGENTS.md

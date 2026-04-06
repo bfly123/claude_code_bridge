@@ -1964,6 +1964,75 @@ def test_dispatcher_ack_reply_unblocks_next_task_request_after_tick(tmp_path: Pa
     assert queue['agent']['active']['job_id'] == blocked_job_id
 
 
+def test_dispatcher_pending_reply_on_one_agent_does_not_block_other_agent_start(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-multi-agent-mailbox-isolation'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:00Z')
+
+    reply_receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='claude',
+            body='question for codex',
+            task_id='task-mailbox-isolation-reply',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    reply_job_id = reply_receipt.jobs[0].job_id
+    dispatcher.tick()
+    dispatcher.complete(reply_job_id, _decision(reply='reply for claude'))
+
+    blocked_receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='user',
+            body='should stay queued behind mailbox head',
+            task_id='task-mailbox-isolation-blocked',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    blocked_job_id = blocked_receipt.jobs[0].job_id
+    codex_receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='user',
+            body='codex should still run',
+            task_id='task-mailbox-isolation-codex',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    codex_job_id = codex_receipt.jobs[0].job_id
+
+    started = dispatcher.tick()
+
+    started_ids = {job.job_id for job in started}
+    assert codex_job_id in started_ids
+    assert any(job.request.message_type == 'reply_delivery' and job.agent_name == 'claude' for job in started)
+    blocked_state = dispatcher.get(blocked_job_id)
+    codex_state = dispatcher.get(codex_job_id)
+    assert blocked_state is not None and blocked_state.status.value == 'accepted'
+    assert codex_state is not None and codex_state.status.value == 'running'
+
+    claude_queue = dispatcher.queue('claude')
+    assert claude_queue['agent']['queue_depth'] == 2
+    assert claude_queue['agent']['queued_events'][0]['event_type'] == 'task_reply'
+    assert claude_queue['agent']['queued_events'][1]['job_id'] == blocked_job_id
+
+
 def test_dispatcher_tick_promotes_head_reply_into_tracked_delivery_before_queued_requests(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-reply-delivery-order'
     ctx = _bootstrap_test_project(project_root)

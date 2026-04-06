@@ -754,6 +754,164 @@ def test_dispatcher_tick_keeps_job_queued_when_runtime_recovery_fails(tmp_path: 
     assert session.ensure_calls == 1
 
 
+def test_dispatcher_tick_runs_jobs_in_parallel_across_agents_but_serializes_per_agent(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-dispatch-multi-agent'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    execution_service = RecordingExecutionService()
+    dispatcher = JobDispatcher(
+        layout,
+        config,
+        registry,
+        execution_service=execution_service,
+        clock=lambda: '2026-03-18T00:00:00Z',
+    )
+
+    first_codex = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='user',
+            body='codex one',
+            task_id=None,
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    second_codex = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='user',
+            body='codex two',
+            task_id=None,
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    claude = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='user',
+            body='claude one',
+            task_id=None,
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+
+    started = dispatcher.tick()
+
+    started_ids = {job.job_id for job in started}
+    assert started_ids == {first_codex.jobs[0].job_id, claude.jobs[0].job_id}
+    assert len(execution_service.calls) == 2
+    assert {job.job_id for job, _runtime in execution_service.calls} == started_ids
+
+    first_state = dispatcher.get(first_codex.jobs[0].job_id)
+    second_state = dispatcher.get(second_codex.jobs[0].job_id)
+    claude_state = dispatcher.get(claude.jobs[0].job_id)
+    assert first_state is not None and first_state.status is JobStatus.RUNNING
+    assert second_state is not None and second_state.status is JobStatus.QUEUED
+    assert claude_state is not None and claude_state.status is JobStatus.RUNNING
+
+
+def test_dispatcher_tick_starts_healthy_agent_when_other_agent_binding_recovery_fails(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-dispatch-isolated-recovery'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    registry = AgentRegistry(layout, config)
+    session = RecoveringBindingSession(
+        pane_id='%41',
+        fake_session_id='codex-session-old',
+        recovered_pane_id='%77',
+        recovered_session_id='codex-session-new',
+        recover_ok=False,
+    )
+    runtime_service = RuntimeService(
+        layout,
+        registry,
+        ctx.project_id,
+        session_bindings=_binding_map('codex', session),
+        clock=lambda: '2026-03-18T00:00:00Z',
+    )
+    runtime_service.attach(
+        agent_name='codex',
+        workspace_path=str(layout.workspace_path('codex')),
+        backend_type='tmux',
+        pid=101,
+        runtime_ref='tmux:%41',
+        session_ref='codex-session-old',
+        health='pane-dead',
+    )
+    runtime_service.attach(
+        agent_name='claude',
+        workspace_path=str(layout.workspace_path('claude')),
+        backend_type='tmux',
+        pid=102,
+        runtime_ref='tmux:%42',
+        session_ref='claude-session',
+        health='healthy',
+    )
+    execution_service = RecordingExecutionService()
+    dispatcher = JobDispatcher(
+        layout,
+        config,
+        registry,
+        runtime_service=runtime_service,
+        execution_service=execution_service,
+        clock=lambda: '2026-03-18T00:00:00Z',
+    )
+
+    codex = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='user',
+            body='recover codex before start',
+            task_id=None,
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    claude = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='user',
+            body='claude should still start',
+            task_id=None,
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+
+    started = dispatcher.tick()
+
+    assert [job.job_id for job in started] == [claude.jobs[0].job_id]
+    assert [job.job_id for job, _runtime in execution_service.calls] == [claude.jobs[0].job_id]
+    codex_state = dispatcher.get(codex.jobs[0].job_id)
+    claude_state = dispatcher.get(claude.jobs[0].job_id)
+    assert codex_state is not None and codex_state.status is JobStatus.ACCEPTED
+    assert claude_state is not None and claude_state.status is JobStatus.RUNNING
+
+    codex_runtime = registry.get('codex')
+    claude_runtime = registry.get('claude')
+    assert codex_runtime is not None and codex_runtime.state is AgentState.DEGRADED
+    assert claude_runtime is not None and claude_runtime.state is AgentState.BUSY
+    assert session.ensure_calls == 1
+
+
 def test_dispatcher_persists_completion_items_and_state_updates_for_fake_provider(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-fake'
     ctx = _bootstrap_test_project(project_root)
