@@ -14,6 +14,12 @@ class ProjectNamespacePaneRecord:
     managed_by: str | None = None
     alive: bool = False
 
+    @staticmethod
+    def _matches_field(actual: str | None, expected: str, *, allow_missing: bool = False) -> bool:
+        if allow_missing and actual is None:
+            return True
+        return str(actual or '').strip() == str(expected or '').strip()
+
     def matches(
         self,
         *,
@@ -23,15 +29,19 @@ class ProjectNamespacePaneRecord:
         slot_key: str | None = None,
         managed_by: str | None = 'ccbd',
     ) -> bool:
-        if self.session_name is not None and self.session_name != str(tmux_session_name or '').strip():
+        if not self._matches_field(
+            self.session_name,
+            tmux_session_name or '',
+            allow_missing=True,
+        ):
             return False
-        if str(self.project_id or '').strip() != str(project_id or '').strip():
+        if not self._matches_field(self.project_id, project_id):
             return False
-        if str(self.role or '').strip() != str(role or '').strip():
+        if not self._matches_field(self.role, role):
             return False
-        if slot_key is not None and str(self.slot_key or '').strip() != str(slot_key or '').strip():
+        if slot_key is not None and not self._matches_field(self.slot_key, slot_key):
             return False
-        if managed_by is not None and str(self.managed_by or '').strip() != str(managed_by or '').strip():
+        if managed_by is not None and not self._matches_field(self.managed_by, managed_by):
             return False
         return bool(self.alive)
 
@@ -106,6 +116,10 @@ def _describe_pane_via_tmux(backend, pane_id: str) -> dict[str, str] | None:
     if getattr(cp, 'returncode', 1) != 0:
         return None
     line = ((getattr(cp, 'stdout', '') or '').splitlines() or [''])[0]
+    return _decode_tmux_pane_description(line)
+
+
+def _decode_tmux_pane_description(line: str) -> dict[str, str] | None:
     parts = line.split('\t')
     if len(parts) != 7:
         return None
@@ -133,10 +147,14 @@ def _describe_pane_via_backend(backend, pane_id: str) -> dict[str, str] | None:
         return None
     if not isinstance(described, dict):
         return None
-    result = {str(key): str(value) for key, value in described.items()}
+    result = _stringify_details(described)
     if 'session_name' not in result:
         result['session_name'] = ''
     return result
+
+
+def _stringify_details(described: dict[object, object]) -> dict[str, str]:
+    return {str(key): str(value) for key, value in described.items()}
 
 
 def _clean(value: object) -> str | None:

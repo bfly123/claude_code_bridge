@@ -29,54 +29,29 @@ def launch_tmux_runtime(
     runtime_dir = context.paths.agent_dir(spec.name) / "provider-runtime" / spec.provider
     runtime_dir.mkdir(parents=True, exist_ok=True)
     launch_session_id = launch_session_id_fn(spec.name)
-    prepared_state = dict(launcher.prepare_runtime(runtime_dir) or {}) if launcher.prepare_runtime else {}
-
-    if tmux_socket_path is not None:
-        try:
-            backend = backend_factory(socket_path=tmux_socket_path)
-        except TypeError:
-            backend = backend_factory()
-    else:
-        backend = backend_factory()
+    prepared_state = _prepared_state(launcher, runtime_dir)
+    backend = _tmux_backend(backend_factory, tmux_socket_path)
     pane_title_marker = pane_title_marker_fn(context, spec)
     start_cmd = launcher.build_start_cmd(command, spec, runtime_dir, launch_session_id)
-    run_cwd = Path(plan.workspace_path)
-    if launcher.resolve_run_cwd is not None:
-        resolved_run_cwd = launcher.resolve_run_cwd(command, spec, plan, runtime_dir, launch_session_id)
-        if resolved_run_cwd is not None:
-            run_cwd = Path(resolved_run_cwd)
-    if assigned_pane_id:
-        pane_id = str(assigned_pane_id)
-        backend.respawn_pane(pane_id, cmd=start_cmd, cwd=str(run_cwd), remain_on_exit=True)
-    else:
-        if not allow_detached_fallback:
-            raise RuntimeError(
-                f'project namespace launch requires assigned tmux pane for {spec.name}'
-            )
-        try:
-            pane_id = backend.create_pane(start_cmd, str(run_cwd))
-        except Exception as exc:
-            if not _should_fallback_to_detached_session(exc):
-                raise
-            pane_id = create_detached_tmux_pane_fn(
-                backend,
-                cmd=start_cmd,
-                cwd=run_cwd,
-                session_name=f"ccb-{spec.name}",
-            )
-        else:
-            if not pane_meets_minimum_size_fn(backend, pane_id):
-                best_effort_kill_tmux_pane_fn(backend, pane_id)
-                if not allow_detached_fallback:
-                    raise RuntimeError(
-                        f'project namespace launch could not allocate stable tmux pane for {spec.name}'
-                    )
-                pane_id = create_detached_tmux_pane_fn(
-                    backend,
-                    cmd=start_cmd,
-                    cwd=run_cwd,
-                    session_name=f"ccb-{spec.name}",
-                )
+    run_cwd = _run_cwd(
+        launcher,
+        command=command,
+        spec=spec,
+        plan=plan,
+        runtime_dir=runtime_dir,
+        launch_session_id=launch_session_id,
+    )
+    pane_id = _launch_pane(
+        backend,
+        spec_name=spec.name,
+        assigned_pane_id=assigned_pane_id,
+        start_cmd=start_cmd,
+        run_cwd=run_cwd,
+        create_detached_tmux_pane_fn=create_detached_tmux_pane_fn,
+        pane_meets_minimum_size_fn=pane_meets_minimum_size_fn,
+        best_effort_kill_tmux_pane_fn=best_effort_kill_tmux_pane_fn,
+        allow_detached_fallback=allow_detached_fallback,
+    )
     apply_ccb_pane_identity(
         backend,
         pane_id,
@@ -117,13 +92,138 @@ def launch_tmux_runtime(
         launcher.post_launch(backend, pane_id, runtime_dir, launch_session_id, prepared_state)
 
 
+def _prepared_state(launcher, runtime_dir: Path) -> dict:
+    if launcher.prepare_runtime is None:
+        return {}
+    return dict(launcher.prepare_runtime(runtime_dir) or {})
+
+
+def _tmux_backend(backend_factory, tmux_socket_path: str | None):
+    if tmux_socket_path is None:
+        return backend_factory()
+    try:
+        return backend_factory(socket_path=tmux_socket_path)
+    except TypeError:
+        return backend_factory()
+
+
+def _run_cwd(
+    launcher,
+    *,
+    command,
+    spec,
+    plan,
+    runtime_dir: Path,
+    launch_session_id: str,
+) -> Path:
+    run_cwd = Path(plan.workspace_path)
+    if launcher.resolve_run_cwd is None:
+        return run_cwd
+    resolved = launcher.resolve_run_cwd(
+        command,
+        spec,
+        plan,
+        runtime_dir,
+        launch_session_id,
+    )
+    if resolved is None:
+        return run_cwd
+    return Path(resolved)
+
+
+def _launch_pane(
+    backend,
+    *,
+    spec_name: str,
+    assigned_pane_id: str | None,
+    start_cmd: str,
+    run_cwd: Path,
+    create_detached_tmux_pane_fn,
+    pane_meets_minimum_size_fn,
+    best_effort_kill_tmux_pane_fn,
+    allow_detached_fallback: bool,
+) -> str:
+    if assigned_pane_id:
+        pane_id = str(assigned_pane_id)
+        backend.respawn_pane(pane_id, cmd=start_cmd, cwd=str(run_cwd), remain_on_exit=True)
+        return pane_id
+    if not allow_detached_fallback:
+        raise RuntimeError(f'project namespace launch requires assigned tmux pane for {spec_name}')
+    return _allocate_fresh_pane(
+        backend,
+        spec_name=spec_name,
+        start_cmd=start_cmd,
+        run_cwd=run_cwd,
+        create_detached_tmux_pane_fn=create_detached_tmux_pane_fn,
+        pane_meets_minimum_size_fn=pane_meets_minimum_size_fn,
+        best_effort_kill_tmux_pane_fn=best_effort_kill_tmux_pane_fn,
+        allow_detached_fallback=allow_detached_fallback,
+    )
+
+
+def _allocate_fresh_pane(
+    backend,
+    *,
+    spec_name: str,
+    start_cmd: str,
+    run_cwd: Path,
+    create_detached_tmux_pane_fn,
+    pane_meets_minimum_size_fn,
+    best_effort_kill_tmux_pane_fn,
+    allow_detached_fallback: bool,
+) -> str:
+    try:
+        pane_id = backend.create_pane(start_cmd, str(run_cwd))
+    except Exception as exc:
+        if not _should_fallback_to_detached_session(exc):
+            raise
+        return _detached_pane(
+            backend,
+            spec_name=spec_name,
+            start_cmd=start_cmd,
+            run_cwd=run_cwd,
+            create_detached_tmux_pane_fn=create_detached_tmux_pane_fn,
+        )
+    if pane_meets_minimum_size_fn(backend, pane_id):
+        return pane_id
+    best_effort_kill_tmux_pane_fn(backend, pane_id)
+    if not allow_detached_fallback:
+        raise RuntimeError(
+            f'project namespace launch could not allocate stable tmux pane for {spec_name}'
+        )
+    return _detached_pane(
+        backend,
+        spec_name=spec_name,
+        start_cmd=start_cmd,
+        run_cwd=run_cwd,
+        create_detached_tmux_pane_fn=create_detached_tmux_pane_fn,
+    )
+
+
+def _detached_pane(
+    backend,
+    *,
+    spec_name: str,
+    start_cmd: str,
+    run_cwd: Path,
+    create_detached_tmux_pane_fn,
+) -> str:
+    return create_detached_tmux_pane_fn(
+        backend,
+        cmd=start_cmd,
+        cwd=run_cwd,
+        session_name=f"ccb-{spec_name}",
+    )
+
+
 def prepare_detached_tmux_server(backend) -> None:
+    _best_effort_tmux_run(backend, ["start-server"])
+    _best_effort_tmux_run(backend, ["set-option", "-g", "destroy-unattached", "off"])
+
+
+def _best_effort_tmux_run(backend, argv: list[str]) -> None:
     try:
-        backend._tmux_run(["start-server"], check=False)  # type: ignore[attr-defined]
-    except Exception:
-        pass
-    try:
-        backend._tmux_run(["set-option", "-g", "destroy-unattached", "off"], check=False)  # type: ignore[attr-defined]
+        backend._tmux_run(argv, check=False)  # type: ignore[attr-defined]
     except Exception:
         pass
 
@@ -147,7 +247,21 @@ def create_detached_tmux_pane(backend, *, cmd: str, cwd: Path, session_name: str
     return pane_id
 
 
-def pane_meets_minimum_size(backend, pane_id: str, *, min_width: int = 20, min_height: int = 8) -> bool:
+def pane_meets_minimum_size(
+    backend,
+    pane_id: str,
+    *,
+    min_width: int = 20,
+    min_height: int = 8,
+) -> bool:
+    dimensions = _pane_dimensions(backend, pane_id)
+    if dimensions is None:
+        return True
+    width, height = dimensions
+    return width >= min_width and height >= min_height
+
+
+def _pane_dimensions(backend, pane_id: str) -> tuple[int, int] | None:
     try:
         result = backend._tmux_run(  # type: ignore[attr-defined]
             ["display-message", "-p", "-t", pane_id, "#{pane_width}x#{pane_height}"],
@@ -155,15 +269,15 @@ def pane_meets_minimum_size(backend, pane_id: str, *, min_width: int = 20, min_h
             check=True,
         )
     except Exception:
-        return True
+        return None
     raw = (result.stdout or "").strip().lower()
     try:
         width_text, height_text = raw.split("x", 1)
         width = int(width_text)
         height = int(height_text)
     except Exception:
-        return True
-    return width >= min_width and height >= min_height
+        return None
+    return width, height
 
 
 def best_effort_kill_tmux_pane(backend, pane_id: str) -> None:

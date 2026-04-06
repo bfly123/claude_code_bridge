@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 import os
 import subprocess
@@ -23,42 +22,15 @@ from ccbd.socket_client import CcbdClient, CcbdClientError
 from ccbd.system import utc_now
 from cli.kill_runtime.processes import is_pid_alive, kill_pid, terminate_pid_tree
 from cli.context import CliContext
-from .tmux_project_cleanup import ProjectTmuxCleanupSummary
-
-
-class CcbdServiceError(RuntimeError):
-    pass
-
-
-@dataclass(frozen=True)
-class DaemonHandle:
-    client: CcbdClient | None
-    inspection: object
-    started: bool = False
-
-
-@dataclass(frozen=True)
-class LocalPingSummary:
-    project_id: str
-    mount_state: str
-    health: str
-    generation: int | None
-    socket_path: str | None
-    last_heartbeat_at: str | None
-    pid_alive: bool
-    socket_connectable: bool
-    heartbeat_fresh: bool
-    takeover_allowed: bool
-    reason: str
-
-
-@dataclass(frozen=True)
-class KillSummary:
-    project_id: str
-    state: str
-    socket_path: str
-    forced: bool
-    cleanup_summaries: tuple[ProjectTmuxCleanupSummary, ...] = ()
+from .daemon_runtime import (
+    CcbdServiceError,
+    DaemonHandle,
+    KillSummary,
+    LocalPingSummary,
+)
+from .daemon_runtime import connect_mounted_daemon as _connect_mounted_daemon_runtime
+from .daemon_runtime import ensure_daemon_started as _ensure_daemon_started_runtime
+from .daemon_runtime import shutdown_daemon as _shutdown_daemon_runtime
 
 
 _DEF_START_TIMEOUT_S = 5.0
@@ -73,72 +45,30 @@ def inspect_daemon(context: CliContext):
 
 
 def ensure_daemon_started(context: CliContext) -> DaemonHandle:
-    clear_shutdown_intent(context)
-    keeper_ready = _ensure_keeper_started(context)
-    started = False
-    incompatible_restart_requested = False
-    unreachable_restart_requested = False
-    direct_spawn_requested = False
-    deadline = time.time() + _DEF_START_TIMEOUT_S
-
-    while time.time() < deadline:
-        _, _, inspection = inspect_daemon(context)
-        if inspection.socket_connectable:
-            handle = _connect_compatible_daemon(
-                context,
-                inspection,
-                restart_on_mismatch=not incompatible_restart_requested,
-            )
-            if handle is not None:
-                return DaemonHandle(client=handle.client, inspection=inspection, started=started)
-            if not incompatible_restart_requested:
-                started = True
-                incompatible_restart_requested = True
-        elif _should_restart_unreachable_daemon(inspection) and not unreachable_restart_requested:
-            _restart_unreachable_daemon(context, inspection)
-            started = True
-            unreachable_restart_requested = True
-        elif inspection.health in {LeaseHealth.MISSING, LeaseHealth.UNMOUNTED, LeaseHealth.STALE}:
-            started = True
-            if not direct_spawn_requested:
-                # The keeper is the long-lived supervisor, but `ccb` startup still
-                # needs a synchronous bootstrap path. Otherwise a freshly started
-                # keeper can leave the lease in `unmounted` long enough for the
-                # foreground command to time out before the first reconcile pass.
-                _spawn_ccbd_process(context)
-                keeper_ready = keeper_ready or _ensure_keeper_started(context)
-                direct_spawn_requested = True
-        time.sleep(0.05)
-
-    _, _, inspection = inspect_daemon(context)
-    handle = _connect_compatible_daemon(context, inspection, restart_on_mismatch=False)
-    if handle is not None:
-        return DaemonHandle(client=handle.client, inspection=inspection, started=started)
-    if inspection.socket_connectable:
-        raise CcbdServiceError(_incompatible_daemon_error())
-    raise CcbdServiceError(f'ccbd is unavailable: {inspection.reason}')
+    return _ensure_daemon_started_runtime(
+        context,
+        clear_shutdown_intent_fn=clear_shutdown_intent,
+        ensure_keeper_started_fn=_ensure_keeper_started,
+        inspect_daemon_fn=inspect_daemon,
+        connect_compatible_daemon_fn=_connect_compatible_daemon,
+        should_restart_unreachable_daemon_fn=_should_restart_unreachable_daemon,
+        restart_unreachable_daemon_fn=_restart_unreachable_daemon,
+        spawn_ccbd_process_fn=_spawn_ccbd_process,
+        incompatible_daemon_error_fn=_incompatible_daemon_error,
+        start_timeout_s=_DEF_START_TIMEOUT_S,
+    )
 
 
 def connect_mounted_daemon(context: CliContext, *, allow_restart_stale: bool) -> DaemonHandle:
-    manager, guard, inspection = inspect_daemon(context)
-    handle = _connect_compatible_daemon(context, inspection, restart_on_mismatch=allow_restart_stale)
-    if handle is not None:
-        return handle
-    manager, guard, inspection = inspect_daemon(context)
-    if inspection.health is LeaseHealth.UNMOUNTED:
-        raise CcbdServiceError('project ccbd is unmounted; run `ccb [agents...]` first')
-    if inspection.health is LeaseHealth.MISSING:
-        raise CcbdServiceError('project ccbd is not mounted; run `ccb [agents...]` first')
-    if allow_restart_stale and (
-        inspection.health is LeaseHealth.STALE or _should_restart_unreachable_daemon(inspection)
-    ):
-        return ensure_daemon_started(context)
-    if inspection.socket_connectable:
-        handle = _connect_compatible_daemon(context, inspection, restart_on_mismatch=False)
-        if handle is not None:
-            return handle
-        raise CcbdServiceError(_incompatible_daemon_error())
-    raise CcbdServiceError(f'ccbd is unavailable: {inspection.reason}')
+    return _connect_mounted_daemon_runtime(
+        context,
+        allow_restart_stale=allow_restart_stale,
+        inspect_daemon_fn=inspect_daemon,
+        connect_compatible_daemon_fn=_connect_compatible_daemon,
+        ensure_daemon_started_fn=ensure_daemon_started,
+        should_restart_unreachable_daemon_fn=_should_restart_unreachable_daemon,
+        incompatible_daemon_error_fn=_incompatible_daemon_error,
+    )
 
 
 def ping_local_state(context: CliContext) -> LocalPingSummary:
@@ -174,41 +104,19 @@ def refresh_agent_health(context: CliContext) -> None:
 
 
 def shutdown_daemon(context: CliContext, *, force: bool) -> KillSummary:
-    record_shutdown_intent(context, reason='kill')
-    manager, _, inspection = inspect_daemon(context)
-    lease = inspection.lease
-    daemon_pid = _lease_pid(lease)
-    keeper_pid = _keeper_pid(context, lease)
-    if inspection.socket_connectable:
-        try:
-            CcbdClient(context.paths.ccbd_socket_path).shutdown()
-        except CcbdClientError as exc:
-            if not force:
-                raise CcbdServiceError(str(exc)) from exc
-    else:
-        manager.mark_unmounted()
-
-    if daemon_pid > 0 and inspection.pid_alive:
-        if not _wait_for_pid_exit(daemon_pid, timeout_s=_DEF_SHUTDOWN_TIMEOUT_S):
-            terminate_pid_tree(daemon_pid, timeout_s=_DEF_SHUTDOWN_TIMEOUT_S, is_pid_alive_fn=is_pid_alive)
-        if not is_pid_alive(daemon_pid):
-            manager.mark_unmounted()
-
-    if keeper_pid > 0 and not _wait_for_keeper_exit(context, timeout_s=_DEF_SHUTDOWN_TIMEOUT_S):
-        terminate_pid_tree(keeper_pid, timeout_s=_DEF_SHUTDOWN_TIMEOUT_S, is_pid_alive_fn=is_pid_alive)
-
-    if force:
-        try:
-            context.paths.ccbd_socket_path.unlink()
-        except FileNotFoundError:
-            pass
-
-    lease = manager.load_state()
-    return KillSummary(
-        project_id=context.project.project_id,
-        state=lease.mount_state.value if lease is not None else 'unmounted',
-        socket_path=str(context.paths.ccbd_socket_path),
-        forced=force,
+    return _shutdown_daemon_runtime(
+        context,
+        force=force,
+        record_shutdown_intent_fn=record_shutdown_intent,
+        inspect_daemon_fn=inspect_daemon,
+        client_factory=lambda current: CcbdClient(current.paths.ccbd_socket_path),
+        lease_pid_fn=_lease_pid,
+        keeper_pid_fn=_keeper_pid,
+        wait_for_pid_exit_fn=_wait_for_pid_exit,
+        wait_for_keeper_exit_fn=_wait_for_keeper_exit,
+        is_pid_alive_fn=is_pid_alive,
+        terminate_pid_tree_fn=terminate_pid_tree,
+        shutdown_timeout_s=_DEF_SHUTDOWN_TIMEOUT_S,
     )
 
 

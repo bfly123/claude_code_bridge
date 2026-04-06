@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from i18n import t
+from ui_text import t
 from provider_core.runtime_specs import provider_marker_prefix
 
 

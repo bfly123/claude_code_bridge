@@ -42,34 +42,9 @@ def refresh_message_state(service, message_id: str, *, updated_at: str) -> None:
     attempts = latest_attempts_for_message(service, message_id)
     if not attempts:
         return
-    active = [attempt for attempt in attempts if attempt.attempt_state not in _TERMINAL_ATTEMPT_STATES]
+    active = _active_attempts(attempts)
     replies = service._reply_store.list_message(message_id)
-    if active:
-        next_state = MessageState.PARTIALLY_REPLIED if replies else MessageState.RUNNING
-    else:
-        statuses = {reply.terminal_status for reply in _terminal_replies(replies)}
-        if not statuses:
-            attempt_statuses = {attempt.attempt_state for attempt in attempts}
-            if attempt_statuses == {AttemptState.COMPLETED}:
-                next_state = MessageState.COMPLETED
-            elif attempt_statuses == {AttemptState.CANCELLED}:
-                next_state = MessageState.CANCELLED
-            elif attempt_statuses == {AttemptState.FAILED}:
-                next_state = MessageState.FAILED
-            elif attempt_statuses == {AttemptState.INCOMPLETE}:
-                next_state = MessageState.INCOMPLETE
-            else:
-                next_state = MessageState.INCOMPLETE
-        elif statuses == {ReplyTerminalStatus.COMPLETED}:
-            next_state = MessageState.COMPLETED
-        elif statuses == {ReplyTerminalStatus.CANCELLED}:
-            next_state = MessageState.CANCELLED
-        elif statuses == {ReplyTerminalStatus.FAILED}:
-            next_state = MessageState.FAILED
-        elif statuses == {ReplyTerminalStatus.INCOMPLETE}:
-            next_state = MessageState.INCOMPLETE
-        else:
-            next_state = MessageState.INCOMPLETE
+    next_state = _next_message_state(active=active, attempts=attempts, replies=replies)
     set_message_state(service, message_id, next_state, updated_at=updated_at)
 
 
@@ -106,6 +81,44 @@ def next_retry_index(service, message_id: str, agent_name: str) -> int:
 
 def refresh_mailbox(service, agent_name: str, *, updated_at: str) -> None:
     service._mailbox_kernel.refresh_mailbox(agent_name, updated_at=updated_at)
+
+
+def _active_attempts(attempts: list[AttemptRecord]) -> list[AttemptRecord]:
+    return [
+        attempt
+        for attempt in attempts
+        if attempt.attempt_state not in _TERMINAL_ATTEMPT_STATES
+    ]
+
+
+def _next_message_state(*, active: list[AttemptRecord], attempts: list[AttemptRecord], replies) -> MessageState:
+    if active:
+        return MessageState.PARTIALLY_REPLIED if replies else MessageState.RUNNING
+
+    reply_statuses = {reply.terminal_status for reply in _terminal_replies(replies)}
+    if reply_statuses:
+        return _reply_terminal_state(reply_statuses)
+    return _attempt_terminal_state({attempt.attempt_state for attempt in attempts})
+
+
+def _reply_terminal_state(statuses: set[ReplyTerminalStatus]) -> MessageState:
+    mapping = {
+        frozenset({ReplyTerminalStatus.COMPLETED}): MessageState.COMPLETED,
+        frozenset({ReplyTerminalStatus.CANCELLED}): MessageState.CANCELLED,
+        frozenset({ReplyTerminalStatus.FAILED}): MessageState.FAILED,
+        frozenset({ReplyTerminalStatus.INCOMPLETE}): MessageState.INCOMPLETE,
+    }
+    return mapping.get(frozenset(statuses), MessageState.INCOMPLETE)
+
+
+def _attempt_terminal_state(statuses: set[AttemptState]) -> MessageState:
+    mapping = {
+        frozenset({AttemptState.COMPLETED}): MessageState.COMPLETED,
+        frozenset({AttemptState.CANCELLED}): MessageState.CANCELLED,
+        frozenset({AttemptState.FAILED}): MessageState.FAILED,
+        frozenset({AttemptState.INCOMPLETE}): MessageState.INCOMPLETE,
+    }
+    return mapping.get(frozenset(statuses), MessageState.INCOMPLETE)
 
 
 __all__ = [

@@ -8,7 +8,7 @@ import tempfile
 
 from agents.models import normalize_agent_name
 from ccbd.api_models import TargetKind
-from mailbox_targets import normalize_mailbox_owner_name
+from mailbox_runtime.targets import normalize_mailbox_owner_name
 from project.discovery import WORKSPACE_BINDING_FILENAME
 from project.ids import compute_project_id, project_slug
 

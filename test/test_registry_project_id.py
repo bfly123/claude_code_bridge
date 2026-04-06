@@ -8,7 +8,8 @@ from typing import Optional
 import pytest
 
 import pane_registry_runtime.api as pane_registry
-from project_id import compute_ccb_project_id
+from project.identity import compute_ccb_project_id
+from project.runtime_paths import project_registry_dir
 
 
 class _FakeBackend:
@@ -23,8 +24,8 @@ class _FakeBackend:
         return self._marker_map.get(marker)
 
 
-def _write_registry_file(home: Path, session_id: str, payload: dict) -> Path:
-    path = home / ".ccb" / "run" / f"ccb-session-{session_id}.json"
+def _write_registry_file(work_dir: Path, session_id: str, payload: dict) -> Path:
+    path = project_registry_dir(work_dir) / f"ccb-session-{session_id}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
@@ -61,7 +62,7 @@ def test_upsert_registry_merges_providers(tmp_path: Path, monkeypatch: pytest.Mo
     )
     assert ok2 is True
 
-    reg_path = tmp_path / ".ccb" / "run" / "ccb-session-s1.json"
+    reg_path = project_registry_dir(work_dir) / "ccb-session-s1.json"
     data = json.loads(reg_path.read_text(encoding="utf-8"))
     assert data["ccb_project_id"] == pid
     assert "providers" in data
@@ -74,12 +75,12 @@ def test_load_registry_by_project_id_filters_dead_panes(tmp_path: Path, monkeypa
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
 
     work_dir = tmp_path / "proj"
-    work_dir.mkdir()
+    (work_dir / ".ccb").mkdir(parents=True)
     pid = compute_ccb_project_id(work_dir)
 
     # Newer but dead.
     _write_registry_file(
-        tmp_path,
+        work_dir,
         "new",
         {
             "ccb_session_id": "new",
@@ -92,7 +93,7 @@ def test_load_registry_by_project_id_filters_dead_panes(tmp_path: Path, monkeypa
     )
     # Older but alive.
     _write_registry_file(
-        tmp_path,
+        work_dir,
         "old",
         {
             "ccb_session_id": "old",
@@ -105,6 +106,7 @@ def test_load_registry_by_project_id_filters_dead_panes(tmp_path: Path, monkeypa
     )
 
     monkeypatch.setattr(pane_registry, "get_backend_for_session", lambda _rec: _FakeBackend(alive={"%alive"}))
+    monkeypatch.chdir(work_dir)
     rec = pane_registry.load_registry_by_project_id(pid, "codex")
     assert rec is not None
     assert rec.get("ccb_session_id") == "old"
@@ -116,12 +118,12 @@ def test_load_registry_by_project_id_infers_missing_project_id(tmp_path: Path, m
     monkeypatch.setattr(pane_registry, "get_backend_for_session", lambda _rec: _FakeBackend(alive={"%1"}))
 
     work_dir = tmp_path / "proj"
-    work_dir.mkdir()
+    (work_dir / ".ccb").mkdir(parents=True)
     pid = compute_ccb_project_id(work_dir)
 
     # Legacy record missing ccb_project_id (should infer from work_dir).
     _write_registry_file(
-        tmp_path,
+        work_dir,
         "legacy",
         {
             "ccb_session_id": "legacy",
@@ -132,6 +134,7 @@ def test_load_registry_by_project_id_infers_missing_project_id(tmp_path: Path, m
         },
     )
 
+    monkeypatch.chdir(work_dir)
     rec = pane_registry.load_registry_by_project_id(pid, "codex")
     assert rec is not None
     assert rec.get("ccb_session_id") == "legacy"
@@ -148,7 +151,7 @@ def test_load_registry_by_project_id_filters_to_matching_work_dir(tmp_path: Path
     pid = "shared-project-id"
 
     _write_registry_file(
-        tmp_path,
+        workspace_a,
         "a",
         {
             "ccb_session_id": "a",
@@ -160,7 +163,7 @@ def test_load_registry_by_project_id_filters_to_matching_work_dir(tmp_path: Path
         },
     )
     _write_registry_file(
-        tmp_path,
+        workspace_b,
         "b",
         {
             "ccb_session_id": "b",

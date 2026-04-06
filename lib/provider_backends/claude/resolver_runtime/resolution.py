@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
-from provider_sessions.files import find_project_session_file
+from provider_core.session_binding_runtime import find_bound_session_file
 
 from .json_io import read_json
 from .models import ClaudeSessionResolution
@@ -24,19 +23,6 @@ def select_resolution(
     )
 
 
-def _explicit_session_file() -> Path | None:
-    raw = (os.environ.get("CCB_SESSION_FILE") or "").strip()
-    if not raw:
-        return None
-    try:
-        session_file = Path(os.path.expanduser(raw))
-    except Exception:
-        return None
-    if session_file.name != ".claude-session":
-        return None
-    return session_file if session_file.is_file() else None
-
-
 def _session_work_dir(session_file: Path, fallback_work_dir: Path) -> Path:
     try:
         resolved = session_file.expanduser().resolve()
@@ -48,7 +34,11 @@ def _session_work_dir(session_file: Path, fallback_work_dir: Path) -> Path:
 
 
 def resolve_claude_session(work_dir: Path) -> ClaudeSessionResolution | None:
-    session_file = _explicit_session_file() or find_project_session_file(work_dir, ".claude-session")
+    session_file = find_bound_session_file(
+        provider="claude",
+        base_filename=".claude-session",
+        work_dir=work_dir,
+    )
     if not session_file:
         return None
     data = read_json(session_file)

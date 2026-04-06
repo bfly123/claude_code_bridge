@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from ccbd.api_models import JobRecord, MessageEnvelope
 from completion.models import CompletionDecision
-from mailbox_targets import known_mailbox_targets
+from mailbox_runtime.targets import known_mailbox_targets
 from mailbox_kernel import (
     DeliveryLeaseStore,
     InboundEventStore,

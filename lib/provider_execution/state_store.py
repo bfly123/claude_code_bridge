@@ -20,7 +20,8 @@ class ExecutionStateStore:
         return self._store.load(path, loader=PersistedExecutionState.from_record)
 
     def save(self, state: PersistedExecutionState) -> None:
-        self._store.save(self._layout.execution_state_path(state.job_id), state, serializer=lambda value: value.to_record())
+        path = self._layout.execution_state_path(state.job_id)
+        self._store.save(path, state, serializer=lambda value: value.to_record())
 
     def remove(self, job_id: str) -> None:
         path = self._layout.execution_state_path(job_id)
@@ -33,24 +34,31 @@ class ExecutionStateStore:
         directory = self._layout.ccbd_executions_dir
         if not directory.exists():
             return []
-        states: list[PersistedExecutionState] = []
-        for path in sorted(directory.glob('*.json')):
-            try:
-                states.append(self._store.load(path, loader=PersistedExecutionState.from_record))
-            except Exception:
-                continue
-        return states
+        return _load_state_files(directory, self._store)
 
     def summary(self) -> dict[str, object]:
-        states = self.list_all()
-        recoverable_providers = sorted({state.provider for state in states if state.resume_capable})
-        nonrecoverable_providers = sorted({state.provider for state in states if not state.resume_capable})
-        return {
-            'active_execution_count': len(states),
-            'recoverable_execution_count': sum(1 for state in states if state.resume_capable),
-            'nonrecoverable_execution_count': sum(1 for state in states if not state.resume_capable),
-            'pending_items_count': sum(1 for state in states if state.pending_items),
-            'terminal_pending_count': sum(1 for state in states if state.pending_decision is not None),
-            'recoverable_execution_providers': recoverable_providers,
-            'nonrecoverable_execution_providers': nonrecoverable_providers,
-        }
+        return _summary_from_states(self.list_all())
+
+
+def _load_state_files(directory: Path, store: JsonStore) -> list[PersistedExecutionState]:
+    states: list[PersistedExecutionState] = []
+    for path in sorted(directory.glob('*.json')):
+        try:
+            states.append(store.load(path, loader=PersistedExecutionState.from_record))
+        except Exception:
+            continue
+    return states
+
+
+def _summary_from_states(states: list[PersistedExecutionState]) -> dict[str, object]:
+    recoverable = [state for state in states if state.resume_capable]
+    nonrecoverable = [state for state in states if not state.resume_capable]
+    return {
+        'active_execution_count': len(states),
+        'recoverable_execution_count': len(recoverable),
+        'nonrecoverable_execution_count': len(nonrecoverable),
+        'pending_items_count': sum(1 for state in states if state.pending_items),
+        'terminal_pending_count': sum(1 for state in states if state.pending_decision is not None),
+        'recoverable_execution_providers': sorted({state.provider for state in recoverable}),
+        'nonrecoverable_execution_providers': sorted({state.provider for state in nonrecoverable}),
+    }

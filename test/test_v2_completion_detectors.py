@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from completion.detectors.anchored_session_stability import AnchoredSessionStabilityDetector
-from completion.detectors.legacy_text_quiet import LegacyTextQuietDetector
+from completion.detectors.terminal_text_quiet import TerminalTextQuietDetector
 from completion.detectors.protocol_turn import ProtocolTurnDetector
 from completion.detectors.structured_result import StructuredResultDetector
 from completion.models import (
@@ -98,8 +98,8 @@ def test_structured_result_detector_completes_on_result() -> None:
     assert decision.reply == 'final'
 
 
-def test_legacy_text_quiet_detector_uses_done_marker() -> None:
-    detector = LegacyTextQuietDetector()
+def test_terminal_text_quiet_detector_uses_done_marker() -> None:
+    detector = TerminalTextQuietDetector()
     detector.bind(_ctx(), _cursor(0))
     detector.ingest(
         _item(
@@ -111,19 +111,19 @@ def test_legacy_text_quiet_detector_uses_done_marker() -> None:
     )
     decision = detector.decision()
     assert decision.terminal is True
-    assert decision.reason == 'legacy_done_marker'
+    assert decision.reason == 'terminal_done_marker'
     assert decision.confidence is CompletionConfidence.DEGRADED
 
 
-def test_legacy_text_quiet_detector_falls_back_on_timeout_when_allowed() -> None:
-    detector = LegacyTextQuietDetector()
+def test_terminal_text_quiet_detector_falls_back_on_timeout_when_allowed() -> None:
+    detector = TerminalTextQuietDetector()
     detector.bind(_ctx(), _cursor(0))
     detector.ingest(_item(CompletionItemKind.ASSISTANT_CHUNK, 1, '2026-03-18T00:00:01Z', {'text': 'reply'}))
     detector.finalize_timeout('2026-03-18T00:00:05Z', _cursor(1))
     decision = detector.decision()
     assert decision.terminal is True
     assert decision.status is CompletionStatus.COMPLETED
-    assert decision.reason == 'legacy_quiet'
+    assert decision.reason == 'terminal_quiet'
     assert decision.confidence is CompletionConfidence.DEGRADED
 
 
@@ -145,8 +145,8 @@ def test_anchored_session_stability_detector_times_out_without_legacy_fallback()
     assert decision.reason == 'timeout'
 
 
-def test_legacy_text_quiet_detector_fails_on_pane_dead() -> None:
-    detector = LegacyTextQuietDetector()
+def test_terminal_text_quiet_detector_fails_on_pane_dead() -> None:
+    detector = TerminalTextQuietDetector()
     detector.bind(_ctx(), _cursor(0))
     detector.ingest(_item(CompletionItemKind.PANE_DEAD, 1, '2026-03-18T00:00:01Z', {'reason': 'pane_dead'}))
     decision = detector.decision()

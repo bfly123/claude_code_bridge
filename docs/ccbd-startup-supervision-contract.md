@@ -132,6 +132,10 @@ Rules:
 
 - evidence may guide recovery
 - residue may guide cleanup
+- configured-agent provider session files are agent-scoped by `.ccb/ccb.config` logical agent name
+- provider-base session files such as `.codex-session` or `.claude-session` are legacy or unscoped evidence only:
+  - they must not be reinterpreted as a configured agent's identity
+  - they may be consulted only when no explicit agent binding is available
 - residue such as provider session files or preserved workspaces must not by itself block config bootstrap
 - neither evidence nor residue may silently redefine authority
 - runtime pid loss is evidence only; for pane-backed runtime it must not preempt pane/session-based recovery checks

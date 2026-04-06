@@ -40,25 +40,12 @@ class OwnershipGuard:
     def inspect(self, lease: CcbdLease | None = None) -> LeaseInspection:
         current = lease if lease is not None else self._mount_manager.load_state()
         if current is None:
-            return LeaseInspection(
-                lease=None,
-                health=LeaseHealth.MISSING,
-                pid_alive=False,
-                socket_connectable=False,
-                heartbeat_fresh=False,
-                takeover_allowed=True,
-                reason='lease_missing',
-            )
+            return self._missing_inspection()
 
-        pid_alive = self._pid_exists(current.ccbd_pid)
-        heartbeat_fresh = self._heartbeat_is_fresh(current)
-        socket_connectable = False
-        if current.mount_state is MountState.MOUNTED:
-            socket_connectable = self._socket_probe(current.socket_path)
-
+        pid_alive, heartbeat_fresh, socket_connectable = self._lease_signals(current)
         if current.mount_state is MountState.UNMOUNTED:
-            return LeaseInspection(
-                lease=current,
+            return self._inspection(
+                current,
                 health=LeaseHealth.UNMOUNTED,
                 pid_alive=pid_alive,
                 socket_connectable=socket_connectable,
@@ -66,10 +53,9 @@ class OwnershipGuard:
                 takeover_allowed=True,
                 reason='lease_unmounted',
             )
-
         if pid_alive and heartbeat_fresh and socket_connectable:
-            return LeaseInspection(
-                lease=current,
+            return self._inspection(
+                current,
                 health=LeaseHealth.HEALTHY,
                 pid_alive=True,
                 socket_connectable=True,
@@ -78,36 +64,33 @@ class OwnershipGuard:
                 reason='healthy',
             )
 
-        takeover_allowed = (not pid_alive) or (pid_alive and not heartbeat_fresh and not socket_connectable)
+        takeover_allowed = self._takeover_allowed(
+            pid_alive=pid_alive,
+            heartbeat_fresh=heartbeat_fresh,
+            socket_connectable=socket_connectable,
+        )
         health = LeaseHealth.STALE if takeover_allowed else LeaseHealth.DEGRADED
-        reason_parts: list[str] = []
-        if not pid_alive:
-            reason_parts.append('pid_missing')
-        if not heartbeat_fresh:
-            reason_parts.append('heartbeat_stale')
-        if not socket_connectable:
-            reason_parts.append('socket_unreachable')
-        return LeaseInspection(
-            lease=current,
+        return self._inspection(
+            current,
             health=health,
             pid_alive=pid_alive,
             socket_connectable=socket_connectable,
             heartbeat_fresh=heartbeat_fresh,
             takeover_allowed=takeover_allowed,
-            reason=','.join(reason_parts) or health.value,
+            reason=self._inspection_reason(
+                health=health,
+                pid_alive=pid_alive,
+                heartbeat_fresh=heartbeat_fresh,
+                socket_connectable=socket_connectable,
+            ),
         )
 
     def verify_or_takeover(self, *, project_id: str, pid: int, socket_path: str | Path) -> int:
         current = self._mount_manager.load_state()
         if current is None:
             return 1
-        if current.project_id != project_id:
-            raise OwnershipConflictError(
-                f'lease project_id mismatch: expected {project_id}, found {current.project_id}'
-            )
-        current_socket = str(Path(current.socket_path))
-        desired_socket = str(Path(socket_path))
-        if current.ccbd_pid == pid and current_socket == desired_socket:
+        self._assert_project_id(current, project_id=project_id)
+        if self._same_holder(current, pid=pid, socket_path=socket_path):
             return current.generation
         inspection = self.inspect(current)
         if inspection.takeover_allowed:
@@ -124,6 +107,87 @@ class OwnershipGuard:
             return False
         delta = (current - heartbeat).total_seconds()
         return delta <= self._heartbeat_grace_seconds
+
+    def _missing_inspection(self) -> LeaseInspection:
+        return LeaseInspection(
+            lease=None,
+            health=LeaseHealth.MISSING,
+            pid_alive=False,
+            socket_connectable=False,
+            heartbeat_fresh=False,
+            takeover_allowed=True,
+            reason='lease_missing',
+        )
+
+    def _lease_signals(self, lease: CcbdLease) -> tuple[bool, bool, bool]:
+        pid_alive = self._pid_exists(lease.ccbd_pid)
+        heartbeat_fresh = self._heartbeat_is_fresh(lease)
+        socket_connectable = self._mounted_socket_connectable(lease)
+        return pid_alive, heartbeat_fresh, socket_connectable
+
+    def _mounted_socket_connectable(self, lease: CcbdLease) -> bool:
+        if lease.mount_state is not MountState.MOUNTED:
+            return False
+        return self._socket_probe(lease.socket_path)
+
+    def _takeover_allowed(
+        self,
+        *,
+        pid_alive: bool,
+        heartbeat_fresh: bool,
+        socket_connectable: bool,
+    ) -> bool:
+        return (not pid_alive) or (pid_alive and not heartbeat_fresh and not socket_connectable)
+
+    def _inspection_reason(
+        self,
+        *,
+        health: LeaseHealth,
+        pid_alive: bool,
+        heartbeat_fresh: bool,
+        socket_connectable: bool,
+    ) -> str:
+        reason_parts: list[str] = []
+        if not pid_alive:
+            reason_parts.append('pid_missing')
+        if not heartbeat_fresh:
+            reason_parts.append('heartbeat_stale')
+        if not socket_connectable:
+            reason_parts.append('socket_unreachable')
+        return ','.join(reason_parts) or health.value
+
+    def _inspection(
+        self,
+        lease: CcbdLease | None,
+        *,
+        health: LeaseHealth,
+        pid_alive: bool,
+        socket_connectable: bool,
+        heartbeat_fresh: bool,
+        takeover_allowed: bool,
+        reason: str,
+    ) -> LeaseInspection:
+        return LeaseInspection(
+            lease=lease,
+            health=health,
+            pid_alive=pid_alive,
+            socket_connectable=socket_connectable,
+            heartbeat_fresh=heartbeat_fresh,
+            takeover_allowed=takeover_allowed,
+            reason=reason,
+        )
+
+    def _assert_project_id(self, lease: CcbdLease, *, project_id: str) -> None:
+        if lease.project_id == project_id:
+            return
+        raise OwnershipConflictError(
+            f'lease project_id mismatch: expected {project_id}, found {lease.project_id}'
+        )
+
+    def _same_holder(self, lease: CcbdLease, *, pid: int, socket_path: str | Path) -> bool:
+        current_socket = str(Path(lease.socket_path))
+        desired_socket = str(Path(socket_path))
+        return lease.ccbd_pid == pid and current_socket == desired_socket
 
 
 __all__ = ['OwnershipConflictError', 'OwnershipGuard']

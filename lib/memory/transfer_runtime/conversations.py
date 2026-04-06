@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from provider_sessions.files import find_project_session_file
+from provider_core.session_binding_runtime import find_bound_session_file
 
 from memory.types import ConversationEntry, SessionNotFoundError, SessionStats, TransferContext
 
@@ -17,7 +17,11 @@ def load_session_data(
     filename = source_session_files.get(provider)
     if not filename:
         return None, {}
-    session_file = find_project_session_file(work_dir, filename)
+    session_file = find_bound_session_file(
+        provider=provider,
+        base_filename=filename,
+        work_dir=work_dir,
+    )
     if not session_file or not session_file.exists():
         return None, {}
     try:
@@ -40,7 +44,11 @@ def auto_source_candidates(
         filename = source_session_files.get(provider)
         if not filename:
             continue
-        session_file = find_project_session_file(work_dir, filename)
+        session_file = find_bound_session_file(
+            provider=provider,
+            base_filename=filename,
+            work_dir=work_dir,
+        )
         if not session_file or not session_file.exists():
             continue
         try:

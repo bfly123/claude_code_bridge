@@ -75,7 +75,7 @@ def test_cli_context_bootstrap_rejects_nested_project_under_parent_anchor(tmp_pa
     elsewhere.mkdir()
     (project_root / '.ccb').mkdir()
 
-    with pytest.raises(ValueError, match='auto-create blocked'):
+    with pytest.raises(ValueError, match='parent project anchor already exists'):
         CliContextBuilder().build(
             ParsedStartCommand(project=str(nested), agent_names=(), restore=False, auto_permission=False),
             cwd=elsewhere,
@@ -89,12 +89,29 @@ def test_cli_context_bootstrap_rejects_parent_anchor_from_current_directory(tmp_
     nested.mkdir(parents=True)
     (project_root / '.ccb').mkdir()
 
-    with pytest.raises(ValueError, match='auto-create blocked'):
+    with pytest.raises(ValueError, match='parent project anchor already exists'):
         CliContextBuilder().build(
             ParsedStartCommand(project=None, agent_names=(), restore=False, auto_permission=False),
             cwd=nested,
             bootstrap_if_missing=True,
         )
+
+
+def test_cli_context_uses_local_anchor_when_nested_project_is_explicitly_created(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    nested = project_root / 'nested'
+    nested.mkdir(parents=True)
+    (project_root / '.ccb').mkdir()
+    (nested / '.ccb').mkdir()
+
+    context = CliContextBuilder().build(
+        ParsedStartCommand(project=None, agent_names=(), restore=False, auto_permission=False),
+        cwd=nested,
+        bootstrap_if_missing=True,
+    )
+
+    assert context.project.project_root == nested.resolve()
+    assert context.project.source == 'anchor'
 
 
 def test_cli_context_bootstraps_local_project_instead_of_reusing_home_anchor(

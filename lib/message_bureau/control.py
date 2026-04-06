@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from jobs.store import JobStore, SubmissionStore
-from mailbox_targets import known_mailbox_targets
+from mailbox_runtime.targets import known_mailbox_targets
 from mailbox_kernel import (
     DeliveryLeaseStore,
     InboundEventStore,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from cli.output import atomic_write_text
-from project_id import compute_ccb_project_id
+from project.identity import compute_ccb_project_id
 from terminal_runtime import get_backend_for_session
 
 from .lookup import (

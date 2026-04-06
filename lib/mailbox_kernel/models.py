@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from mailbox_targets import normalize_mailbox_owner_name
+from mailbox_runtime.targets import normalize_mailbox_owner_name
 
 SCHEMA_VERSION = 1
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from cli.context import CliContext
-from mailbox_targets import COMMAND_MAILBOX_ACTOR
+from mailbox_runtime.targets import COMMAND_MAILBOX_ACTOR
 from workspace.actors import resolve_workspace_actor
 
 

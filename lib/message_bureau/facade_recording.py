@@ -6,7 +6,7 @@ from uuid import uuid4
 from ccbd.api_models import JobRecord, JobStatus, MessageEnvelope
 from completion.models import CompletionDecision
 from message_bureau.reply_payloads import compose_reply_payload
-from mailbox_targets import normalize_mailbox_target
+from mailbox_runtime.targets import normalize_mailbox_target
 from mailbox_kernel import (
     InboundEventRecord,
     InboundEventStatus,

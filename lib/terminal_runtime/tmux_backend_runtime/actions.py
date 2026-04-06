@@ -14,22 +14,15 @@ def activate_tmux_pane(backend, pane_id: str) -> None:
     pane_id = backend._require_pane_id(pane_id, action="activate_tmux_pane")
     backend._tmux_run(["select-pane", "-t", pane_id], check=False)
     if _should_attach_selected_tmux_pane_impl(env_tmux=os.environ.get("TMUX", "")):
-        try:
-            cp = backend._tmux_run(["display-message", "-p", "-t", pane_id, "#{session_name}"], capture=True)
-            sess = _parse_tmux_session_name_impl(cp.stdout or "")
-            if sess:
-                backend._tmux_run(["attach", "-t", sess], check=False)
-        except Exception:
-            pass
+        session_name = selected_session_name(backend, pane_id)
+        if session_name:
+            backend._tmux_run(["attach", "-t", session_name], check=False)
 
 
 def ensure_not_in_copy_mode(backend, pane_id: str) -> None:
-    try:
-        cp = backend._tmux_run(["display-message", "-p", "-t", pane_id, "#{pane_in_mode}"], capture=True, timeout=1.0)
-        if cp.returncode == 0 and _tmux_copy_mode_is_active_impl(cp.stdout or ""):
-            backend._tmux_run(["send-keys", "-t", pane_id, "-X", "cancel"], check=False)
-    except Exception:
-        pass
+    pane_mode = capture_tmux_value(backend, pane_id, "#{pane_in_mode}", timeout=1.0)
+    if pane_mode and _tmux_copy_mode_is_active_impl(pane_mode):
+        backend._tmux_run(["send-keys", "-t", pane_id, "-X", "cancel"], check=False)
 
 
 def send_key(backend, pane_id: str, key: str) -> bool:
@@ -88,29 +81,70 @@ def create_pane(
 ) -> str:
     cmd = (cmd or "").strip()
     cwd = (cwd or ".").strip() or "."
-
-    base: str | None = (parent_pane or "").strip() or None
-    if not base:
-        try:
-            base = backend.get_current_pane_id()
-        except Exception:
-            base = None
+    base = resolve_parent_pane(backend, parent_pane)
 
     if base:
         new_pane = backend.split_pane(base, direction=direction, percent=percent)
-        if cmd:
-            backend.respawn_pane(new_pane, cmd=cmd, cwd=cwd)
+        respawn_if_requested(backend, new_pane, cmd=cmd, cwd=cwd)
         return new_pane
 
+    pane_id = create_detached_root_pane(backend, cwd=cwd)
+    if not backend._looks_like_pane_id(pane_id):
+        raise RuntimeError("tmux failed to resolve root pane_id for detached session")
+    respawn_if_requested(backend, pane_id, cmd=cmd, cwd=cwd)
+    return pane_id
+
+
+def selected_session_name(backend, pane_id: str) -> str | None:
+    session_raw = capture_tmux_value(backend, pane_id, "#{session_name}")
+    return _parse_tmux_session_name_impl(session_raw)
+
+
+def capture_tmux_value(
+    backend,
+    pane_id: str,
+    format_string: str,
+    *,
+    timeout: float | None = None,
+) -> str:
+    try:
+        cp = backend._tmux_run(
+            ["display-message", "-p", "-t", pane_id, format_string],
+            capture=True,
+            timeout=timeout,
+        )
+    except Exception:
+        return ""
+    if cp.returncode != 0:
+        return ""
+    return (cp.stdout or "").strip()
+
+
+def resolve_parent_pane(backend, parent_pane: str | None) -> str | None:
+    base = (parent_pane or "").strip() or None
+    if base:
+        return base
+    try:
+        return backend.get_current_pane_id()
+    except Exception:
+        return None
+
+
+def create_detached_root_pane(backend, *, cwd: str) -> str:
     session_name = _default_detached_session_name_impl(cwd=cwd, pid=os.getpid(), now_ts=time.time())
     backend._tmux_run(["new-session", "-d", "-s", session_name, "-c", cwd], check=True)
-    cp = backend._tmux_run(["list-panes", "-t", session_name, "-F", "#{pane_id}"], capture=True, check=True)
-    pane_id = (cp.stdout or "").splitlines()[0].strip() if (cp.stdout or "").strip() else ""
-    if not backend._looks_like_pane_id(pane_id):
-        raise RuntimeError(f"tmux failed to resolve root pane_id for session {session_name!r}")
+    cp = backend._tmux_run(
+        ["list-panes", "-t", session_name, "-F", "#{pane_id}"],
+        capture=True,
+        check=True,
+    )
+    lines = [line.strip() for line in (cp.stdout or "").splitlines() if line.strip()]
+    return lines[0] if lines else ""
+
+
+def respawn_if_requested(backend, pane_id: str, *, cmd: str, cwd: str) -> None:
     if cmd:
         backend.respawn_pane(pane_id, cmd=cmd, cwd=cwd)
-    return pane_id
 
 
 __all__ = [

@@ -36,6 +36,6 @@ Replace placeholders before sending:
 |----------|---------|--------------|
 | preflight.json | Read state, validate step | None |
 | split.json | Apply substep split | stepIndex, substeps |
-| finalize.json | Mark step done, auto-commit, trigger autoloop | verification, changedFiles, stepIndex, stepTitle |
+| finalize.json | Mark step done and auto-commit | verification, changedFiles, stepIndex, stepTitle |
 | final-report.json | Write task summary | taskName, reportContent |
 | append-steps.json | Add fix steps | steps |

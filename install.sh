@@ -653,12 +653,6 @@ install_claude_skills() {
     echo "  Installed skills docs: docs/"
   fi
 
-  # Make autoloop scripts executable
-  local autoloop_sh="$skills_dst/tr/scripts/autoloop.sh"
-  local autoloop_py="$skills_dst/tr/scripts/autoloop.py"
-  [[ -f "$autoloop_sh" ]] && chmod +x "$autoloop_sh"
-  [[ -f "$autoloop_py" ]] && chmod +x "$autoloop_py"
-
   echo "Updated Claude skills directory: $skills_dst"
 }
 

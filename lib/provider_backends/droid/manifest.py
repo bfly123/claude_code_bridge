@@ -18,7 +18,7 @@ def build_manifest() -> ProviderManifest:
             RuntimeMode.PANE_BACKED: CompletionManifest(
                 provider='droid',
                 runtime_mode=RuntimeMode.PANE_BACKED.value,
-                completion_family=CompletionFamily.LEGACY_TEXT_QUIET,
+                completion_family=CompletionFamily.TERMINAL_TEXT_QUIET,
                 completion_source_kind=CompletionSourceKind.TERMINAL_TEXT,
                 supports_exact_completion=False,
                 supports_observed_completion=False,

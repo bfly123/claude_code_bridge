@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from provider_core.instance_resolution import named_agent_instance
 from provider_core.session_binding_evidence import (
     session_file,
     session_id,
@@ -15,8 +16,6 @@ from provider_core.session_binding_evidence import (
     session_tmux_socket_name,
     session_tmux_socket_path,
 )
-
-from .runtime_attach import coerce_pid, read_pid_file
 
 
 @dataclass(frozen=True)
@@ -36,14 +35,9 @@ class ProviderRuntimeFacts:
 
 
 def load_provider_session(binding, workspace_path: Path, agent_name: str):
+    instance = named_agent_instance(agent_name, primary_agent=str(getattr(binding, "provider", "") or ""))
     try:
-        session = binding.load_session(workspace_path, agent_name)
-    except Exception:
-        session = None
-    if session is not None:
-        return session
-    try:
-        return binding.load_session(workspace_path, None)
+        return binding.load_session(workspace_path, instance)
     except Exception:
         return None
 

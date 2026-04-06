@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any
 
 from agents.models import normalize_agent_name
-from mailbox_targets import normalize_actor_name
+from mailbox_runtime.targets import normalize_actor_name
 
 SCHEMA_VERSION = 1
 

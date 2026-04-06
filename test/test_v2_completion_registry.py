@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from agents.models import AgentSpec, PermissionMode, QueuePolicy, RestoreMode, RuntimeMode, WorkspaceMode
-from completion.detectors.legacy_text_quiet import LegacyTextQuietDetector
+from completion.detectors.terminal_text_quiet import TerminalTextQuietDetector
 from completion.detectors.protocol_turn import ProtocolTurnDetector
 from completion.models import CompletionFamily, CompletionSourceKind, SelectorFamily
 from completion.profiles import CompletionManifest
@@ -48,7 +48,7 @@ def test_registry_builds_legacy_detector_when_profile_requires_it() -> None:
     manifest = CompletionManifest(
         provider='opencode',
         runtime_mode='pane-backed',
-        completion_family=CompletionFamily.LEGACY_TEXT_QUIET,
+        completion_family=CompletionFamily.TERMINAL_TEXT_QUIET,
         completion_source_kind=CompletionSourceKind.TERMINAL_TEXT,
         supports_exact_completion=False,
         supports_observed_completion=False,
@@ -59,4 +59,4 @@ def test_registry_builds_legacy_detector_when_profile_requires_it() -> None:
     )
     profile = registry.build_profile(_spec(provider='opencode'), None, manifest)
 
-    assert isinstance(registry.build_detector(profile), LegacyTextQuietDetector)
+    assert isinstance(registry.build_detector(profile), TerminalTextQuietDetector)

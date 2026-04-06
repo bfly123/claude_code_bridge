@@ -14,25 +14,31 @@ def restore_submission(
     *,
     runtime_context: ProviderRuntimeContext | None = None,
 ) -> ExecutionRestoreResult:
-    provider = job.provider
-    if job.job_id in service._active:
-        return _result(job, status="restored", reason="already_active", resume_capable=True)
-    if service._state_store is None:
-        return _result(job, status="missing", reason="state_store_disabled", resume_capable=False)
+    preflight = restore_preflight_result(service, job)
+    if preflight is not None:
+        return preflight
 
-    adapter = service._registry.get(provider)
+    adapter = service._registry.get(job.provider)
     if adapter is None:
-        service._state_store.remove(job.job_id)
-        return _result(job, status="abandoned", reason="adapter_missing", resume_capable=False)
+        return abandon_restore(
+            service,
+            job,
+            reason="adapter_missing",
+            resume_capable=False,
+        )
 
-    persisted = service._state_store.load(job.job_id)
+    persisted = load_persisted_state(service, job)
     if persisted is None:
-        return _result(job, status="missing", reason="state_missing", resume_capable=False)
-    if persisted.provider != provider:
-        service._state_store.remove(job.job_id)
         return _result(
             job,
-            status="abandoned",
+            status="missing",
+            reason="state_missing",
+            resume_capable=False,
+        )
+    if persisted.provider != job.provider:
+        return abandon_restore(
+            service,
+            job,
             reason="provider_mismatch",
             resume_capable=persisted.resume_capable,
             pending_items_count=len(persisted.pending_items),
@@ -40,40 +46,29 @@ def restore_submission(
 
     pending_items = filter_pending_items(persisted)
     if pending_items:
-        service._pending_replays[job.job_id] = (pending_items, persisted.pending_decision)
-    if persisted.pending_decision is not None and not pending_items:
-        return _result(
-            job,
-            status="terminal_pending",
-            reason="terminal_decision_recovered",
-            resume_capable=persisted.resume_capable,
-            decision=persisted.pending_decision,
+        service._pending_replays[job.job_id] = (
+            pending_items,
+            persisted.pending_decision,
         )
+    if persisted.pending_decision is not None and not pending_items:
+        return terminal_pending_restore(job, persisted)
 
     resume = getattr(adapter, "resume", None)
     if not persisted.resume_capable or not callable(resume):
-        service._state_store.remove(job.job_id)
-        return _result(
+        return abandon_restore(
+            service,
             job,
-            status="abandoned",
             reason="provider_resume_unsupported",
             resume_capable=persisted.resume_capable,
             pending_items_count=len(pending_items),
         )
 
     restored_context = runtime_context or persisted.runtime_context
-    submission = resume(
-        job,
-        persisted.submission,
-        context=restored_context,
-        persisted_state=persisted,
-        now=service._clock(),
-    )
+    submission = resume_submission(adapter, service, job, persisted, restored_context)
     if submission is None:
-        service._state_store.remove(job.job_id)
-        return _result(
+        return abandon_restore(
+            service,
             job,
-            status="abandoned",
             reason="provider_resume_rejected",
             resume_capable=persisted.resume_capable,
             pending_items_count=len(pending_items),
@@ -94,6 +89,66 @@ def restore_submission(
         reason="pending_items_recovered" if pending_items else "provider_resumed",
         resume_capable=True,
         pending_items_count=len(pending_items),
+    )
+
+
+def restore_preflight_result(service, job: JobRecord) -> ExecutionRestoreResult | None:
+    if job.job_id in service._active:
+        return _result(
+            job,
+            status="restored",
+            reason="already_active",
+            resume_capable=True,
+        )
+    if service._state_store is None:
+        return _result(
+            job,
+            status="missing",
+            reason="state_store_disabled",
+            resume_capable=False,
+        )
+    return None
+
+
+def load_persisted_state(service, job: JobRecord):
+    return service._state_store.load(job.job_id)
+
+
+def abandon_restore(
+    service,
+    job: JobRecord,
+    *,
+    reason: str,
+    resume_capable: bool,
+    pending_items_count: int = 0,
+) -> ExecutionRestoreResult:
+    service._state_store.remove(job.job_id)
+    return _result(
+        job,
+        status="abandoned",
+        reason=reason,
+        resume_capable=resume_capable,
+        pending_items_count=pending_items_count,
+    )
+
+
+def terminal_pending_restore(job: JobRecord, persisted) -> ExecutionRestoreResult:
+    return _result(
+        job,
+        status="terminal_pending",
+        reason="terminal_decision_recovered",
+        resume_capable=persisted.resume_capable,
+        decision=persisted.pending_decision,
+    )
+
+
+def resume_submission(adapter, service, job: JobRecord, persisted, restored_context):
+    return adapter.resume(
+        job,
+        persisted.submission,
+        context=restored_context,
+        persisted_state=persisted,
+        now=service._clock(),
     )
 
 

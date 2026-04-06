@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 
-from completion.detectors.legacy_text_quiet import LegacyTextQuietDetector
+from completion.detectors.terminal_text_quiet import TerminalTextQuietDetector
 from completion.detectors.protocol_turn import ProtocolTurnDetector
 from completion.models import (
     CompletionCursor,
@@ -69,7 +69,7 @@ def test_orchestrator_selects_reply_for_protocol_turn() -> None:
     assert decision.reply == 'partial'
 
 
-def test_orchestrator_allows_legacy_quiet_fallback() -> None:
+def test_orchestrator_allows_terminal_quiet_fallback() -> None:
     source = FakeSource([
         _item(CompletionItemKind.ASSISTANT_CHUNK, 1, '2026-03-18T00:00:01Z', {'text': 'quiet path'}),
     ])
@@ -78,10 +78,10 @@ def test_orchestrator_allows_legacy_quiet_fallback() -> None:
     decision = orchestrator.run(
         _ctx(),
         source,
-        LegacyTextQuietDetector(),
+        TerminalTextQuietDetector(),
         FinalMessageSelector(),
     )
     assert decision.terminal is True
     assert decision.status is CompletionStatus.COMPLETED
-    assert decision.reason == 'legacy_quiet'
+    assert decision.reason == 'terminal_quiet'
     assert decision.reply == 'quiet path'

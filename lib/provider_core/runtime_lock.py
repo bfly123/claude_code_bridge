@@ -6,8 +6,11 @@ from __future__ import annotations
 import hashlib
 import os
 import time
+import tempfile
 from pathlib import Path
 from typing import Optional
+
+from project.runtime_paths import project_anchor_exists, project_lock_dir
 
 
 def _is_pid_alive(pid: int) -> bool:
@@ -37,9 +40,9 @@ class ProviderLock:
     def __init__(self, provider: str, timeout: float = 60.0, cwd: str | None = None):
         self.provider = provider
         self.timeout = timeout
-        self.lock_dir = Path.home() / ".ccb" / "run"
-
         scope = cwd if cwd is not None else os.getcwd()
+        self.lock_dir = _lock_dir_for_scope(scope)
+
         cwd_hash = hashlib.md5(scope.encode()).hexdigest()[:8]
         self.lock_file = self.lock_dir / f"{provider}-{cwd_hash}.lock"
         self._fd: Optional[int] = None
@@ -170,3 +173,10 @@ class ProviderLock:
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         self.release()
+
+
+def _lock_dir_for_scope(scope: str) -> Path:
+    if project_anchor_exists(scope):
+        return project_lock_dir(scope)
+    runtime_root = os.environ.get('XDG_RUNTIME_DIR') or tempfile.gettempdir()
+    return Path(runtime_root).expanduser() / 'ccb-runtime' / 'locks'

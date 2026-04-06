@@ -90,8 +90,7 @@ Call:
         "steps": ["S1 title", "S2 title"],
         "finalDone": ["criterion 1", "criterion 2"]
       }
-    },
-    { "op": "run", "cmd": "bash ~/.claude/skills/tr/scripts/autoloop.sh start", "cwd": "." }
+    }
   ],
   "report": { "changedFiles": true, "diffSummary": true, "commandOutputs": "never" }
 }

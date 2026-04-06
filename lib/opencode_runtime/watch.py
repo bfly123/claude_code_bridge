@@ -5,7 +5,7 @@ import threading
 import time
 from pathlib import Path
 
-from provider_sessions.files import find_project_session_file
+from provider_core.session_binding_runtime import resolve_bound_instance
 from provider_sessions.watch import HAS_WATCHDOG, SessionFileWatcher
 
 from .paths import OPENCODE_STORAGE_ROOT
@@ -34,28 +34,30 @@ def read_opencode_session_json(path: Path) -> dict | None:
 
 
 def handle_opencode_session_event(path: Path) -> None:
-    if not path or not path.exists():
+    if not is_existing_session_path(path):
         return
     payload = read_opencode_session_json(path)
     if not isinstance(payload, dict):
         return
-    directory = payload.get("directory")
-    if not isinstance(directory, str) or not directory.strip():
+    work_dir = payload_work_dir(payload)
+    if work_dir is None:
         return
+    session_id = payload_session_id(payload)
+    project_id = payload_project_id(path)
     try:
-        work_dir = Path(directory.strip()).expanduser()
+        from provider_backends.opencode.session import find_project_session_file, load_project_session
     except Exception:
         return
-    session_file = find_project_session_file(work_dir, ".opencode-session")
+    instance = resolve_bound_instance(
+        provider="opencode",
+        base_filename=".opencode-session",
+        work_dir=work_dir,
+        allow_env=False,
+    )
+    session_file = find_project_session_file(work_dir, instance)
     if not session_file or not session_file.exists():
         return
-    session_id = payload.get("id") if isinstance(payload.get("id"), str) else None
-    project_id = path.parent.name if path.parent else ""
-    try:
-        from provider_backends.opencode.session import load_project_session
-    except Exception:
-        return
-    session = load_project_session(work_dir)
+    session = load_project_session(work_dir, instance)
     if not session:
         return
     try:
@@ -65,13 +67,11 @@ def handle_opencode_session_event(path: Path) -> None:
 
 
 def ensure_opencode_watchdog_started() -> None:
-    if not HAS_WATCHDOG:
-        return
     global _OPENCODE_WATCHER, _OPENCODE_WATCH_STARTED
-    if _OPENCODE_WATCH_STARTED:
+    if not should_start_watchdog():
         return
     with _OPENCODE_WATCH_LOCK:
-        if _OPENCODE_WATCH_STARTED:
+        if not should_start_watchdog():
             return
         sessions_root = OPENCODE_STORAGE_ROOT / "session"
         if not sessions_root.exists():
@@ -88,3 +88,30 @@ def ensure_opencode_watchdog_started() -> None:
             return
         _OPENCODE_WATCHER = watcher
         _OPENCODE_WATCH_STARTED = True
+
+
+def is_existing_session_path(path: Path | None) -> bool:
+    return bool(path and path.exists())
+
+
+def payload_work_dir(payload: dict) -> Path | None:
+    directory = payload.get("directory")
+    if not isinstance(directory, str) or not directory.strip():
+        return None
+    try:
+        return Path(directory.strip()).expanduser()
+    except Exception:
+        return None
+
+
+def payload_session_id(payload: dict) -> str | None:
+    session_id = payload.get("id")
+    return session_id if isinstance(session_id, str) else None
+
+
+def payload_project_id(path: Path) -> str:
+    return path.parent.name if path.parent else ""
+
+
+def should_start_watchdog() -> bool:
+    return bool(HAS_WATCHDOG and not _OPENCODE_WATCH_STARTED)

@@ -18,7 +18,6 @@ from ccbd.app import CcbdApp
 from ccbd.services.health import HealthMonitor
 import cli.phase2 as phase2_module
 from cli.phase2 import maybe_handle_phase2
-import project.resolver as project_resolver_module
 from storage.paths import PathLayout
 
 
@@ -125,23 +124,6 @@ class _TtyInput(StringIO):
 @pytest.fixture(autouse=True)
 def _disable_health_monitor_in_phase2_blackbox_tests(monkeypatch) -> None:
     monkeypatch.setattr(HealthMonitor, 'check_all', lambda self: {})
-
-
-@pytest.fixture(autouse=True)
-def _ignore_host_level_tmp_anchor(monkeypatch, tmp_path_factory) -> None:
-    original = project_resolver_module.find_parent_project_anchor_dir
-    pytest_tmp_root = tmp_path_factory.getbasetemp().resolve()
-
-    def _patched(path: Path):
-        result = original(path)
-        if result is None:
-            return None
-        anchor_root = result.parent.resolve()
-        if pytest_tmp_root.is_relative_to(anchor_root) and not anchor_root.is_relative_to(pytest_tmp_root):
-            return None
-        return result
-
-    monkeypatch.setattr(project_resolver_module, 'find_parent_project_anchor_dir', _patched)
 
 
 def test_phase2_start_bootstraps_missing_project_and_default_config(monkeypatch, tmp_path: Path) -> None:
@@ -320,7 +302,8 @@ def test_phase2_start_blocks_nested_directory_under_parent_anchor(tmp_path: Path
 
     assert code == 1
     assert stdout == ''
-    assert 'auto-create blocked' in stderr
+    assert 'parent project anchor already exists' in stderr
+    assert 'create' in stderr and '.ccb manually' in stderr
 
 
 def test_phase2_reports_subprocess_failure_without_traceback(monkeypatch, tmp_path: Path) -> None:
@@ -1096,7 +1079,7 @@ def test_ccb_opencode_real_adapter_blackbox_pane_dead_fails_degraded(monkeypatch
         assert not thread.is_alive()
 
 
-def test_ccb_opencode_real_adapter_blackbox_legacy_done_marker_completion(monkeypatch, tmp_path: Path) -> None:
+def test_ccb_opencode_real_adapter_blackbox_terminal_done_marker_completion(monkeypatch, tmp_path: Path) -> None:
     from provider_execution import opencode as opencode_adapter_module
 
     project_root = tmp_path / 'repo-opencode-legacy'
@@ -1150,7 +1133,7 @@ def test_ccb_opencode_real_adapter_blackbox_legacy_done_marker_completion(monkey
 
         pend = _wait_for_phase2_status(project_root, job_id, 'completed', timeout=5.0)
         assert 'reply: legacy final' in pend
-        assert 'completion_reason: legacy_done_marker' in pend
+        assert 'completion_reason: terminal_done_marker' in pend
         assert 'completion_confidence: degraded' in pend
 
         code, stdout, stderr = _run_phase2_local(['watch', job_id], cwd=project_root)
@@ -1334,7 +1317,7 @@ def test_ccb_droid_real_adapter_blackbox_pane_dead_fails_degraded(monkeypatch, t
         assert not thread.is_alive()
 
 
-def test_ccb_droid_real_adapter_blackbox_legacy_done_marker_completion(monkeypatch, tmp_path: Path) -> None:
+def test_ccb_droid_real_adapter_blackbox_terminal_done_marker_completion(monkeypatch, tmp_path: Path) -> None:
     from provider_execution import droid as droid_adapter_module
 
     project_root = tmp_path / 'repo-droid-legacy'
@@ -1416,7 +1399,7 @@ def test_ccb_droid_real_adapter_blackbox_legacy_done_marker_completion(monkeypat
 
         pend = _wait_for_phase2_status(project_root, job_id, 'completed', timeout=5.0)
         assert 'reply: partial\nfinal' in pend
-        assert 'completion_reason: legacy_done_marker' in pend
+        assert 'completion_reason: terminal_done_marker' in pend
         assert 'completion_confidence: degraded' in pend
 
         code, stdout, stderr = _run_phase2_local(['watch', job_id], cwd=project_root)
@@ -3154,7 +3137,7 @@ def test_ccb_fake_legacy_provider_degraded_done_marker_completion(tmp_path: Path
 
     completed = _wait_for_status(project_root, job_id, 'completed', timeout=5.0)
     assert 'reply: legacy reply' in completed.stdout
-    assert 'completion_reason: legacy_done_marker' in completed.stdout
+    assert 'completion_reason: terminal_done_marker' in completed.stdout
     assert 'completion_confidence: degraded' in completed.stdout
 
     kill = _run_ccb(['kill'], cwd=project_root)

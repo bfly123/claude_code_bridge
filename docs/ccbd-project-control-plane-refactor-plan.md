@@ -8,7 +8,7 @@
 
 这份文档优先级高于以下文档中与项目控制面直接冲突的旧表述：
 
-- `docs/agent-first-v2-architecture.md`
+- `archive/docs/agent-first-v2-architecture.md`
 - `docs/agent-first-v2-clean-core.md`
 - `docs/current-project-structure.md`
 

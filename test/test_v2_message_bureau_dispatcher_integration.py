@@ -997,12 +997,12 @@ def test_dispatcher_timeout_delivers_inspection_notice_to_caller(tmp_path: Path)
     replies = ReplyStore(layout).list_message(message.message_id)
     assert len(replies) == 1
     assert replies[0].terminal_status is ReplyTerminalStatus.INCOMPLETE
-    assert 'CCB_HEARTBEAT ' in replies[0].reply
+    assert 'timed out before a confirmed terminal reply' in replies[0].reply
     assert job_id in replies[0].reply
 
     ack = dispatcher.ack_reply('claude')
     assert ack['reply_terminal_status'] == 'incomplete'
-    assert 'CCB_HEARTBEAT ' in ack['reply']
+    assert 'timed out before a confirmed terminal reply' in ack['reply']
 
 
 def test_job_heartbeat_delivers_progress_notice_and_preserves_terminal_message_state(tmp_path: Path) -> None:

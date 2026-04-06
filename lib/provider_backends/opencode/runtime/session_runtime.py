@@ -5,7 +5,8 @@ import os
 from pathlib import Path
 from typing import Callable, Optional
 
-from project_id import compute_ccb_project_id
+from project.identity import compute_ccb_project_id
+from provider_core.session_binding_runtime import find_bound_session_file
 from provider_sessions.files import safe_write_session
 
 
@@ -14,56 +15,28 @@ def find_opencode_session_file(
     cwd: Path | None = None,
     finder: Callable[[Path], Optional[Path]],
 ) -> Optional[Path]:
-    env_session = (os.environ.get("CCB_SESSION_FILE") or "").strip()
-    if env_session:
-        try:
-            session_path = Path(os.path.expanduser(env_session))
-            if session_path.name == ".opencode-session" and session_path.is_file():
-                return session_path
-        except Exception:
-            pass
-    return finder(cwd or Path.cwd())
+    del finder
+    return find_bound_session_file(
+        provider="opencode",
+        base_filename=".opencode-session",
+        work_dir=cwd or Path.cwd(),
+    )
 
 
 def load_opencode_session_info(*, session_finder: Callable[[], Optional[Path]]) -> Optional[dict]:
     if "CCB_SESSION_ID" in os.environ:
-        result = {
-            "ccb_session_id": os.environ["CCB_SESSION_ID"],
-            "runtime_dir": os.environ["OPENCODE_RUNTIME_DIR"],
-            "terminal": os.environ.get("OPENCODE_TERMINAL", "tmux"),
-            "tmux_session": os.environ.get("OPENCODE_TMUX_SESSION", ""),
-            "pane_id": os.environ.get("OPENCODE_TMUX_SESSION", ""),
-            "_session_file": None,
-        }
+        result = env_session_info()
         session_file = session_finder()
         if session_file:
-            try:
-                with session_file.open("r", encoding="utf-8-sig") as handle:
-                    file_data = json.load(handle)
-                if isinstance(file_data, dict):
-                    result["opencode_session_path"] = file_data.get("opencode_session_path")
-                    result["_session_file"] = str(session_file)
-                    if not result.get("pane_title_marker"):
-                        result["pane_title_marker"] = file_data.get("pane_title_marker", "")
-                    if not result.get("opencode_session_id"):
-                        result["opencode_session_id"] = file_data.get("opencode_session_id")
-                    if not result.get("opencode_project_id"):
-                        result["opencode_project_id"] = file_data.get("opencode_project_id")
-            except Exception:
-                pass
+            merge_session_file_data(result, session_file)
         return result
 
     project_session = session_finder()
     if not project_session:
         return None
 
-    try:
-        with project_session.open("r", encoding="utf-8-sig") as handle:
-            data = json.load(handle)
-    except Exception:
-        return None
-
-    if not isinstance(data, dict) or not data.get("active", False):
+    data = active_project_session_data(project_session)
+    if data is None:
         return None
 
     runtime_dir = Path(data.get("runtime_dir", ""))
@@ -108,6 +81,54 @@ def publish_opencode_registry(
         pass
 
 
+def env_session_info() -> dict[str, object]:
+    return {
+        "ccb_session_id": os.environ["CCB_SESSION_ID"],
+        "runtime_dir": os.environ["OPENCODE_RUNTIME_DIR"],
+        "terminal": os.environ.get("OPENCODE_TERMINAL", "tmux"),
+        "tmux_session": os.environ.get("OPENCODE_TMUX_SESSION", ""),
+        "pane_id": os.environ.get("OPENCODE_TMUX_SESSION", ""),
+        "_session_file": None,
+    }
+
+
+def merge_session_file_data(result: dict[str, object], session_file: Path) -> None:
+    file_data = read_session_json(session_file)
+    if file_data is None:
+        return
+    result["opencode_session_path"] = file_data.get("opencode_session_path")
+    result["_session_file"] = str(session_file)
+    copy_missing_field(result, file_data, "pane_title_marker", default="")
+    copy_missing_field(result, file_data, "opencode_session_id")
+    copy_missing_field(result, file_data, "opencode_project_id")
+
+
+def copy_missing_field(result: dict[str, object], source: dict[str, object], field: str, default: object = None) -> None:
+    if result.get(field):
+        return
+    if field in source:
+        result[field] = source.get(field)
+        return
+    if default is not None:
+        result[field] = default
+
+
+def active_project_session_data(project_session: Path) -> Optional[dict]:
+    data = read_session_json(project_session)
+    if not isinstance(data, dict) or not data.get("active", False):
+        return None
+    return data
+
+
+def read_session_json(session_file: Path) -> Optional[dict]:
+    try:
+        with session_file.open("r", encoding="utf-8-sig") as handle:
+            data = json.load(handle)
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def _ensure_ccb_project_id(data: dict, *, session_file: Path) -> None:
     try:
         if (data.get("ccb_project_id") or "").strip():
@@ -115,6 +136,10 @@ def _ensure_ccb_project_id(data: dict, *, session_file: Path) -> None:
         wd = data.get("work_dir")
         if isinstance(wd, str) and wd.strip():
             data["ccb_project_id"] = compute_ccb_project_id(Path(wd.strip()))
-            safe_write_session(session_file, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+            persist_project_session(session_file, data)
     except Exception:
         pass
+
+
+def persist_project_session(session_file: Path, data: dict) -> None:
+    safe_write_session(session_file, json.dumps(data, ensure_ascii=False, indent=2) + "\n")

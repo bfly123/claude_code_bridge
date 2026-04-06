@@ -64,10 +64,49 @@ def test_gemini_comm_find_session_file_prefers_ccb_session_file(tmp_path: Path, 
     assert comm._find_session_file() == session
 
 
+def test_gemini_comm_find_session_file_accepts_named_ccb_session_file(tmp_path: Path, monkeypatch) -> None:
+    from provider_backends.gemini.comm import GeminiCommunicator
+
+    session = _make_session(tmp_path, ".gemini-agent2-session")
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    monkeypatch.chdir(other)
+    monkeypatch.setenv("CCB_SESSION_FILE", str(session))
+
+    comm = object.__new__(GeminiCommunicator)
+    assert comm._find_session_file() == session
+
+
+def test_droid_comm_find_session_file_accepts_named_ccb_session_file(tmp_path: Path, monkeypatch) -> None:
+    from provider_backends.droid.comm import DroidCommunicator
+
+    session = _make_session(tmp_path, ".droid-agent4-session")
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    monkeypatch.chdir(other)
+    monkeypatch.setenv("CCB_SESSION_FILE", str(session))
+
+    comm = object.__new__(DroidCommunicator)
+    assert comm._find_session_file() == session
+
+
 def test_opencode_comm_find_session_file_prefers_ccb_session_file(tmp_path: Path, monkeypatch) -> None:
     from provider_backends.opencode.comm import OpenCodeCommunicator
 
     session = _make_session(tmp_path, ".opencode-session")
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    monkeypatch.chdir(other)
+    monkeypatch.setenv("CCB_SESSION_FILE", str(session))
+
+    comm = object.__new__(OpenCodeCommunicator)
+    assert comm._find_session_file() == session
+
+
+def test_opencode_comm_find_session_file_accepts_named_ccb_session_file(tmp_path: Path, monkeypatch) -> None:
+    from provider_backends.opencode.comm import OpenCodeCommunicator
+
+    session = _make_session(tmp_path, ".opencode-agent2-session")
     other = tmp_path / "elsewhere"
     other.mkdir()
     monkeypatch.chdir(other)

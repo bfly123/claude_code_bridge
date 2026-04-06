@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from agents.models import normalize_agent_name
-from mailbox_targets import normalize_actor_name
+from mailbox_runtime.targets import normalize_actor_name
 
 from .common import SCHEMA_VERSION, JobStatus, TargetKind
 from .messages import MessageEnvelope

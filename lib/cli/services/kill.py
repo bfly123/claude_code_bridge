@@ -1,28 +1,33 @@
 from __future__ import annotations
 
-from dataclasses import replace
-
-import json
-import os
-from pathlib import Path
 import time
 
-from agents.models import AgentState
-from agents.store import AgentRuntimeStore
-from ccbd.lifecycle_report_store import CcbdShutdownReportStore
-from ccbd.models import CcbdRuntimeSnapshot, CcbdShutdownReport, cleanup_summaries_from_objects
-from ccbd.services.mount import MountManager
-from ccbd.services.ownership import OwnershipGuard
 from ccbd.services.project_namespace import ProjectNamespaceController
 from ccbd.services.start_policy import CcbdStartPolicyStore
 from ccbd.system import utc_now
 from ccbd.socket_client import CcbdClient
 from cli.context import CliContext
+from cli.services.kill_runtime.agent_cleanup import (
+    extra_agent_dir_names as _extra_agent_dir_names_impl,
+    prepare_local_shutdown as _prepare_local_shutdown_impl,
+)
+from cli.services.kill_runtime.pid_cleanup import (
+    collect_agent_pid_candidates as _collect_agent_pid_candidates_impl,
+    path_within as _path_within_impl,
+    pid_matches_project as _pid_matches_project_impl,
+    read_proc_cmdline as _read_proc_cmdline_impl,
+    read_proc_path as _read_proc_path_impl,
+    remove_pid_files as _remove_pid_files_impl,
+    terminate_runtime_pids as _terminate_runtime_pids_impl,
+)
+from cli.services.kill_runtime.reporting import (
+    merge_cleanup_summaries as _merge_cleanup_summaries_impl,
+    record_kill_report as _record_kill_report_impl,
+    summary_from_stop_all_payload as _summary_from_stop_all_payload_impl,
+)
 from cli.kill_runtime.processes import is_pid_alive, terminate_pid_tree
 from cli.models import ParsedKillCommand
-from agents.config_loader import load_project_config
 from ccbd.models import LeaseHealth
-from terminal_runtime.tmux import normalize_socket_name, socket_name_from_tmux_env
 
 from .daemon import CcbdServiceError, KillSummary, connect_mounted_daemon, inspect_daemon, record_shutdown_intent, shutdown_daemon
 from .tmux_cleanup_history import TmuxCleanupEvent, TmuxCleanupHistoryStore
@@ -33,104 +38,92 @@ _STOP_ALL_TIMEOUT_S = 12.0
 
 
 def kill_project(context: CliContext, command: ParsedKillCommand):
-    remote_summary: KillSummary | None = None
+    remote_summary = _request_remote_stop(context, force=command.force)
+    preparation = _prepare_local_shutdown(context, force=command.force)
+    _destroy_project_namespace(context, force=command.force)
+    summary = _resolve_shutdown_summary(context, remote_summary=remote_summary, force=command.force)
+    return _finalize_kill(
+        context,
+        force=command.force,
+        preparation=preparation,
+        remote_summary=remote_summary,
+        summary=summary,
+    )
+
+
+def _request_remote_stop(context: CliContext, *, force: bool) -> KillSummary | None:
     try:
         handle = connect_mounted_daemon(context, allow_restart_stale=False)
     except CcbdServiceError:
-        handle = None
-    if handle is not None and handle.client is not None:
-        try:
-            record_shutdown_intent(context, reason='kill')
-            stop_all_client = (
-                CcbdClient(context.paths.ccbd_socket_path, timeout_s=_STOP_ALL_TIMEOUT_S)
-                if isinstance(handle.client, CcbdClient)
-                else handle.client
-            )
-            payload = stop_all_client.stop_all(force=command.force)
-            remote_summary = _summary_from_stop_all_payload(payload)
-        except Exception:
-            if not command.force:
-                raise
-    config = load_project_config(context.project.project_root).config
-    store = AgentRuntimeStore(context.paths)
-    tmux_sockets = _collect_candidate_tmux_sockets()
-    configured_agent_names = tuple(config.agents)
-    extra_agent_names = _extra_agent_dir_names(context, configured_agent_names)
-    pid_candidates: dict[int, list[Path]] = {}
-    for agent_name in (*configured_agent_names, *extra_agent_names):
-        runtime = store.load_best_effort(agent_name)
-        if (
-            runtime is not None
-            and str(runtime.runtime_ref or '').startswith('tmux:')
-            and getattr(runtime, 'tmux_socket_path', None) is None
-        ):
-            socket_name = normalize_socket_name(runtime.tmux_socket_name)
-            if socket_name is not None:
-                tmux_sockets.add(socket_name)
-        for pid, sources in _collect_agent_pid_candidates(
-            agent_dir=context.paths.agent_dir(agent_name),
-            runtime=runtime,
-            fallback_to_agent_dir=command.force,
-        ).items():
-            pid_candidates.setdefault(pid, []).extend(sources)
-        if runtime is None or agent_name not in config.agents:
-            continue
-        store.save(
-            replace(
-                runtime,
-                state=AgentState.STOPPED,
-                pid=None,
-                runtime_ref=None,
-                session_ref=None,
-                queue_depth=0,
-                socket_path=None,
-                health='stopped',
-                runtime_pid=None,
-                runtime_root=None,
-                pane_id=None,
-                active_pane_id=None,
-                pane_title_marker=None,
-                pane_state=None,
-                tmux_socket_name=None,
-                tmux_socket_path=None,
-                session_file=None,
-                session_id=None,
-                lifecycle_state='stopped',
-                desired_state='stopped',
-                reconcile_state='stopped',
-                last_failure_reason=None,
-            )
+        return None
+    if handle is None or handle.client is None:
+        return None
+    try:
+        record_shutdown_intent(context, reason='kill')
+        stop_all_client = (
+            CcbdClient(context.paths.ccbd_socket_path, timeout_s=_STOP_ALL_TIMEOUT_S)
+            if isinstance(handle.client, CcbdClient)
+            else handle.client
         )
-    namespace_destroy = ProjectNamespaceController(context.paths, context.project.project_id).destroy(
+        payload = stop_all_client.stop_all(force=force)
+    except Exception:
+        if not force:
+            raise
+        return None
+    return _summary_from_stop_all_payload(payload)
+
+
+def _prepare_local_shutdown(context: CliContext, *, force: bool):
+    return _prepare_local_shutdown_impl(
+        context,
+        force=force,
+        collect_agent_pid_candidates_fn=_collect_agent_pid_candidates,
+    )
+
+
+def _destroy_project_namespace(context: CliContext, *, force: bool) -> None:
+    ProjectNamespaceController(context.paths, context.project.project_id).destroy(
         reason='kill',
-        force=command.force,
+        force=force,
     )
     try:
         CcbdStartPolicyStore(context.paths).clear()
     except Exception:
         pass
+
+
+def _resolve_shutdown_summary(context: CliContext, *, remote_summary: KillSummary | None, force: bool) -> KillSummary:
     if remote_summary is not None:
-        summary = _await_remote_shutdown(context, force=command.force)
-    else:
-        try:
-            summary = shutdown_daemon(context, force=command.force)
-        except CcbdServiceError:
-            if not command.force:
-                raise
-            summary = KillSummary(
-                project_id=context.project.project_id,
-                state='unmounted',
-                socket_path=str(context.paths.ccbd_socket_path),
-                forced=command.force,
-            )
+        return _await_remote_shutdown(context, force=force)
+    try:
+        return shutdown_daemon(context, force=force)
+    except CcbdServiceError:
+        if not force:
+            raise
+        return KillSummary(
+            project_id=context.project.project_id,
+            state='unmounted',
+            socket_path=str(context.paths.ccbd_socket_path),
+            forced=force,
+        )
+
+
+def _finalize_kill(
+    context: CliContext,
+    *,
+    force: bool,
+    preparation,
+    remote_summary: KillSummary | None,
+    summary: KillSummary,
+) -> KillSummary:
     set_tmux_ui_active(False)
     cleanup_summaries = cleanup_project_tmux_orphans_by_socket(
         project_id=context.project.project_id,
-        active_panes_by_socket={socket_name: () for socket_name in (tmux_sockets or {None})},
+        active_panes_by_socket={socket_name: () for socket_name in preparation.tmux_sockets},
     )
     _terminate_runtime_pids(
         project_root=context.project.project_root,
-        pid_candidates=pid_candidates,
+        pid_candidates=preparation.pid_candidates,
     )
     if cleanup_summaries:
         TmuxCleanupHistoryStore(context.paths).append(
@@ -145,17 +138,17 @@ def kill_project(context: CliContext, command: ParsedKillCommand):
         remote_summary.cleanup_summaries if remote_summary is not None else (),
         cleanup_summaries,
     )
-    final_summary = replace(
-        remote_summary or summary,
+    final_summary = KillSummary(
+        project_id=(remote_summary or summary).project_id,
         state=summary.state,
         socket_path=summary.socket_path,
-        forced=command.force,
+        forced=force,
         cleanup_summaries=all_cleanup_summaries,
     )
     _record_kill_report(
         context,
         trigger='kill' if remote_summary is not None else 'kill_fallback',
-        forced=command.force,
+        forced=force,
         cleanup_summaries=all_cleanup_summaries,
     )
     return final_summary
@@ -180,129 +173,39 @@ def _await_remote_shutdown(context: CliContext, *, force: bool, timeout_s: float
 
 
 def _summary_from_stop_all_payload(payload: dict) -> KillSummary:
-    cleanup_summaries = tuple(
-        ProjectTmuxCleanupSummary(
-            socket_name=item.get('socket_name'),
-            owned_panes=tuple(item.get('owned_panes') or ()),
-            active_panes=tuple(item.get('active_panes') or ()),
-            orphaned_panes=tuple(item.get('orphaned_panes') or ()),
-            killed_panes=tuple(item.get('killed_panes') or ()),
-        )
-        for item in (payload.get('cleanup_summaries') or ())
-        if isinstance(item, dict)
-    )
-    return KillSummary(
-        project_id=str(payload.get('project_id') or ''),
-        state=str(payload.get('state') or 'unmounted'),
-        socket_path=str(payload.get('socket_path') or ''),
-        forced=bool(payload.get('forced')),
-        cleanup_summaries=cleanup_summaries,
-    )
+    return _summary_from_stop_all_payload_impl(payload)
 
 
 def _merge_cleanup_summaries(*groups: tuple[ProjectTmuxCleanupSummary, ...]) -> tuple[ProjectTmuxCleanupSummary, ...]:
-    merged: list[ProjectTmuxCleanupSummary] = []
-    for group in groups:
-        merged.extend(group)
-    return tuple(merged)
-
-
-def _collect_candidate_tmux_sockets() -> set[str | None]:
-    sockets: set[str | None] = set()
-    for value in (
-        normalize_socket_name(os.environ.get('CCB_TMUX_SOCKET')),
-        socket_name_from_tmux_env(os.environ.get('TMUX')),
-    ):
-        if value is not None:
-            sockets.add(value)
-    return sockets or {None}
+    return _merge_cleanup_summaries_impl(*groups)
 
 
 def _extra_agent_dir_names(context: CliContext, configured_agent_names: tuple[str, ...]) -> tuple[str, ...]:
-    names: list[str] = []
-    known = set(configured_agent_names)
-    agents_dir = context.paths.agents_dir
-    if agents_dir.is_dir():
-        for child in sorted(agents_dir.iterdir()):
-            if not child.is_dir():
-                continue
-            if child.name in known or child.name in names:
-                continue
-            names.append(child.name)
-    return tuple(names)
+    return _extra_agent_dir_names_impl(context, configured_agent_names)
 
 
 def _collect_agent_pid_candidates(
-    agent_dir: Path,
+    agent_dir,
     *,
     runtime,
     fallback_to_agent_dir: bool,
-) -> dict[int, list[Path]]:
-    candidates: dict[int, list[Path]] = {}
-    runtime_root_paths: list[Path] = []
-    if runtime is not None:
-        runtime_pid = _coerce_pid(getattr(runtime, 'runtime_pid', None) or getattr(runtime, 'pid', None))
-        if runtime_pid is not None:
-            candidates.setdefault(runtime_pid, []).append(agent_dir / 'runtime.json')
-        runtime_root = getattr(runtime, 'runtime_root', None)
-        if isinstance(runtime_root, str) and runtime_root.strip():
-            runtime_root_paths.append(Path(runtime_root).expanduser())
-    if fallback_to_agent_dir or not runtime_root_paths:
-        runtime_root_paths.append(agent_dir / 'provider-runtime')
-    seen_roots: set[Path] = set()
-    for root in runtime_root_paths:
-        try:
-            resolved_root = root.resolve()
-        except Exception:
-            resolved_root = root.absolute()
-        if resolved_root in seen_roots or not resolved_root.is_dir():
-            continue
-        seen_roots.add(resolved_root)
-        for pid_path in sorted(resolved_root.rglob('*.pid')):
-            pid = _read_pid_file(pid_path)
-            if pid is None:
-                continue
-            candidates.setdefault(pid, []).append(pid_path)
-    return candidates
+) -> dict[int, list]:
+    return _collect_agent_pid_candidates_impl(
+        agent_dir=agent_dir,
+        runtime=runtime,
+        fallback_to_agent_dir=fallback_to_agent_dir,
+    )
 
 
-def _load_runtime_pid(path: Path) -> int | None:
-    if not path.is_file():
-        return None
-    try:
-        data = json.loads(path.read_text(encoding='utf-8'))
-    except Exception:
-        return None
-    if not isinstance(data, dict):
-        return None
-    return _coerce_pid(data.get('pid'))
-
-
-def _read_pid_file(path: Path) -> int | None:
-    try:
-        return _coerce_pid(path.read_text(encoding='utf-8'))
-    except Exception:
-        return None
-
-
-def _coerce_pid(value: object) -> int | None:
-    text = str(value or '').strip()
-    if not text.isdigit():
-        return None
-    pid = int(text)
-    return pid if pid > 0 else None
-
-
-def _terminate_runtime_pids(*, project_root: Path, pid_candidates: dict[int, list[Path]]) -> None:
-    for pid in sorted(pid_candidates):
-        hint_paths = tuple(dict.fromkeys(pid_candidates[pid]))
-        if not is_pid_alive(pid):
-            _remove_pid_files(hint_paths)
-            continue
-        if not _pid_matches_project(pid, project_root=project_root, hint_paths=hint_paths):
-            continue
-        if terminate_pid_tree(pid, timeout_s=1.0, is_pid_alive_fn=is_pid_alive):
-            _remove_pid_files(hint_paths)
+def _terminate_runtime_pids(*, project_root, pid_candidates) -> None:
+    _terminate_runtime_pids_impl(
+        project_root=project_root,
+        pid_candidates=pid_candidates,
+        is_pid_alive_fn=is_pid_alive,
+        pid_matches_project_fn=_pid_matches_project,
+        terminate_pid_tree_fn=terminate_pid_tree,
+        remove_pid_files_fn=_remove_pid_files,
+    )
 
 
 def _record_kill_report(
@@ -312,112 +215,37 @@ def _record_kill_report(
     forced: bool,
     cleanup_summaries: tuple[ProjectTmuxCleanupSummary, ...],
 ) -> None:
-    store = CcbdShutdownReportStore(context.paths)
-    runtime_store = AgentRuntimeStore(context.paths)
-    manager = MountManager(context.paths)
-    guard = OwnershipGuard(context.paths, manager)
-    config = load_project_config(context.project.project_root).config
-    snapshots = tuple(
-        snapshot
-        for snapshot in (
-            _snapshot_for_runtime(runtime_store.load_best_effort(agent_name))
-            for agent_name in (*tuple(sorted(config.agents)), *_extra_agent_dir_names(context, tuple(config.agents)))
-        )
-        if snapshot is not None
+    _record_kill_report_impl(
+        context,
+        trigger=trigger,
+        forced=forced,
+        cleanup_summaries=cleanup_summaries,
+        extra_agent_dir_names_fn=_extra_agent_dir_names,
     )
-    try:
-        inspection = guard.inspect()
-        store.save(
-            CcbdShutdownReport(
-                project_id=context.project.project_id,
-                generated_at=utc_now(),
-                trigger=trigger,
-                status='ok',
-                forced=forced,
-                stopped_agents=tuple(sorted(config.agents)),
-                daemon_generation=inspection.generation,
-                reason='kill',
-                inspection_after=inspection.to_record(),
-                actions_taken=(
-                    f'cleanup_tmux_orphans:killed={sum(len(item.killed_panes) for item in cleanup_summaries)}',
-                    'request_shutdown_intent',
-                ),
-                cleanup_summaries=cleanup_summaries_from_objects(cleanup_summaries),
-                runtime_snapshots=snapshots,
-                failure_reason=None,
-            )
-        )
-    except Exception:
-        return
 
 
-def _snapshot_for_runtime(runtime) -> CcbdRuntimeSnapshot | None:
-    if runtime is None:
-        return None
-    try:
-        return CcbdRuntimeSnapshot.from_runtime(runtime)
-    except Exception:
-        return None
+def _pid_matches_project(pid: int, *, project_root, hint_paths) -> bool:
+    return _pid_matches_project_impl(
+        pid,
+        project_root=project_root,
+        hint_paths=hint_paths,
+        read_proc_path_fn=_read_proc_path,
+        read_proc_cmdline_fn=_read_proc_cmdline,
+        path_within_fn=_path_within,
+    )
 
 
-def _pid_matches_project(pid: int, *, project_root: Path, hint_paths: tuple[Path, ...]) -> bool:
-    if os.name == 'nt':
-        return True
-
-    normalized_hints: list[Path] = []
-    for candidate in (project_root, *(path.parent for path in hint_paths)):
-        try:
-            resolved = candidate.expanduser().resolve()
-        except Exception:
-            resolved = candidate.expanduser().absolute()
-        if resolved not in normalized_hints:
-            normalized_hints.append(resolved)
-
-    cwd_path = _read_proc_path(pid, 'cwd')
-    if cwd_path is not None:
-        for root in normalized_hints:
-            if _path_within(cwd_path, root):
-                return True
-
-    cmdline = _read_proc_cmdline(pid)
-    if cmdline:
-        for candidate in (*normalized_hints, *hint_paths):
-            text = str(candidate).strip()
-            if text and text in cmdline:
-                return True
-    return False
-
-
-def _read_proc_path(pid: int, entry: str) -> Path | None:
-    try:
-        return Path(os.readlink(f'/proc/{pid}/{entry}')).expanduser()
-    except Exception:
-        return None
+def _read_proc_path(pid: int, entry: str):
+    return _read_proc_path_impl(pid, entry)
 
 
 def _read_proc_cmdline(pid: int) -> str:
-    try:
-        raw = Path(f'/proc/{pid}/cmdline').read_bytes()
-    except Exception:
-        return ''
-    return raw.replace(b'\x00', b' ').decode('utf-8', errors='ignore').strip()
+    return _read_proc_cmdline_impl(pid)
 
 
-def _path_within(path: Path, root: Path) -> bool:
-    try:
-        path.resolve().relative_to(root.resolve())
-    except Exception:
-        return False
-    return True
+def _path_within(path, root) -> bool:
+    return _path_within_impl(path, root)
 
 
-def _remove_pid_files(paths: tuple[Path, ...]) -> None:
-    for path in paths:
-        if path.suffix != '.pid':
-            continue
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            continue
-        except Exception:
-            continue
+def _remove_pid_files(paths) -> None:
+    _remove_pid_files_impl(paths)

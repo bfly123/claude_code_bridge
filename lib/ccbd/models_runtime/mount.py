@@ -20,6 +20,26 @@ class LeaseHealth(str, Enum):
     MISSING = 'missing'
 
 
+def _require_non_empty_text(value: object, *, field_name: str) -> None:
+    if not str(value or '').strip():
+        raise CcbdModelError(f'{field_name} cannot be empty')
+
+
+def _require_positive_int(value: int, *, field_name: str) -> None:
+    if int(value) <= 0:
+        raise CcbdModelError(f'{field_name} must be positive')
+
+
+def _require_optional_non_empty_text(value: object | None, *, field_name: str) -> None:
+    if value is not None:
+        _require_non_empty_text(value, field_name=field_name)
+
+
+def _require_optional_positive_int(value: int | None, *, field_name: str) -> None:
+    if value is not None:
+        _require_positive_int(value, field_name=field_name)
+
+
 @dataclass(frozen=True)
 class CcbdLease:
     project_id: str
@@ -39,26 +59,16 @@ class CcbdLease:
     def __post_init__(self) -> None:
         if self.api_version != API_VERSION:
             raise CcbdModelError(f'api_version must be {API_VERSION}')
-        if not (self.project_id or '').strip():
-            raise CcbdModelError('project_id cannot be empty')
-        if self.ccbd_pid <= 0:
-            raise CcbdModelError('ccbd_pid must be positive')
-        if not (self.socket_path or '').strip():
-            raise CcbdModelError('socket_path cannot be empty')
-        if not (self.boot_id or '').strip():
-            raise CcbdModelError('boot_id cannot be empty')
-        if not (self.started_at or '').strip():
-            raise CcbdModelError('started_at cannot be empty')
-        if not (self.last_heartbeat_at or '').strip():
-            raise CcbdModelError('last_heartbeat_at cannot be empty')
-        if self.generation <= 0:
-            raise CcbdModelError('generation must be positive')
-        if self.config_signature is not None and not str(self.config_signature).strip():
-            raise CcbdModelError('config_signature cannot be blank')
-        if self.keeper_pid is not None and int(self.keeper_pid) <= 0:
-            raise CcbdModelError('keeper_pid must be positive when provided')
-        if self.daemon_instance_id is not None and not str(self.daemon_instance_id).strip():
-            raise CcbdModelError('daemon_instance_id cannot be blank')
+        _require_non_empty_text(self.project_id, field_name='project_id')
+        _require_positive_int(self.ccbd_pid, field_name='ccbd_pid')
+        _require_non_empty_text(self.socket_path, field_name='socket_path')
+        _require_non_empty_text(self.boot_id, field_name='boot_id')
+        _require_non_empty_text(self.started_at, field_name='started_at')
+        _require_non_empty_text(self.last_heartbeat_at, field_name='last_heartbeat_at')
+        _require_positive_int(self.generation, field_name='generation')
+        _require_optional_non_empty_text(self.config_signature, field_name='config_signature')
+        _require_optional_positive_int(self.keeper_pid, field_name='keeper_pid')
+        _require_optional_non_empty_text(self.daemon_instance_id, field_name='daemon_instance_id')
 
     def with_heartbeat(self, timestamp: str) -> CcbdLease:
         return replace(self, last_heartbeat_at=timestamp)

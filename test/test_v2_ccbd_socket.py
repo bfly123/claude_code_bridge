@@ -1677,7 +1677,7 @@ def test_ccbd_socket_opencode_legacy_completion_via_tracker(monkeypatch, tmp_pat
 
     completed = _wait_for_job_status(client, job_id, 'completed', timeout=3.0)
     assert completed['reply'] == 'legacy final'
-    assert completed['completion_reason'] == 'legacy_done_marker'
+    assert completed['completion_reason'] == 'terminal_done_marker'
     assert completed['completion_confidence'] == 'degraded'
     assert sent and sent[0][0] == '%4'
     assert fixed_req_id in sent[0][1]
@@ -1851,7 +1851,7 @@ def test_ccbd_socket_droid_legacy_completion_via_tracker(monkeypatch, tmp_path: 
 
     completed = _wait_for_job_status(client, job_id, 'completed', timeout=3.0)
     assert completed['reply'] == 'partial\nfinal'
-    assert completed['completion_reason'] == 'legacy_done_marker'
+    assert completed['completion_reason'] == 'terminal_done_marker'
     assert completed['completion_confidence'] == 'degraded'
     assert sent and sent[0][0] == '%5'
     assert fixed_req_id in sent[0][1]

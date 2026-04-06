@@ -8,7 +8,7 @@ from typing import Optional, Tuple
 
 from provider_core.contracts import ProviderSessionBinding
 from provider_core.pathing import find_session_file_for_work_dir, session_filename_for_instance
-from project_id import compute_ccb_project_id, compute_worktree_scope_id
+from project.identity import compute_ccb_project_id, compute_worktree_scope_id
 from provider_sessions.files import safe_write_session
 
 from .lifecycle import attach_pane_log as attach_pane_log_impl

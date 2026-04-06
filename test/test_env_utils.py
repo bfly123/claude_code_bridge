@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 
-from env_utils import env_bool, env_float, env_int
+from runtime_env import env_bool, env_float, env_int
 
 
 def test_env_bool_truthy_and_falsy(monkeypatch) -> None:

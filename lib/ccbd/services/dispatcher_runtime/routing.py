@@ -5,7 +5,7 @@ from typing import Iterable
 from agents.models import AgentState, QueuePolicy, normalize_agent_name
 from ccbd.api_models import DeliveryScope
 
-from mailbox_targets import COMMAND_MAILBOX_ACTOR
+from mailbox_runtime.targets import COMMAND_MAILBOX_ACTOR
 
 from .records import get_job, latest_for_agent
 

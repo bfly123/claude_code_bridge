@@ -44,8 +44,9 @@ def session_filename_for_agent(provider: str, agent_name: str) -> str:
     except KeyError as exc:
         raise RuntimeError(f'unsupported session filename provider: {provider}') from exc
     normalized_agent = str(agent_name or '').strip()
-    instance = normalized_agent if normalized_agent and normalized_agent != normalized_provider else None
-    return session_filename_for_instance(base, instance)
+    if not normalized_agent:
+        return base
+    return session_filename_for_instance(base, normalized_agent)
 
 
 __all__ = [

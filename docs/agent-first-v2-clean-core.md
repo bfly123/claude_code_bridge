@@ -242,12 +242,12 @@ python -m pytest -q test/test_v2_cli_management.py test/test_v2_cli_kill.py test
 
 The next structural deletions should happen in this order:
 
-1. Continue shrinking `ccb` by extracting the remaining `AILauncher` clusters, with daemon/watchdog and session persistence already moved out; next is provider start-command construction and pane launch orchestration.
+1. Remove any remaining historical references to the deleted legacy `lib/launcher` tree so active docs only describe the current `cli -> ccbd/provider_backends` runtime.
 2. Split `lib/terminal.py` into backend-specific runtime modules so pane lifecycle, input injection, and layout control are no longer coupled in one file.
 3. Continue collapsing communication logic into `lib/provider_backends/*` so backend-specific log scanning, session resolution, and completion helpers no longer live in giant top-level files.
 4. Remove remaining `.ccb_config` and root-session fallback assumptions from co-located helper modules.
 5. Collapse `askd/adapters/*` further out of the main runtime path so `provider_execution/*` is the only execution path for agent-first flows.
-6. Continue shrinking the top-level `ccb` file by extracting remaining `AILauncher` clusters, especially provider start-command construction and pane launch orchestration.
+6. Keep shrinking the top-level `ccb` file so it stays as a thin CLI entry wrapper around `cli.entrypoint`.
 7. Push non-core providers behind explicit opt-in registration instead of default catalog pressure.
 
 ## Acceptance Criteria

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from pane_registry_runtime import upsert_registry
-from project_id import compute_ccb_project_id
+from project.identity import compute_ccb_project_id
 from provider_sessions.files import safe_write_session
 
 

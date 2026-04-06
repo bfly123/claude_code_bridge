@@ -28,7 +28,7 @@ class CompletionFamily(str, Enum):
     STRUCTURED_RESULT = 'structured_result'
     SESSION_BOUNDARY = 'session_boundary'
     ANCHORED_SESSION_STABILITY = 'anchored_session_stability'
-    LEGACY_TEXT_QUIET = 'legacy_text_quiet'
+    TERMINAL_TEXT_QUIET = 'terminal_text_quiet'
 
 
 class CompletionSourceKind(str, Enum):

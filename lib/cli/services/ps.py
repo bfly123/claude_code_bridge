@@ -16,36 +16,70 @@ def ps_summary(context: CliContext, command: ParsedPsCommand) -> dict:
     agents: list[dict] = []
     for agent_name, spec in sorted(config.agents.items()):
         runtime = store.load(agent_name)
-        if command.alive_only and runtime is None:
+        if not _include_runtime(runtime, alive_only=command.alive_only):
             continue
-        if command.alive_only and runtime is not None and runtime.state.value not in {'starting', 'idle', 'busy', 'degraded'}:
-            continue
-        workspace_path = runtime.workspace_path if runtime is not None and runtime.workspace_path else str(context.paths.workspace_path(agent_name))
-        runtime_ref = runtime.runtime_ref if runtime is not None else None
-        session_ref = None
-        if runtime is not None:
-            session_ref = runtime.session_file or runtime.session_id or runtime.session_ref
-        agents.append(
-            {
-                'agent_name': agent_name,
-                'provider': spec.provider,
-                'runtime_mode': spec.runtime_mode.value,
-                'workspace_mode': spec.workspace_mode.value,
-                'state': runtime.state.value if runtime is not None else 'stopped',
-                'queue_depth': runtime.queue_depth if runtime is not None else 0,
-                'workspace_path': workspace_path,
-                'runtime_ref': runtime_ref,
-                'session_ref': session_ref,
-                'binding_status': binding_status(runtime_ref, session_ref, workspace_path),
-                'backend_type': runtime.backend_type if runtime is not None else spec.runtime_mode.value,
-                'binding_source': runtime.binding_source.value if runtime is not None else 'provider-session',
-                'terminal': runtime.terminal_backend if runtime is not None else None,
-                'tmux_socket_name': runtime.tmux_socket_name if runtime is not None else None,
-                'tmux_socket_path': runtime.tmux_socket_path if runtime is not None else None,
-                'pane_id': runtime.pane_id if runtime is not None else None,
-                'active_pane_id': runtime.active_pane_id if runtime is not None else None,
-                'pane_title_marker': runtime.pane_title_marker if runtime is not None else None,
-                'pane_state': runtime.pane_state if runtime is not None else None,
-            }
-        )
-    return {'project_id': context.project.project_id, 'ccbd_state': local.mount_state, 'agents': agents}
+        agents.append(_agent_summary(context, agent_name=agent_name, spec=spec, runtime=runtime))
+    return {
+        'project_id': context.project.project_id,
+        'ccbd_state': local.mount_state,
+        'agents': agents,
+    }
+
+
+def _include_runtime(runtime, *, alive_only: bool) -> bool:
+    if not alive_only:
+        return True
+    if runtime is None:
+        return False
+    return runtime.state.value in {'starting', 'idle', 'busy', 'degraded'}
+
+
+def _agent_summary(context: CliContext, *, agent_name: str, spec, runtime) -> dict:
+    workspace_path = _workspace_path(context, agent_name=agent_name, runtime=runtime)
+    runtime_ref = _runtime_attr(runtime, 'runtime_ref')
+    session_ref = _session_ref(runtime)
+    return {
+        'agent_name': agent_name,
+        'provider': spec.provider,
+        'runtime_mode': spec.runtime_mode.value,
+        'workspace_mode': spec.workspace_mode.value,
+        'state': _runtime_enum_value(runtime, 'state', 'stopped'),
+        'queue_depth': _runtime_attr(runtime, 'queue_depth', 0),
+        'workspace_path': workspace_path,
+        'runtime_ref': runtime_ref,
+        'session_ref': session_ref,
+        'binding_status': binding_status(runtime_ref, session_ref, workspace_path),
+        'backend_type': _runtime_attr(runtime, 'backend_type', spec.runtime_mode.value),
+        'binding_source': _runtime_enum_value(runtime, 'binding_source', 'provider-session'),
+        'terminal': _runtime_attr(runtime, 'terminal_backend'),
+        'tmux_socket_name': _runtime_attr(runtime, 'tmux_socket_name'),
+        'tmux_socket_path': _runtime_attr(runtime, 'tmux_socket_path'),
+        'pane_id': _runtime_attr(runtime, 'pane_id'),
+        'active_pane_id': _runtime_attr(runtime, 'active_pane_id'),
+        'pane_title_marker': _runtime_attr(runtime, 'pane_title_marker'),
+        'pane_state': _runtime_attr(runtime, 'pane_state'),
+    }
+
+
+def _runtime_attr(runtime, name: str, default=None):
+    if runtime is None:
+        return default
+    return getattr(runtime, name, default)
+
+
+def _runtime_enum_value(runtime, name: str, default: str) -> str:
+    value = _runtime_attr(runtime, name)
+    return getattr(value, 'value', default)
+
+
+def _workspace_path(context: CliContext, *, agent_name: str, runtime) -> str:
+    workspace_path = _runtime_attr(runtime, 'workspace_path')
+    if workspace_path:
+        return runtime.workspace_path
+    return str(context.paths.workspace_path(agent_name))
+
+
+def _session_ref(runtime) -> str | None:
+    if runtime is None:
+        return None
+    return runtime.session_file or runtime.session_id or runtime.session_ref

@@ -46,4 +46,4 @@ def test_default_runtime_launcher_map_uses_backend_owned_entries() -> None:
 
 def test_session_filename_for_agent_follows_agent_first_naming() -> None:
     assert session_filename_for_agent('codex', 'writer') == '.codex-writer-session'
-    assert session_filename_for_agent('codex', 'codex') == '.codex-session'
+    assert session_filename_for_agent('codex', 'codex') == '.codex-codex-session'

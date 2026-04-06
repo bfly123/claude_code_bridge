@@ -6,9 +6,10 @@ from pathlib import Path
 from typing import Any, Dict
 
 from cli.output import atomic_write_text
-from project_id import compute_ccb_project_id
+from project.identity import compute_ccb_project_id
+from project.runtime_paths import project_anchor_exists
 
-from .common import debug, get_providers_map, load_registry_file, provider_entry_from_legacy, registry_path_for_session
+from .common import debug, get_providers_map, load_registry_file, registry_path_for_session
 
 
 def upsert_registry(
@@ -21,7 +22,14 @@ def upsert_registry(
     if not session_id:
         debug("Registry update skipped: missing ccb_session_id")
         return False
-    path = registry_path_for_session(str(session_id))
+    work_dir = str(record.get("work_dir") or "").strip()
+    if not work_dir:
+        debug("Registry update skipped: missing work_dir for project-scoped registry")
+        return False
+    if not project_anchor_exists(Path(work_dir)):
+        debug(f"Registry update skipped: no .ccb anchor for {work_dir}")
+        return False
+    path = registry_path_for_session(str(session_id), work_dir=Path(work_dir))
     path.parent.mkdir(parents=True, exist_ok=True)
 
     data: Dict[str, Any] = {}
@@ -31,56 +39,11 @@ def upsert_registry(
             data.update(existing)
 
     providers = get_providers_map(data)
-
-    incoming_providers = record.get("providers")
-    if isinstance(incoming_providers, dict):
-        for provider, entry in incoming_providers.items():
-            if not isinstance(provider, str) or not isinstance(entry, dict):
-                continue
-            key = provider.strip().lower()
-            providers.setdefault(key, {})
-            for entry_key, entry_value in entry.items():
-                if entry_value is None:
-                    continue
-                providers[key][entry_key] = entry_value
-
-    provider = record.get("provider")
-    if isinstance(provider, str) and provider.strip():
-        normalized_provider = provider.strip().lower()
-        providers.setdefault(normalized_provider, {})
-        for key, value in record.items():
-            if value is None:
-                continue
-            if key in {"provider", "providers"}:
-                continue
-            if key in {"pane_id", "pane_title_marker"} or key.endswith("_session_id") or key.endswith(
-                "_session_path"
-            ) or key.endswith("_project_id"):
-                providers[normalized_provider][key] = value
-
-    for provider_name in ("codex", "gemini", "opencode", "claude"):
-        legacy_entry = provider_entry_from_legacy(record, provider_name)
-        if legacy_entry:
-            providers.setdefault(provider_name, {})
-            providers[provider_name].update({key: value for key, value in legacy_entry.items() if value is not None})
-
-    for key, value in record.items():
-        if value is None:
-            continue
-        if key in {"providers", "provider"}:
-            continue
-        data[key] = value
+    _merge_provider_maps(providers, record)
+    _merge_top_level_fields(data, record)
 
     data["providers"] = providers
-
-    if not (data.get("ccb_project_id") or "").strip():
-        work_dir = (data.get("work_dir") or "").strip()
-        if work_dir:
-            try:
-                data["ccb_project_id"] = compute_project_id_fn(Path(work_dir))
-            except Exception:
-                pass
-
+    _ensure_project_id(data, compute_project_id_fn=compute_project_id_fn)
     data["updated_at"] = int(time.time())
 
     try:
@@ -89,3 +52,63 @@ def upsert_registry(
     except Exception as exc:
         debug(f"Failed to write registry {path}: {exc}")
         return False
+
+
+def _merge_provider_maps(providers: Dict[str, Any], record: Dict[str, Any]) -> None:
+    incoming_providers = record.get("providers")
+    if isinstance(incoming_providers, dict):
+        for provider, entry in incoming_providers.items():
+            if not isinstance(provider, str) or not isinstance(entry, dict):
+                continue
+            _merge_provider_entry(providers, provider.strip().lower(), entry)
+
+    provider = record.get("provider")
+    if isinstance(provider, str) and provider.strip():
+        normalized = provider.strip().lower()
+        providers.setdefault(normalized, {})
+        for key, value in _single_provider_fields(record).items():
+            providers[normalized][key] = value
+
+
+def _merge_provider_entry(providers: Dict[str, Any], provider: str, entry: dict) -> None:
+    providers.setdefault(provider, {})
+    for entry_key, entry_value in entry.items():
+        if entry_value is not None:
+            providers[provider][entry_key] = entry_value
+
+
+def _single_provider_fields(record: Dict[str, Any]) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    for key, value in record.items():
+        if value is None or key in {"provider", "providers"}:
+            continue
+        if _provider_field(key):
+            fields[key] = value
+    return fields
+
+
+def _provider_field(key: str) -> bool:
+    return (
+        key in {"pane_id", "pane_title_marker"}
+        or key.endswith("_session_id")
+        or key.endswith("_session_path")
+        or key.endswith("_project_id")
+    )
+
+
+def _merge_top_level_fields(data: Dict[str, Any], record: Dict[str, Any]) -> None:
+    for key, value in record.items():
+        if value is not None and key not in {"providers", "provider"}:
+            data[key] = value
+
+
+def _ensure_project_id(data: Dict[str, Any], *, compute_project_id_fn) -> None:
+    if (data.get("ccb_project_id") or "").strip():
+        return
+    work_dir = (data.get("work_dir") or "").strip()
+    if not work_dir:
+        return
+    try:
+        data["ccb_project_id"] = compute_project_id_fn(Path(work_dir))
+    except Exception:
+        return

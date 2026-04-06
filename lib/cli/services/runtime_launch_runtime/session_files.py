@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 from provider_core.pathing import session_filename_for_agent
-from project_id import normalize_work_dir
+from project.identity import normalize_work_dir
 from provider_core.runtime_shared import pane_title_marker as build_pane_title_marker
 from provider_sessions.files import safe_write_session
 

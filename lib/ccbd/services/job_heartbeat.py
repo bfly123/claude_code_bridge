@@ -3,7 +3,7 @@ from __future__ import annotations
 from ccbd.api_models import JobRecord, JobStatus, TargetKind
 from ccbd.system import utc_now
 from heartbeat import HeartbeatAction, HeartbeatPolicy, HeartbeatStateStore, evaluate_heartbeat
-from mailbox_targets import known_mailbox_targets, normalize_mailbox_target
+from mailbox_runtime.targets import known_mailbox_targets, normalize_mailbox_target
 from storage.paths import PathLayout
 
 _DEFAULT_SUBJECT_KIND = 'job_progress'
@@ -32,8 +32,8 @@ class JobHeartbeatService:
             job = dispatcher.get(job_id)
             if not self._should_track(job):
                 continue
-            active_job_ids.add(job.job_id)
-            self._tick_job(dispatcher, job)
+            if self._tick_job(dispatcher, job):
+                active_job_ids.add(job.job_id)
         self._cleanup_inactive(active_job_ids)
         return tuple(sorted(active_job_ids))
 
@@ -45,15 +45,18 @@ class JobHeartbeatService:
         message_type = str(job.request.message_type or '').strip().lower()
         return message_type in _TRACKED_MESSAGE_TYPES
 
-    def _tick_job(self, dispatcher, job: JobRecord) -> None:
+    def _tick_job(self, dispatcher, job: JobRecord) -> bool:
         snapshot = dispatcher.get_snapshot(job.job_id)
+        if _snapshot_is_terminal(snapshot):
+            self._store.remove(self._subject_kind, job.job_id)
+            return False
         observed_last_progress_at = (
             str(snapshot.updated_at).strip()
             if snapshot is not None and str(snapshot.updated_at).strip()
             else str(job.updated_at).strip()
         )
         if not observed_last_progress_at:
-            return
+            return False
         prior_state = self._store.load(self._subject_kind, job.job_id)
         now = self._clock()
         next_state, decision = evaluate_heartbeat(
@@ -78,9 +81,9 @@ class JobHeartbeatService:
                 },
                 timestamp=now,
             )
-            return
+            return True
         if not decision.notice_due:
-            return
+            return True
 
         mailbox_target = normalize_mailbox_target(
             job.request.from_actor,
@@ -101,7 +104,7 @@ class JobHeartbeatService:
                 diagnostics,
                 timestamp=now,
             )
-            return
+            return True
 
         reply_id = dispatcher._message_bureau.record_notice(
             job,
@@ -120,6 +123,7 @@ class JobHeartbeatService:
             },
             timestamp=now,
         )
+        return True
 
     def _cleanup_inactive(self, active_job_ids: set[str]) -> None:
         for state in self._store.list_all(subject_kind=self._subject_kind):
@@ -177,6 +181,20 @@ def _snapshot_preview(snapshot) -> str:
     if snapshot is None:
         return ''
     return str(snapshot.latest_reply_preview or '').strip()
+
+
+def _snapshot_is_terminal(snapshot) -> bool:
+    if snapshot is None:
+        return False
+    try:
+        if bool(getattr(snapshot.state, 'terminal', False)):
+            return True
+    except Exception:
+        return False
+    try:
+        return bool(getattr(snapshot.latest_decision, 'terminal', False))
+    except Exception:
+        return False
 
 
 def _format_silence(value: float) -> str:

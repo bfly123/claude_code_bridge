@@ -60,3 +60,21 @@ def test_tmux_pane_log_manager_refreshes_only_when_pipe_missing(tmp_path: Path) 
     manager.refresh_pane_logs()
 
     assert ensured == ['%1']
+
+
+def test_tmux_pane_log_manager_skips_dead_panes_during_refresh(tmp_path: Path) -> None:
+    calls: list[tuple[list[str], dict]] = []
+    manager = TmuxPaneLogManager(
+        socket_name=None,
+        tmux_run_fn=lambda args, **kwargs: calls.append((args, kwargs)) or _cp(stdout='0\n'),
+        is_alive_fn=lambda pane_id: False,
+        pane_pipe_enabled_fn=lambda output: False,
+        pane_log_path_for_fn=lambda pane_id, backend, socket_name: tmp_path / f'{pane_id}.log',
+        cleanup_pane_logs_fn=lambda path: None,
+        maybe_trim_log_fn=lambda path: None,
+        pane_log_info={'%1': 1.0},
+    )
+
+    manager.refresh_pane_logs()
+
+    assert calls == []

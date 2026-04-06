@@ -24,7 +24,7 @@ sys.path.insert(0, str(lib_dir))
 
 from cli.output import EXIT_ERROR, EXIT_OK
 from pane_registry_runtime import get_providers_map, load_registry_by_project_id
-from project_id import compute_ccb_project_id
+from project.identity import compute_ccb_project_id
 from terminal_runtime import get_backend_for_session
 
 

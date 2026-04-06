@@ -49,5 +49,5 @@ def test_primary_agent_load_session_keeps_primary_fallback() -> None:
 
     work_dir = Path('/tmp/demo')
 
-    assert load_claude_session(_loader, work_dir, agent_name='claude') == {'session': 'primary'}
-    assert calls == [None]
+    assert load_claude_session(_loader, work_dir, agent_name='claude') is None
+    assert calls == ['claude']

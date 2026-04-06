@@ -47,44 +47,71 @@ def detect_project_id_for_workdir(
     best_id: str | None = None
     best_score: tuple[int, int, float] = (-1, -1, -1.0)
 
-    try:
-        paths = [p for p in projects_dir.glob("*.json") if p.is_file()]
-    except Exception:
-        paths = []
+    paths = _project_json_files(projects_dir)
 
     for path in paths:
         payload = load_json_fn(path)
-
-        pid = payload.get("id") if isinstance(payload.get("id"), str) and payload.get("id") else path.stem
-        worktree = payload.get("worktree")
-        if not isinstance(pid, str) or not pid:
+        pid, worktree_norm = _project_identity(payload, path)
+        if not pid or not worktree_norm:
             continue
-        if not isinstance(worktree, str) or not worktree:
+        if not _matches_work_candidates(
+            worktree_norm,
+            work_candidates=work_candidates,
+            allow_parent_match=allow_parent_match,
+        ):
             continue
-
-        worktree_norm = normalize_path_for_match(worktree)
-        if not worktree_norm:
-            continue
-
-        if not any(path_matches(worktree_norm, candidate, allow_parent=allow_parent_match) for candidate in work_candidates):
-            continue
-
-        updated = (payload.get("time") or {}).get("updated")
-        try:
-            updated_i = int(updated)
-        except Exception:
-            updated_i = -1
-        try:
-            mtime = path.stat().st_mtime
-        except Exception:
-            mtime = 0.0
-
-        score = (len(worktree_norm), updated_i, mtime)
+        score = _project_match_score(payload, path, worktree_norm=worktree_norm)
         if score > best_score:
             best_id = pid
             best_score = score
 
     return best_id
+
+
+def _project_json_files(projects_dir: Path) -> list[Path]:
+    try:
+        return [path for path in projects_dir.glob("*.json") if path.is_file()]
+    except Exception:
+        return []
+
+
+def _project_identity(payload, path: Path) -> tuple[str | None, str | None]:
+    pid = (
+        payload.get("id")
+        if isinstance(payload.get("id"), str) and payload.get("id")
+        else path.stem
+    )
+    worktree = payload.get("worktree")
+    if not isinstance(pid, str) or not pid:
+        return None, None
+    if not isinstance(worktree, str) or not worktree:
+        return None, None
+    return pid, normalize_path_for_match(worktree)
+
+
+def _matches_work_candidates(
+    worktree_norm: str,
+    *,
+    work_candidates: list[str],
+    allow_parent_match: bool,
+) -> bool:
+    return any(
+        path_matches(worktree_norm, candidate, allow_parent=allow_parent_match)
+        for candidate in work_candidates
+    )
+
+
+def _project_match_score(payload, path: Path, *, worktree_norm: str) -> tuple[int, int, float]:
+    updated = (payload.get("time") or {}).get("updated")
+    try:
+        updated_i = int(updated)
+    except Exception:
+        updated_i = -1
+    try:
+        mtime = path.stat().st_mtime
+    except Exception:
+        mtime = 0.0
+    return len(worktree_norm), updated_i, mtime
 
 
 def fallback_project_id(work_dir: Path) -> str:

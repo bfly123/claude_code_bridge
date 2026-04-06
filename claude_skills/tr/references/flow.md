@@ -9,8 +9,6 @@ Execute current step while Claude stays in plan mode and Codex performs all file
 
 ## Execution Flow
 
-**Auto-loop daemon**: started by `/tp` (`bash ~/.claude/skills/tr/scripts/autoloop.sh start`). `/tr` should assume it is running and only ensure the finalize request doesn't stop it.
-
 ### 1. Sync Current State (Codex)
 
 Claude does not read/modify repo files directly. Request Codex to:
@@ -206,7 +204,7 @@ Execute relevant tests and report:
 ### 9. Finalize (Codex)
 
 If Step 3 applied a split (`needsSplit=true`):
-- Output: `Split applied. Next: first substep. Use /tr (autoloop will trigger if running).`
+- Output: `Split applied. Next: first substep. Use /tr to execute it.`
 - Do not mark the step `done` (no execution happened yet).
 
 If PASS (execution path), ask Codex to:
@@ -215,13 +213,9 @@ If PASS (execution path), ask Codex to:
 3) append completion entry to `.ccb/plan_log.md`
 
 Send `FileOpsREQ` with `purpose: "finalize_step"` via `/file-op`. Codex returns `FileOpsRES` JSON only.
-
-Auto-loop requirement (reliable next-step trigger):
-- After finalizing, Codex must run the auto-loop trigger (see `autoflow_auto_loop` in `~/.claude/skills/docs/protocol.md`; implemented as an explicit `run` op).
-- If there are remaining steps, it must trigger the next `/tr` automatically.
 - It must be executed via the FileOpsREQ protocol (no manual copy/paste).
 
-Recommended: combine finalize + auto-loop in one request (ops execute in order):
+Recommended: use the finalize template so state advancement and persistence stay in one request:
 - Template: `../templates/finalize.json`
 
 Output result:

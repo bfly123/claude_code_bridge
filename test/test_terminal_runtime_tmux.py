@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from terminal_runtime.tmux import default_detached_session_name
@@ -15,6 +17,11 @@ from terminal_runtime.tmux import tmux_base
 def test_tmux_base_includes_socket_when_present() -> None:
     assert tmux_base(None) == ["tmux"]
     assert tmux_base("ccb-demo") == ["tmux", "-L", "ccb-demo"]
+    assert tmux_base("ccb-demo", socket_path="~/.tmux/demo.sock") == [
+        "tmux",
+        "-S",
+        str(Path("~/.tmux/demo.sock").expanduser()),
+    ]
 
 
 def test_tmux_target_helpers() -> None:

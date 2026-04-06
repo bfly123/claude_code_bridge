@@ -10,6 +10,13 @@ from .session_selection import latest_session
 from .state import state_payload
 
 
+def _latest_session_path(reader) -> Path | None:
+    session = latest_session(reader)
+    if not session or not session.exists():
+        return None
+    return session
+
+
 def read_session_json(reader, session: Path) -> dict[str, Any] | None:
     if not session or not session.exists():
         return None
@@ -27,50 +34,90 @@ def read_session_json(reader, session: Path) -> dict[str, Any] | None:
     return None
 
 
-def extract_last_gemini(payload: dict[str, Any]) -> tuple[str | None, str] | None:
+def _payload_messages(payload: dict[str, Any] | None) -> list[dict[str, Any]]:
     messages = payload.get("messages", []) if isinstance(payload, dict) else []
     if not isinstance(messages, list):
-        return None
-    for msg in reversed(messages):
-        if not isinstance(msg, dict):
-            continue
-        if msg.get("type") != "gemini":
-            continue
-        content = msg.get("content", "")
-        if not isinstance(content, str):
-            content = str(content)
-        return msg.get("id"), content.strip()
+        return []
+    return [msg for msg in messages if isinstance(msg, dict)]
+
+
+def _message_content(message: dict[str, Any]) -> str:
+    content = message.get("content", "")
+    if not isinstance(content, str):
+        content = str(content)
+    return content.strip()
+
+
+def _last_gemini_message(messages: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for message in reversed(messages):
+        if message.get("type") == "gemini":
+            return message
     return None
 
 
-def capture_state(reader) -> dict[str, Any]:
-    session = latest_session(reader)
-    msg_count = 0
-    mtime = 0.0
-    mtime_ns = 0
-    size = 0
-    last_gemini_id: str | None = None
-    last_gemini_hash: str | None = None
-    if session and session.exists():
-        data: dict[str, Any] | None = None
-        try:
-            stat = session.stat()
-            mtime = stat.st_mtime
-            mtime_ns = getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000))
-            size = stat.st_size
-        except OSError:
-            pass
+def extract_last_gemini(payload: dict[str, Any]) -> tuple[str | None, str] | None:
+    last = _last_gemini_message(_payload_messages(payload))
+    if last is None:
+        return None
+    return last.get("id"), _message_content(last)
 
-        data = read_session_json(reader, session)
 
-        if data is None:
-            msg_count = -1
-        else:
-            msg_count = len(data.get("messages", []))
-            last = extract_last_gemini(data)
-            if last:
-                last_gemini_id, content = last
-                last_gemini_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+def _session_stats(session: Path | None) -> tuple[float, int, int]:
+    if session is None:
+        return 0.0, 0, 0
+    try:
+        stat = session.stat()
+    except OSError:
+        return 0.0, 0, 0
+    mtime = stat.st_mtime
+    mtime_ns = getattr(stat, "st_mtime_ns", int(mtime * 1_000_000_000))
+    return mtime, mtime_ns, stat.st_size
+
+
+def _last_gemini_metadata(payload: dict[str, Any] | None) -> tuple[str | None, str | None]:
+    last = extract_last_gemini(payload or {})
+    if not last:
+        return None, None
+    last_id, content = last
+    if not content:
+        return last_id, None
+    return last_id, hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _session_payload(reader) -> tuple[Path | None, dict[str, Any] | None]:
+    session = _latest_session_path(reader)
+    if session is None:
+        return None, None
+    return session, read_session_json(reader, session)
+
+
+def _conversation_pairs(payload: dict[str, Any] | None) -> list[tuple[str, str]]:
+    conversations: list[tuple[str, str]] = []
+    pending_question: str | None = None
+    for message in _payload_messages(payload):
+        msg_type = message.get("type")
+        content = _message_content(message)
+        if msg_type == "user":
+            pending_question = content
+            continue
+        if msg_type == "gemini" and content:
+            conversations.append((pending_question or "", content))
+            pending_question = None
+    return conversations
+
+
+def _latest_gemini_text(payload: dict[str, Any] | None) -> str | None:
+    last = _last_gemini_message(_payload_messages(payload))
+    if last is None:
+        return None
+    content = _message_content(last)
+    return content or None
+
+
+def _state_from_payload(*, session: Path | None, payload: dict[str, Any] | None) -> dict[str, Any]:
+    mtime, mtime_ns, size = _session_stats(session)
+    msg_count = -1 if session is not None and payload is None else len(_payload_messages(payload))
+    last_gemini_id, last_gemini_hash = _last_gemini_metadata(payload)
     return state_payload(
         session=session,
         msg_count=msg_count,
@@ -82,53 +129,22 @@ def capture_state(reader) -> dict[str, Any]:
     )
 
 
+def capture_state(reader) -> dict[str, Any]:
+    session, payload = _session_payload(reader)
+    return _state_from_payload(session=session, payload=payload)
+
+
 def latest_message(reader) -> str | None:
-    session = latest_session(reader)
-    if not session or not session.exists():
-        return None
-    try:
-        data = read_session_json(reader, session)
-        if not isinstance(data, dict):
-            return None
-        messages = data.get("messages", [])
-        for msg in reversed(messages):
-            if msg.get("type") == "gemini":
-                return str(msg.get("content", "")).strip()
-    except (OSError, json.JSONDecodeError):
-        pass
-    return None
+    _, payload = _session_payload(reader)
+    return _latest_gemini_text(payload)
 
 
 def latest_conversations(reader, n: int = 1) -> list[tuple[str, str]]:
-    session = latest_session(reader)
-    if not session or not session.exists():
+    if int(n) <= 0:
         return []
-    try:
-        data = read_session_json(reader, session)
-        if not isinstance(data, dict):
-            return []
-        messages = data.get("messages", [])
-    except (OSError, json.JSONDecodeError):
-        return []
-
-    conversations: list[tuple[str, str]] = []
-    pending_question: str | None = None
-
-    for msg in messages:
-        msg_type = msg.get("type")
-        content = msg.get("content", "")
-        if not isinstance(content, str):
-            content = str(content)
-        content = content.strip()
-
-        if msg_type == "user":
-            pending_question = content
-        elif msg_type == "gemini" and content:
-            question = pending_question or ""
-            conversations.append((question, content))
-            pending_question = None
-
-    return conversations[-n:] if len(conversations) > n else conversations
+    _, payload = _session_payload(reader)
+    conversations = _conversation_pairs(payload)
+    return conversations[-max(1, int(n)) :]
 
 
 __all__ = [

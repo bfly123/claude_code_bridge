@@ -12,11 +12,7 @@ from provider_backends.claude.registry_support.logs import (
 from provider_backends.claude.registry_support.pathing import (
     candidate_project_dirs as _candidate_project_dirs,
 )
-from provider_backends.claude.session import ClaudeProjectSession, load_project_session
-from provider_sessions.files import (
-    find_project_session_file,
-    resolve_project_config_dir,
-)
+from provider_backends.claude.session import ClaudeProjectSession
 from provider_sessions.watch import HAS_WATCHDOG, SessionFileWatcher
 
 from . import (
@@ -44,6 +40,7 @@ from . import (
     stop_root_watcher as _stop_root_watcher_impl,
     update_session_file_direct,
 )
+from .binding_runtime import find_claude_session_file, load_claude_session
 from .logging import write_registry_log
 from .settings import CLAUDE_PROJECTS_ROOT
 
@@ -76,8 +73,7 @@ class ClaudeSessionRegistry:
         return _get_session_impl(
             self,
             work_dir,
-            find_project_session_file_fn=find_project_session_file,
-            resolve_project_config_dir_fn=resolve_project_config_dir,
+            find_session_file_fn=self._find_claude_session_file,
             write_log_fn=write_registry_log,
             load_and_cache_fn=self._load_and_cache,
         )
@@ -96,9 +92,8 @@ class ClaudeSessionRegistry:
             self,
             work_dir,
             session_entry_cls=self._session_entry_cls,
-            load_project_session_fn=load_project_session,
-            find_project_session_file_fn=find_project_session_file,
-            resolve_project_config_dir_fn=resolve_project_config_dir,
+            load_session_fn=self._load_claude_session,
+            find_session_file_fn=self._find_claude_session_file,
         )
 
     def invalidate(self, work_dir: Path) -> None:
@@ -131,12 +126,14 @@ class ClaudeSessionRegistry:
             now=now,
             refresh_interval_s=refresh_interval_s,
             scan_limit=scan_limit,
-            find_project_session_file_fn=find_project_session_file,
-            resolve_project_config_dir_fn=resolve_project_config_dir,
-            load_project_session_fn=load_project_session,
+            find_session_file_fn=self._find_claude_session_file,
+            load_session_fn=self._load_claude_session,
             refresh_claude_log_binding_fn=_refresh_claude_log_binding,
             write_log_fn=write_registry_log,
         )
+
+    def _load_claude_session(self, work_dir: Path) -> Optional[ClaudeProjectSession]:
+        return load_claude_session(work_dir)
 
     def _project_dirs_for_work_dir(self, work_dir: Path, *, include_missing: bool = False) -> list[Path]:
         return _project_dirs_for_work_dir_impl(
@@ -178,9 +175,7 @@ class ClaudeSessionRegistry:
         return read_log_meta_with_retry(log_path)
 
     def _find_claude_session_file(self, work_dir: Path) -> Optional[Path]:
-        return find_project_session_file(work_dir, ".claude-session") or (
-            resolve_project_config_dir(work_dir) / ".claude-session"
-        )
+        return find_claude_session_file(work_dir)
 
     def _update_session_file_direct(self, session_file: Path, log_path: Path, session_id: str) -> None:
         update_session_file_direct(session_file, log_path, session_id)

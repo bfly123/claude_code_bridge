@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from pane_registry_runtime import upsert_registry
-from project_id import compute_ccb_project_id
-from provider_sessions.files import find_project_session_file
+from project.identity import compute_ccb_project_id
+from provider_core.session_binding_runtime import find_bound_session_file
 from terminal_runtime import get_backend_for_session, get_pane_id_from_session
 
 
@@ -70,15 +70,11 @@ class PaneLogCommunicatorBase:
         self._log_reader_primed = True
 
     def _find_session_file(self) -> Optional[Path]:
-        env_session = (os.environ.get('CCB_SESSION_FILE') or '').strip()
-        if env_session:
-            try:
-                session_path = Path(os.path.expanduser(env_session))
-                if session_path.name == self.session_filename and session_path.is_file():
-                    return session_path
-            except Exception:
-                pass
-        return find_project_session_file(Path.cwd(), self.session_filename)
+        return find_bound_session_file(
+            provider=self.provider_key,
+            base_filename=self.session_filename,
+            work_dir=Path.cwd(),
+        )
 
     def _load_session_info(self) -> Optional[dict]:
         project_session = self._find_session_file()

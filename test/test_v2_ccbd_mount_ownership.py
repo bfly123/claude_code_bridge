@@ -869,6 +869,63 @@ def test_health_monitor_rebind_uses_session_file_when_provider_session_ref_missi
     assert refreshed.session_ref == str(tmp_path / 'agent1-session.json')
 
 
+def test_health_monitor_rebind_updates_provider_session_runtime_without_duplicate_overrides(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-provider-rebind'
+    project_root.mkdir()
+    ctx = bootstrap_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex')
+    registry = AgentRegistry(layout, config)
+    runtime = AgentRuntime(
+        **{
+            **_runtime('codex', project_id=ctx.project_id, layout=layout, pid=1234).__dict__,
+            'runtime_ref': 'tmux:%dead',
+            'session_ref': '/tmp/old-session.json',
+            'pane_id': '%dead',
+            'active_pane_id': '%dead',
+            'pane_state': 'dead',
+        }
+    )
+    registry.upsert(runtime)
+    manager = MountManager(layout, clock=lambda: '2026-03-18T00:00:00Z', uid_getter=lambda: 1000, boot_id_getter=lambda: 'boot-1')
+    guard = OwnershipGuard(layout, manager, clock=lambda: '2026-03-18T00:00:00Z', pid_exists=lambda pid: True, socket_probe=lambda path: True)
+    backend = FakeTmuxBackend(exists=True, alive=True)
+    session = FakeTmuxSession(
+        pane_id='%41',
+        backend=backend,
+        ensure_ok=True,
+        session_path=str(tmp_path / 'codex-session.json'),
+    )
+    monitor = HealthMonitor(
+        registry,
+        guard,
+        clock=lambda: '2026-03-18T00:00:10Z',
+        pid_exists=lambda pid: True,
+        session_bindings={
+            'codex': type(
+                'Binding',
+                (),
+                {
+                    'load_session': staticmethod(lambda work_dir, instance=None: session),
+                    'session_path_attr': 'fake_session_path',
+                    'session_id_attr': 'fake_session_id',
+                },
+            )()
+        },
+    )
+
+    assert monitor.check_all()['codex'] == 'healthy'
+    refreshed = registry.get('codex')
+    assert refreshed is not None
+    assert refreshed.state is AgentState.IDLE
+    assert refreshed.health == 'healthy'
+    assert refreshed.runtime_ref == 'tmux:%41'
+    assert refreshed.session_ref == '/tmp/old-session.json'
+    assert refreshed.pane_id == '%41'
+    assert refreshed.active_pane_id == '%41'
+    assert refreshed.pane_state == 'alive'
+
+
 def test_ccbd_heartbeat_recovers_degraded_agent_and_drains_queue(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / 'repo-heartbeat-recovery'
     project_root.mkdir()

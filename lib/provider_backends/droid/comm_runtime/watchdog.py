@@ -4,6 +4,7 @@ import threading
 from pathlib import Path
 from typing import Callable, Optional
 
+from provider_core.session_binding_runtime import resolve_bound_instance
 from provider_sessions.watch import HAS_WATCHDOG, SessionFileWatcher
 from terminal_runtime.backend_env import apply_backend_env
 
@@ -20,8 +21,8 @@ _DROID_WATCH_LOCK = threading.Lock()
 def handle_droid_session_event(
     path: Path,
     *,
-    find_project_session_file_fn: Callable[[Path], Optional[Path]],
-    load_project_session_fn: Callable[[Path], object | None],
+    find_project_session_file_fn: Callable[[Path, str | None], Optional[Path]],
+    load_project_session_fn: Callable[[Path, str | None], object | None],
 ) -> None:
     if not path or not path.exists() or path.suffix != ".jsonl":
         return
@@ -32,10 +33,16 @@ def handle_droid_session_event(
         work_dir = Path(cwd).expanduser()
     except Exception:
         return
-    session_file = find_project_session_file_fn(work_dir)
+    instance = resolve_bound_instance(
+        provider="droid",
+        base_filename=".droid-session",
+        work_dir=work_dir,
+        allow_env=False,
+    )
+    session_file = find_project_session_file_fn(work_dir, instance)
     if not session_file or not session_file.exists():
         return
-    session = load_project_session_fn(work_dir)
+    session = load_project_session_fn(work_dir, instance)
     if not session:
         return
     try:
@@ -48,8 +55,8 @@ def ensure_droid_watchdog_started(
     *,
     root: Path = DROID_SESSIONS_ROOT,
     watcher_factory: Callable[..., SessionFileWatcher] = SessionFileWatcher,
-    find_project_session_file_fn: Callable[[Path], Optional[Path]],
-    load_project_session_fn: Callable[[Path], object | None],
+    find_project_session_file_fn: Callable[[Path, str | None], Optional[Path]],
+    load_project_session_fn: Callable[[Path, str | None], object | None],
 ) -> None:
     if not HAS_WATCHDOG:
         return

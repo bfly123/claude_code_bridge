@@ -3,13 +3,22 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def tmux_base(socket_name: str | None = None, *, socket_path: str | None = None) -> list[str]:
+def tmux_base(
+    socket_name: str | None = None,
+    *,
+    socket_path: str | None = None,
+) -> list[str]:
     cmd = ["tmux"]
-    if socket_path:
-        cmd.extend(["-S", str(Path(socket_path).expanduser())])
-    elif socket_name:
-        cmd.extend(["-L", socket_name])
+    cmd.extend(socket_base_args(socket_name=socket_name, socket_path=socket_path))
     return cmd
+
+
+def socket_base_args(*, socket_name: str | None, socket_path: str | None) -> list[str]:
+    if socket_path:
+        return ["-S", str(Path(socket_path).expanduser())]
+    if socket_name:
+        return ["-L", socket_name]
+    return []
 
 
 def normalize_socket_name(value: str | None) -> str | None:
@@ -50,27 +59,20 @@ def normalize_split_direction(direction: str) -> tuple[str, str]:
 
 
 def pane_id_by_title_marker_output(stdout: str, marker: str) -> str | None:
-    marker = (marker or "").strip()
+    marker = normalized_marker(marker)
     if not marker:
         return None
     exact_matches: list[str] = []
     prefix_matches: list[str] = []
     for line in (stdout or "").splitlines():
-        if not line.strip():
+        parsed = parse_pane_title_line(line)
+        if parsed is None:
             continue
-        if "\t" in line:
-            pid, title = line.split("\t", 1)
-        else:
-            parts = line.split(" ", 1)
-            pid, title = (parts[0], parts[1] if len(parts) > 1 else "")
-        pid = pid.strip()
-        if not looks_like_pane_id(pid):
-            continue
-        normalized_title = (title or "").strip()
-        if normalized_title == marker:
+        pid, title = parsed
+        if title == marker:
             exact_matches.append(pid)
             continue
-        if normalized_title.startswith(marker):
+        if title.startswith(marker):
             prefix_matches.append(pid)
     if len(exact_matches) == 1:
         return exact_matches[0]
@@ -83,3 +85,24 @@ def pane_id_by_title_marker_output(stdout: str, marker: str) -> str | None:
 
 def default_detached_session_name(*, cwd: str, pid: int, now_ts: float) -> str:
     return f"ccb-{Path(cwd).name}-{int(now_ts) % 100000}-{pid}"
+
+
+def normalized_marker(marker: str) -> str:
+    return (marker or "").strip()
+
+
+def parse_pane_title_line(line: str) -> tuple[str, str] | None:
+    if not line.strip():
+        return None
+    pid, title = split_pane_title_line(line)
+    pid = pid.strip()
+    if not looks_like_pane_id(pid):
+        return None
+    return pid, (title or "").strip()
+
+
+def split_pane_title_line(line: str) -> tuple[str, str]:
+    if "\t" in line:
+        return line.split("\t", 1)
+    parts = line.split(" ", 1)
+    return parts[0], parts[1] if len(parts) > 1 else ""

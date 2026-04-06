@@ -9,7 +9,7 @@ from provider_backends.claude.comm import ClaudeCommunicator
 from provider_backends.claude.registry import ClaudeSessionRegistry
 from provider_backends.claude.resolver import resolve_claude_session
 from provider_backends.claude.session import ClaudeProjectSession
-from project_id import normalize_work_dir
+from project.identity import normalize_work_dir
 
 
 def test_claude_session_update_backfills_work_dir_fields(tmp_path: Path) -> None:
@@ -190,6 +190,51 @@ def test_resolve_claude_session_uses_explicit_ccb_session_file(monkeypatch: pyte
     assert resolution.source == "session_file"
     assert resolution.registry is None
     assert resolution.data["work_dir"] == str(project_root)
+
+
+def test_resolve_claude_session_accepts_named_ccb_session_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / ".ccb-workspace.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "record_type": "workspace_binding",
+                "target_project": str(tmp_path / "project"),
+                "project_id": "demo-project",
+                "agent_name": "agent3",
+                "workspace_mode": "linked",
+                "workspace_path": str(workspace),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    project_ccb = tmp_path / "project" / ".ccb"
+    project_ccb.mkdir(parents=True, exist_ok=True)
+    session_file = project_ccb / ".claude-agent3-session"
+    session_file.write_text(
+        json.dumps(
+            {
+                "active": True,
+                "work_dir": str(workspace),
+                "claude_session_id": "claude-agent3-id",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(workspace)
+
+    resolution = resolve_claude_session(workspace)
+
+    assert resolution is not None
+    assert resolution.session_file == session_file
+    assert resolution.data["work_dir"] == str(workspace)
 
 
 def test_resolve_claude_session_without_project_binding_returns_none(

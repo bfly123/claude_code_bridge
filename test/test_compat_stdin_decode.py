@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import locale
 
-import compat
+import stdio_runtime as compat
 
 
 def test_decode_stdin_bytes_prefers_utf8_when_valid(monkeypatch) -> None:

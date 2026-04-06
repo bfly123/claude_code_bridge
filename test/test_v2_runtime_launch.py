@@ -143,7 +143,7 @@ def test_ensure_agent_runtime_launches_named_codex_session(monkeypatch, tmp_path
     assert spawned['args'][0] == __import__('sys').executable
 
 
-def test_ensure_agent_runtime_uses_default_session_name_for_primary_codex(monkeypatch, tmp_path: Path) -> None:
+def test_ensure_agent_runtime_uses_agent_scoped_session_name_for_codex_agent(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / 'repo'
     (project_root / '.ccb').mkdir(parents=True)
     ctx = _context(project_root, ParsedStartCommand(project=None, agent_names=('codex',), restore=False, auto_permission=False))
@@ -176,7 +176,7 @@ def test_ensure_agent_runtime_uses_default_session_name_for_primary_codex(monkey
     result = ensure_agent_runtime(ctx, ctx.command, spec, plan, None)
 
     assert result.binding is not None
-    assert result.binding.session_ref == str(project_root / '.ccb' / '.codex-session')
+    assert result.binding.session_ref == str(project_root / '.ccb' / '.codex-codex-session')
 
 
 def test_ensure_agent_runtime_passes_profile_codex_home_to_bridge(monkeypatch, tmp_path: Path) -> None:
@@ -1068,16 +1068,16 @@ def test_codex_launcher_build_start_cmd_uses_agent_scoped_resume_session(monkeyp
     assert 'agent2-session-id' not in cmd
 
 
-def test_codex_launcher_build_start_cmd_falls_back_to_resume_cmd_in_session_file(tmp_path: Path) -> None:
-    project_root = tmp_path / 'repo-codex-primary'
+def test_codex_launcher_build_start_cmd_reads_resume_cmd_from_agent_scoped_session_file(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-codex-agent'
     runtime_dir = project_root / '.ccb' / 'agents' / 'codex' / 'provider-runtime' / 'codex'
     runtime_dir.mkdir(parents=True, exist_ok=True)
     ccb_dir = project_root / '.ccb'
     ccb_dir.mkdir(parents=True, exist_ok=True)
-    (ccb_dir / '.codex-session').write_text(
+    (ccb_dir / '.codex-codex-session').write_text(
         json.dumps(
             {
-                'codex_start_cmd': 'export CODEX_HOME=/tmp/demo; codex -c disable_paste_burst=true resume primary-session-id',
+                'codex_start_cmd': 'export CODEX_HOME=/tmp/demo; codex -c disable_paste_burst=true resume codex-session-id',
             },
             ensure_ascii=False,
             indent=2,
@@ -1090,7 +1090,7 @@ def test_codex_launcher_build_start_cmd_falls_back_to_resume_cmd_in_session_file
 
     cmd = codex_launcher.build_start_cmd(command, spec, runtime_dir, 'sess-restore')
 
-    assert cmd.endswith('resume primary-session-id')
+    assert cmd.endswith('resume codex-session-id')
 
 
 def test_claude_launcher_build_start_cmd_uses_overlay_and_drops_dead_local_user_proxy(monkeypatch, tmp_path: Path) -> None:

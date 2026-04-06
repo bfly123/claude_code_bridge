@@ -126,6 +126,8 @@ class CcbdApp:
             self.registry,
             runtime_service=self.runtime_service,
             execution_service=self.execution_service,
+            auto_reply_delivery_on_complete=True,
+            require_actionable_runtime_binding_for_execution=True,
             completion_tracker=self.completion_tracker,
             provider_catalog=self.provider_catalog,
             snapshot_writer=self.snapshot_writer,

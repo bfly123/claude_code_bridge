@@ -17,7 +17,7 @@ def publish_registry_binding(
     codex_session_id: str,
     codex_session_path: str,
 ) -> None:
-    registry_path = registry_path_for_session(ccb_session_id)
+    registry_path = registry_path_for_session(ccb_session_id, work_dir=work_dir)
     if not registry_path.exists():
         return
     ok = upsert_registry(

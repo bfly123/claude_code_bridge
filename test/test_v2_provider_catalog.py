@@ -40,7 +40,7 @@ def test_default_provider_catalog_contains_expected_profiles() -> None:
     fake_gemini = catalog.resolve_completion_manifest('fake-gemini', RuntimeMode.PANE_BACKED)
     assert fake_gemini.completion_family is CompletionFamily.ANCHORED_SESSION_STABILITY
     fake_legacy = catalog.resolve_completion_manifest('fake-legacy', RuntimeMode.PANE_BACKED)
-    assert fake_legacy.completion_family is CompletionFamily.LEGACY_TEXT_QUIET
+    assert fake_legacy.completion_family is CompletionFamily.TERMINAL_TEXT_QUIET
 
 
 def test_provider_catalog_rejects_duplicate_provider() -> None:

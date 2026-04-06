@@ -42,7 +42,7 @@ from ccbd.system import utc_now
 from completion.models import CompletionDecision, CompletionFamily
 from completion.tracker import CompletionTrackerService, CompletionTrackerView
 from jobs.store import JobEventStore, JobStore, SubmissionStore
-from mailbox_targets import COMMAND_MAILBOX_ACTOR
+from mailbox_runtime.targets import COMMAND_MAILBOX_ACTOR
 from message_bureau import MessageBureauControlService, MessageBureauFacade
 from provider_core.catalog import ProviderCatalog, build_default_provider_catalog
 from storage.paths import PathLayout
@@ -75,6 +75,8 @@ class JobDispatcher:
         *,
         runtime_service=None,
         execution_service=None,
+        auto_reply_delivery_on_complete: bool = False,
+        require_actionable_runtime_binding_for_execution: bool = False,
         completion_tracker: CompletionTrackerService | None = None,
         provider_catalog: ProviderCatalog | None = None,
         job_store: JobStore | None = None,
@@ -90,6 +92,10 @@ class JobDispatcher:
         self._registry = registry
         self._runtime_service = runtime_service
         self._execution_service = execution_service
+        self._auto_reply_delivery_on_complete = bool(auto_reply_delivery_on_complete)
+        self._require_actionable_runtime_binding_for_execution = bool(
+            require_actionable_runtime_binding_for_execution
+        )
         self._provider_catalog = provider_catalog or build_default_provider_catalog()
         self._completion_tracker = completion_tracker
         self._job_store = job_store or JobStore(layout)

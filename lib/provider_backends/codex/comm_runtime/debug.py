@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import sys
 
-from env_utils import env_int
+from runtime_env import env_int
 
 
 def debug_enabled() -> bool:

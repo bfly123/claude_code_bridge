@@ -87,8 +87,21 @@ def test_bootstrap_project_blocks_nested_auto_create_when_parent_anchor_exists(t
     nested_root.mkdir(parents=True)
     (project_root / '.ccb').mkdir()
 
-    with pytest.raises(ValueError, match='auto-create blocked'):
+    with pytest.raises(ValueError, match='parent project anchor already exists'):
         bootstrap_project(nested_root)
+
+
+def test_resolve_prefers_local_anchor_over_parent_anchor(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    nested_root = project_root / 'nested'
+    nested_root.mkdir(parents=True)
+    (project_root / '.ccb').mkdir()
+    (nested_root / '.ccb').mkdir()
+
+    context = ProjectResolver().resolve(nested_root, allow_ancestor_anchor=False)
+
+    assert context.project_root == nested_root.resolve()
+    assert context.source == 'anchor'
 
 
 def test_bootstrap_project_blocks_home_directory_without_override(
