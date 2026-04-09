@@ -10,7 +10,7 @@ import tarfile
 
 from ..install import download_tarball, pick_temp_base_dir, safe_extract_tar
 from ..versioning import REPO_URL, format_version_info, get_available_versions, get_version_info
-from .matching import find_matching_version
+from .matching import find_matching_version, latest_version
 
 
 def cmd_update(args, *, script_root: Path) -> int:
@@ -27,7 +27,7 @@ def cmd_update(args, *, script_root: Path) -> int:
     if target_version:
         print(f"🔄 Updating to v{target_version}...")
     else:
-        print("🔄 Checking for updates...")
+        print("🔄 Checking for release updates...")
 
     git_result = _try_git_update(install_dir, target_version=target_version, old_info=old_info)
     if git_result is not None:
@@ -38,7 +38,11 @@ def cmd_update(args, *, script_root: Path) -> int:
     except Exception as exc:
         print(str(exc))
         return 1
-    return _update_via_tarball(tmp_base, install_dir=install_dir, target_version=target_version, old_info=old_info)
+    resolved_target = target_version or _resolve_latest_release_version()
+    if not resolved_target:
+        print("❌ Could not determine latest release version")
+        return 1
+    return _update_via_tarball(tmp_base, install_dir=install_dir, target_version=resolved_target, old_info=old_info)
 
 
 def _resolve_target_version(args) -> str | bool | None:
@@ -114,17 +118,21 @@ def _try_git_update(install_dir: Path, *, target_version: str | None, old_info: 
     return 0
 
 
+def _resolve_latest_release_version() -> str | None:
+    versions = get_available_versions()
+    return latest_version(versions)
+
+
 def _update_via_tarball(tmp_base: Path, *, install_dir: Path, target_version: str | None, old_info: dict[str, object]) -> int:
-    if target_version:
-        tarball_url = f"{REPO_URL}/archive/refs/tags/v{target_version}.tar.gz"
-        extracted_name = f"claude_code_bridge-{target_version}"
-    else:
-        tarball_url = f"{REPO_URL}/archive/refs/heads/main.tar.gz"
-        extracted_name = "claude_code_bridge-main"
+    if not target_version:
+        print("❌ Update failed: no release version selected")
+        return 1
+    tarball_url = f"{REPO_URL}/archive/refs/tags/v{target_version}.tar.gz"
+    extracted_name = f"claude_code_bridge-{target_version}"
 
     tmp_dir = tmp_base / "ccb_update"
     try:
-        print(f"📥 Downloading {'v' + target_version if target_version else 'latest version'}...")
+        print(f"📥 Downloading v{target_version}...")
         if tmp_dir.exists():
             shutil.rmtree(tmp_dir)
         tmp_dir.mkdir(parents=True, exist_ok=True)

@@ -14,6 +14,13 @@ def test_find_matching_version_prefers_highest_prefix_match() -> None:
     assert management.find_matching_version("6", versions) is None
 
 
+def test_latest_version_and_is_newer_version() -> None:
+    versions = ["4.1.0", "5.0.0", "4.9.9", "5.2.1"]
+    assert management.latest_version(versions) == "5.2.1"
+    assert management.is_newer_version("5.2.1", "5.0.0") is True
+    assert management.is_newer_version("5.2.1", "5.2.1") is False
+
+
 def test_format_version_info_handles_missing_fields() -> None:
     assert management.format_version_info({"version": "5.2.8", "commit": "abc1234", "date": "2026-03-22"}) == "v5.2.8 abc1234 2026-03-22"
     assert management.format_version_info({"version": None, "commit": None, "date": None}) == "unknown"

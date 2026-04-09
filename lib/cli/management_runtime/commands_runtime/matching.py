@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 
+def version_key(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in str(version or "").split(".") if part.isdigit())
+
+
 def find_matching_version(target: str, versions: list[str]) -> str | None:
     target_parts = target.split(".")
-
-    def version_key(version: str):
-        parts = version.split(".")
-        return tuple(int(part) for part in parts if part.isdigit())
 
     matching = []
     for version in versions:
@@ -19,4 +19,13 @@ def find_matching_version(target: str, versions: list[str]) -> str | None:
     return matching[0]
 
 
-__all__ = ['find_matching_version']
+def latest_version(versions: list[str]) -> str | None:
+    ordered = sorted({str(version) for version in versions if str(version).strip()}, key=version_key, reverse=True)
+    return ordered[0] if ordered else None
+
+
+def is_newer_version(candidate: str, current: str) -> bool:
+    return version_key(candidate) > version_key(current)
+
+
+__all__ = ['find_matching_version', 'is_newer_version', 'latest_version', 'version_key']
