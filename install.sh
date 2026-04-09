@@ -79,6 +79,21 @@ msg() {
     root_error)
       en_msg="ERROR: Do not run as root/sudo. Please run as normal user."
       zh_msg="错误：请勿以 root/sudo 身份运行。请使用普通用户执行。" ;;
+    install_notice_source_title)
+      en_msg="WARN: Development/source install detected"
+      zh_msg="警告：检测到开发源码安装" ;;
+    install_notice_source_body)
+      en_msg="This is a development install, not an official release package."
+      zh_msg="这是开发安装，不是正式 release 包。" ;;
+    install_notice_release)
+      en_msg="INFO: Official release package install detected"
+      zh_msg="信息：检测到正式 release 包安装" ;;
+    install_notice_preview_title)
+      en_msg="WARN: Preview release package install detected"
+      zh_msg="警告：检测到预览版 release 包安装" ;;
+    install_notice_preview_body)
+      en_msg="This package was built from a preview/dirty source snapshot, not an official stable release."
+      zh_msg="该安装包来自预览或脏工作区快照，不是正式稳定 release。" ;;
     *)
       en_msg="$key"
       zh_msg="$key" ;;
@@ -164,6 +179,11 @@ Optional environment variables:
   CODEX_CLAUDE_COMMAND_DIR Custom Claude commands directory (default: auto-detect)
   CCB_DROID_AUTOINSTALL    Auto-register Droid MCP tools if droid exists (default: 1)
   CCB_DROID_AUTOINSTALL_FORCE Re-register Droid MCP tools (default: 0)
+  CCB_BUILD_CHANNEL        Override build channel metadata (e.g. stable, preview, dev)
+  CCB_BUILD_PLATFORM       Override build platform metadata (default: detected platform)
+  CCB_BUILD_ARCH           Override build arch metadata (default: uname -m)
+  CCB_BUILD_TIME           Override build timestamp metadata (default: current UTC time)
+  CCB_SOURCE_KIND          Override source kind metadata (default: source if .git exists, else release)
   CCB_CLAUDE_MD_MODE       CLAUDE.md injection mode: "inline" (default) or "route"
                            inline = full config in CLAUDE.md (~57 lines)
                            route  = minimal pointer in CLAUDE.md, full config in ~/.claude/rules/ccb-config.md
@@ -344,6 +364,216 @@ get_wsl_version() {
   fi
 }
 
+current_utc_timestamp() {
+  date -u +"%Y-%m-%dT%H:%M:%SZ"
+}
+
+read_embedded_assignment() {
+  local file="$1"
+  local key="$2"
+  if [[ ! -f "$file" ]]; then
+    return 0
+  fi
+  if ! pick_any_python_bin; then
+    return 0
+  fi
+  "$PYTHON_BIN" - <<PY
+from pathlib import Path
+
+text = Path("$file").read_text(encoding="utf-8", errors="replace")
+target = "${key}"
+for raw_line in text.splitlines():
+    line = raw_line.strip()
+    if "=" not in line:
+        continue
+    name, value = line.split("=", 1)
+    if name.strip() != target:
+        continue
+    resolved = value.strip().strip('"').strip("'")
+    if resolved:
+        print(resolved)
+    break
+PY
+}
+
+read_source_build_info_field() {
+  local key="$1"
+  if [[ ! -f "$REPO_ROOT/BUILD_INFO.json" ]]; then
+    return 0
+  fi
+  if ! pick_any_python_bin; then
+    return 0
+  fi
+  "$PYTHON_BIN" - <<PY
+from pathlib import Path
+import json
+
+payload = json.loads(Path("$REPO_ROOT/BUILD_INFO.json").read_text(encoding="utf-8", errors="replace"))
+value = payload.get("${key}") if isinstance(payload, dict) else None
+if value not in (None, ""):
+    print(str(value).strip())
+PY
+}
+
+resolve_install_version() {
+  if [[ -n "${CCB_BUILD_VERSION:-}" ]]; then
+    echo "$CCB_BUILD_VERSION"
+    return
+  fi
+  local build_info_version
+  build_info_version="$(read_source_build_info_field "version")"
+  if [[ -n "$build_info_version" ]]; then
+    echo "$build_info_version"
+    return
+  fi
+  if [[ -f "$REPO_ROOT/VERSION" ]]; then
+    tr -d '[:space:]' < "$REPO_ROOT/VERSION"
+    return
+  fi
+  read_embedded_assignment "$REPO_ROOT/ccb" "VERSION"
+}
+
+resolve_source_kind() {
+  if [[ -n "${CCB_SOURCE_KIND:-}" ]]; then
+    echo "$CCB_SOURCE_KIND"
+    return
+  fi
+  local build_info_source_kind
+  build_info_source_kind="$(read_source_build_info_field "source_kind")"
+  if [[ -n "$build_info_source_kind" ]]; then
+    echo "$build_info_source_kind"
+    return
+  fi
+  if [[ -d "$REPO_ROOT/.git" ]]; then
+    echo "source"
+  else
+    echo "release"
+  fi
+}
+
+resolve_build_channel() {
+  if [[ -n "${CCB_BUILD_CHANNEL:-}" ]]; then
+    echo "$CCB_BUILD_CHANNEL"
+    return
+  fi
+  local build_info_channel
+  build_info_channel="$(read_source_build_info_field "channel")"
+  if [[ -n "$build_info_channel" ]]; then
+    echo "$build_info_channel"
+    return
+  fi
+  local source_kind
+  source_kind="$(resolve_source_kind)"
+  if [[ "$source_kind" == "source" ]]; then
+    echo "dev"
+  else
+    echo "stable"
+  fi
+}
+
+resolve_install_mode() {
+  local source_kind
+  source_kind="$(resolve_source_kind)"
+  if [[ "$source_kind" == "source" ]]; then
+    echo "source"
+  else
+    echo "release"
+  fi
+}
+
+print_install_identity_summary() {
+  local install_mode source_kind channel version
+  install_mode="$(resolve_install_mode)"
+  source_kind="$(resolve_source_kind)"
+  channel="$(resolve_build_channel)"
+  version="$(resolve_install_version)"
+  echo "   install_mode=$install_mode"
+  echo "   source_kind=$source_kind"
+  echo "   channel=$channel"
+  if [[ -n "$version" ]]; then
+    echo "   version=$version"
+  fi
+}
+
+print_install_identity_notice() {
+  local source_kind
+  source_kind="$(resolve_source_kind)"
+  case "$source_kind" in
+    source)
+      msg install_notice_source_title
+      echo "   $(msg install_notice_source_body)"
+      ;;
+    preview)
+      msg install_notice_preview_title
+      echo "   $(msg install_notice_preview_body)"
+      ;;
+    *)
+      msg install_notice_release
+      ;;
+  esac
+}
+
+write_install_metadata() {
+  local version commit date build_time installed_at platform_name arch_name channel source_kind install_mode
+  version="$(resolve_install_version)"
+  commit="$(read_embedded_assignment "$INSTALL_PREFIX/ccb" "GIT_COMMIT")"
+  date="$(read_embedded_assignment "$INSTALL_PREFIX/ccb" "GIT_DATE")"
+  if [[ -z "$commit" ]]; then
+    commit="$(read_source_build_info_field "commit")"
+  fi
+  if [[ -z "$date" ]]; then
+    date="$(read_source_build_info_field "date")"
+  fi
+  build_time="${CCB_BUILD_TIME:-$(read_source_build_info_field "build_time")}"
+  if [[ -z "$build_time" ]]; then
+    build_time="$(current_utc_timestamp)"
+  fi
+  installed_at="$(current_utc_timestamp)"
+  platform_name="${CCB_BUILD_PLATFORM:-$(read_source_build_info_field "platform")}"
+  if [[ -z "$platform_name" ]]; then
+    platform_name="$(detect_platform)"
+  fi
+  arch_name="${CCB_BUILD_ARCH:-$(read_source_build_info_field "arch")}"
+  if [[ -z "$arch_name" ]]; then
+    arch_name="$(uname -m 2>/dev/null || echo unknown)"
+  fi
+  source_kind="$(resolve_source_kind)"
+  channel="$(resolve_build_channel)"
+  install_mode="$(resolve_install_mode)"
+
+  if ! pick_any_python_bin; then
+    echo "WARN: python required to write VERSION/BUILD_INFO metadata"
+    return
+  fi
+
+  "$PYTHON_BIN" - <<PY
+from pathlib import Path
+import json
+
+install_prefix = Path("$INSTALL_PREFIX")
+payload = {
+    "version": ${version@Q},
+    "commit": ${commit@Q},
+    "date": ${date@Q},
+    "build_time": ${build_time@Q},
+    "platform": ${platform_name@Q},
+    "arch": ${arch_name@Q},
+    "channel": ${channel@Q},
+    "source_kind": ${source_kind@Q},
+    "install_mode": ${install_mode@Q},
+    "installed_at": ${installed_at@Q},
+}
+
+version_text = str(payload["version"] or "").strip()
+if version_text:
+    (install_prefix / "VERSION").write_text(version_text + "\\n", encoding="utf-8")
+(install_prefix / "BUILD_INFO.json").write_text(
+    json.dumps(payload, ensure_ascii=True, indent=2) + "\\n",
+    encoding="utf-8",
+)
+PY
+}
+
 check_wsl_compatibility() {
   if is_wsl; then
     local ver
@@ -484,13 +714,19 @@ copy_project() {
     git_date=$(git -C "$REPO_ROOT" log -1 --format='%cs' 2>/dev/null || echo "")
   fi
 
-  # Method 2: From environment variables (set by ccb update)
+  # Method 2: From source BUILD_INFO.json (release artifact source of truth)
+  if [[ -z "$git_commit" ]]; then
+    git_commit="$(read_source_build_info_field "commit")"
+    git_date="$(read_source_build_info_field "date")"
+  fi
+
+  # Method 3: From environment variables (set by ccb update)
   if [[ -z "$git_commit" && -n "${CCB_GIT_COMMIT:-}" ]]; then
     git_commit="$CCB_GIT_COMMIT"
     git_date="${CCB_GIT_DATE:-}"
   fi
 
-  # Method 3: From GitHub API (fallback)
+  # Method 4: From GitHub API (fallback)
   if [[ -z "$git_commit" ]] && command -v curl >/dev/null 2>&1; then
     local api_response
     api_response=$(curl -fsSL "https://api.github.com/repos/bfly123/claude_code_bridge/commits/main" 2>/dev/null || echo "")
@@ -1407,6 +1643,7 @@ install_all() {
   remove_codex_mcp
   cleanup_legacy_files
   copy_project
+  write_install_metadata
   install_bin_links
   ensure_path_configured
   install_claude_commands
@@ -1422,6 +1659,7 @@ install_all() {
   echo "OK: Installation complete"
   echo "   Project dir    : $INSTALL_PREFIX"
   echo "   Executable dir : $BIN_DIR"
+  print_install_identity_summary
   echo "   Claude commands updated"
   local md_mode="${CCB_CLAUDE_MD_MODE:-inline}"
   if [[ "$md_mode" == "route" ]]; then
@@ -1432,6 +1670,7 @@ install_all() {
   echo "   AGENTS.md configured with review rubrics"
   echo "   .clinerules configured with role assignments"
   echo "   Global settings.json permissions added"
+  print_install_identity_notice
 }
 
 uninstall_claude_md_config() {
@@ -1777,4 +2016,6 @@ main() {
   esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
