@@ -9,7 +9,6 @@ from ccbd.socket_client import CcbdClientError
 from cli.ask_sender import resolve_ask_sender
 from cli.ask_usage import ask_wait_poll_interval_seconds, ask_wait_timeout_seconds
 from cli.render import render_watch_batch, write_lines
-from mailbox_runtime.targets import COMMAND_MAILBOX_ACTOR
 
 from .ask_runtime import AskSummary, exit_code_for_ask_status, write_ask_output
 from .ask_runtime.submission import submit_ask as _submit_ask_impl
@@ -24,7 +23,6 @@ def submit_ask(context, command) -> AskSummary:
         load_project_config_fn=load_project_config,
         resolve_ask_sender_fn=resolve_ask_sender,
         connect_mounted_daemon_fn=connect_mounted_daemon,
-        command_mailbox_actor=COMMAND_MAILBOX_ACTOR,
     )
 
 

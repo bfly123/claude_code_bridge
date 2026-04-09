@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from provider_backends.claude.launcher_runtime.env import build_claude_env_prefix, claude_user_base_url, write_claude_settings_overlay
+from provider_profiles.models import ResolvedProviderProfile
 
 
 def test_build_claude_env_prefix_unsets_dead_local_base_url_from_env() -> None:
@@ -25,8 +26,14 @@ def test_build_claude_env_prefix_uses_settings_base_url_when_inheritable() -> No
     assert result == "export ANTHROPIC_BASE_URL=https://api.example.test"
 
 
-def test_write_claude_settings_overlay_strips_env_section(tmp_path) -> None:
-    settings_path = tmp_path / "settings.json"
+def test_write_claude_settings_overlay_returns_none_without_agent_settings(tmp_path) -> None:
+    assert write_claude_settings_overlay(tmp_path, profile=None) is None
+
+
+def test_write_claude_settings_overlay_strips_env_section_from_agent_settings(tmp_path) -> None:
+    profile_root = tmp_path / "profile"
+    settings_path = profile_root / "settings.json"
+    profile_root.mkdir(parents=True, exist_ok=True)
     settings_path.write_text(
         json.dumps(
             {
@@ -37,7 +44,15 @@ def test_write_claude_settings_overlay_strips_env_section(tmp_path) -> None:
         encoding="utf-8",
     )
 
-    overlay = write_claude_settings_overlay(tmp_path, user_settings_path=settings_path)
+    overlay = write_claude_settings_overlay(
+        tmp_path,
+        profile=ResolvedProviderProfile(
+            provider='claude',
+            agent_name='agent1',
+            mode='inherit',
+            profile_root=str(profile_root),
+        ),
+    )
 
     assert overlay is not None
     payload = json.loads(overlay.read_text(encoding="utf-8"))

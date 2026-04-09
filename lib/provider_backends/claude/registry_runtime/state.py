@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import threading
 from typing import Optional
 
 from provider_backends.claude.session import ClaudeProjectSession
@@ -24,3 +25,18 @@ class SessionEntry:
 class WatcherEntry:
     watcher: SessionFileWatcher
     keys: set[str] = field(default_factory=set)
+
+
+@dataclass
+class RegistryRuntimeState:
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    stop: threading.Event = field(default_factory=threading.Event)
+    sessions: dict[str, SessionEntry] = field(default_factory=dict)
+    watchers: dict[str, WatcherEntry] = field(default_factory=dict)
+    pending_logs: dict[str, float] = field(default_factory=dict)
+    log_last_check: dict[str, float] = field(default_factory=dict)
+    monitor_thread: threading.Thread | None = None
+    root_watcher: SessionFileWatcher | None = None
+
+
+__all__ = ['RegistryRuntimeState', 'SessionEntry', 'WatcherEntry']

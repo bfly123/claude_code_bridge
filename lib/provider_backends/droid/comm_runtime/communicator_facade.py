@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
-from provider_core.runtime_specs import provider_marker_prefix
 from terminal_runtime import get_backend_for_session, get_pane_id_from_session
 
+from .communicator_state import ensure_log_reader, initialize_state
 
 def _droid_comm_module():
     from .. import comm as droid_comm_module
@@ -42,21 +41,11 @@ class DroidCommunicator:
     """Communicate with Droid via terminal and read replies from session logs."""
 
     def __init__(self, lazy_init: bool = False):
-        self.session_info = self._load_session_info()
-        if not self.session_info:
-            raise RuntimeError("❌ No active Droid session found. Run 'ccb droid' (or add droid to ccb.config) first")
-
-        self.ccb_session_id = str(self.session_info.get("ccb_session_id") or "").strip()
-        self.terminal = self.session_info.get("terminal", "tmux")
-        self.pane_id = get_pane_id_from_session(self.session_info) or ""
-        self.pane_title_marker = self.session_info.get("pane_title_marker") or ""
-        self.backend = get_backend_for_session(self.session_info)
-        self.timeout = int(os.environ.get("DROID_SYNC_TIMEOUT", os.environ.get("CCB_SYNC_TIMEOUT", "3600")))
-        self.marker_prefix = provider_marker_prefix("droid")
-        self.project_session_file = self.session_info.get("_session_file")
-
-        self._log_reader = None
-        self._log_reader_primed = False
+        initialize_state(
+            self,
+            get_pane_id_from_session_fn=get_pane_id_from_session,
+            get_backend_for_session_fn=get_backend_for_session,
+        )
 
         self._publish_registry()
 
@@ -75,20 +64,7 @@ class DroidCommunicator:
         return self._log_reader
 
     def _ensure_log_reader(self) -> None:
-        if self._log_reader is not None:
-            return
-        work_dir_hint = self.session_info.get("work_dir")
-        log_work_dir = Path(work_dir_hint) if isinstance(work_dir_hint, str) and work_dir_hint else None
-        self._log_reader = _droid_log_reader_cls()(work_dir=log_work_dir)
-        preferred_session = self.session_info.get("droid_session_path")
-        if preferred_session:
-            self._log_reader.set_preferred_session(Path(str(preferred_session)))
-        session_id = self.session_info.get("droid_session_id")
-        if session_id:
-            self._log_reader.set_session_id_hint(session_id)
-        if not self._log_reader_primed:
-            self._prime_log_binding()
-            self._log_reader_primed = True
+        ensure_log_reader(self, log_reader_cls=_droid_log_reader_cls())
 
     def _find_session_file(self) -> Path | None:
         return _find_droid_session_file_proxy(Path.cwd())

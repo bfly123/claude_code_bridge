@@ -16,6 +16,7 @@ def poll_runtime_state(submission: ProviderSubmission) -> dict[str, object]:
         ),
         "next_seq": int(runtime_state.get("next_seq", 1)),
         "anchor_seen": bool(runtime_state.get("anchor_seen", False)),
+        "no_wrap": bool(runtime_state.get("no_wrap", False)),
         "reply_buffer": str(runtime_state.get("reply_buffer") or ""),
         "raw_buffer": str(runtime_state.get("raw_buffer") or ""),
         "session_path": str(runtime_state.get("session_path") or ""),
@@ -47,7 +48,7 @@ def apply_session_rotation(
     )
     runtime["next_seq"] = int(runtime["next_seq"]) + 1
     runtime["session_path"] = new_session_path
-    runtime["anchor_seen"] = False
+    runtime["anchor_seen"] = bool(runtime["no_wrap"])
     runtime["reply_buffer"] = ""
     runtime["raw_buffer"] = ""
     runtime["done_seen"] = False

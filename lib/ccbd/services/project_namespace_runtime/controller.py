@@ -5,15 +5,17 @@ from terminal_runtime import TmuxBackend
 
 from ccbd.system import utc_now
 
-from .backend import build_backend, session_root_pane
+from .backend import build_backend, session_root_pane, session_window_target, window_root_pane
+from .controller_state import ProjectNamespaceControllerState, ProjectNamespaceControllerStateMixin
 from .destroy import destroy_project_namespace
 from .ensure import ensure_project_namespace
 from .models import ProjectNamespace
+from .reflow import reflow_project_workspace
 from .records import namespace_from_state
 from ..project_namespace_state import ProjectNamespaceEventStore, ProjectNamespaceStateStore
 
 
-class ProjectNamespaceController:
+class ProjectNamespaceController(ProjectNamespaceControllerStateMixin):
     def __init__(
         self,
         layout: PathLayout,
@@ -23,19 +25,23 @@ class ProjectNamespaceController:
         backend_factory=None,
         state_store: ProjectNamespaceStateStore | None = None,
         event_store: ProjectNamespaceEventStore | None = None,
-        layout_version: int = 2,
+        layout_version: int = 3,
     ) -> None:
-        self._layout = layout
-        self._project_id = str(project_id or '').strip()
-        if not self._project_id:
+        resolved_project_id = str(project_id or '').strip()
+        if not resolved_project_id:
             raise ValueError('project_id cannot be empty')
-        self._clock = clock
-        self._backend_factory = backend_factory or TmuxBackend
-        self._state_store = state_store or ProjectNamespaceStateStore(layout)
-        self._event_store = event_store or ProjectNamespaceEventStore(layout)
-        self._layout_version = int(layout_version)
-        if self._layout_version <= 0:
+        resolved_layout_version = int(layout_version)
+        if resolved_layout_version <= 0:
             raise ValueError('layout_version must be positive')
+        self._runtime_state = ProjectNamespaceControllerState(
+            layout=layout,
+            project_id=resolved_project_id,
+            clock=clock,
+            backend_factory=backend_factory or TmuxBackend,
+            state_store=state_store or ProjectNamespaceStateStore(layout),
+            event_store=event_store or ProjectNamespaceEventStore(layout),
+            layout_version=resolved_layout_version,
+        )
 
     def load(self) -> ProjectNamespace | None:
         state = self._state_store.load()
@@ -61,11 +67,29 @@ class ProjectNamespaceController:
         del force
         return destroy_project_namespace(self, reason=reason)
 
+    def reflow_workspace(
+        self,
+        *,
+        layout_signature: str | None = None,
+        reason: str | None = None,
+    ) -> ProjectNamespace:
+        return reflow_project_workspace(
+            self,
+            layout_signature=layout_signature,
+            reason=reason,
+        )
+
     def root_pane_id(self, namespace: ProjectNamespace | None = None) -> str:
         current = namespace or self.load()
         if current is None:
             raise RuntimeError('project namespace is not available')
         backend = build_backend(self._backend_factory, socket_path=current.tmux_socket_path)
+        workspace_window_name = str(current.workspace_window_name or '').strip()
+        if workspace_window_name:
+            return window_root_pane(
+                backend,
+                target_window=session_window_target(current.tmux_session_name, workspace_window_name),
+            )
         return session_root_pane(backend, current.tmux_session_name)
 
 

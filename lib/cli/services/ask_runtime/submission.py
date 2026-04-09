@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Collection
 
+from agents.models import AgentValidationError
 from ccbd.api_models import DeliveryScope, MessageEnvelope
+from mailbox_runtime.targets import normalize_actor_name
 
 from .models import AskSummary
 
@@ -17,14 +19,13 @@ def submit_ask(
     load_project_config_fn: Callable,
     resolve_ask_sender_fn: Callable,
     connect_mounted_daemon_fn: Callable,
-    command_mailbox_actor: str,
 ) -> AskSummary:
     config = load_project_config_fn(context.project.project_root).config
-    normalized_target = _normalize_actor(command.target)
+    normalized_target = _normalize_target(command.target)
     _validate_target(normalized_target, config.agents)
     sender = resolve_ask_sender_fn(context, command.sender)
-    normalized_sender = _normalize_actor(sender)
-    _validate_sender(normalized_sender, config.agents, command_mailbox_actor)
+    normalized_sender = _normalize_sender(sender)
+    _validate_sender(normalized_sender, config.agents)
     handle = connect_mounted_daemon_fn(context, allow_restart_stale=True)
     assert handle.client is not None
     payload = handle.client.submit(
@@ -43,8 +44,18 @@ def submit_ask(
     return _summary_from_payload(context.project.project_id, payload)
 
 
-def _normalize_actor(value: str | None) -> str:
-    return str(value or '').strip().lower()
+def _normalize_sender(value: str | None) -> str:
+    try:
+        return normalize_actor_name(value)
+    except AgentValidationError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+def _normalize_target(value: str | None) -> str:
+    normalized = str(value or '').strip().lower()
+    if normalized == 'all':
+        return normalized
+    return _normalize_sender(normalized)
 
 
 def _validate_target(target: str, configured_agents: Collection[str]) -> None:
@@ -52,8 +63,8 @@ def _validate_target(target: str, configured_agents: Collection[str]) -> None:
         raise ValueError(f'unknown agent: {target}')
 
 
-def _validate_sender(sender: str, configured_agents: Collection[str], command_mailbox_actor: str) -> None:
-    if sender in _SYSTEM_SENDERS or sender == command_mailbox_actor:
+def _validate_sender(sender: str, configured_agents: Collection[str]) -> None:
+    if sender in _SYSTEM_SENDERS:
         return
     if sender in configured_agents:
         return
@@ -61,7 +72,7 @@ def _validate_sender(sender: str, configured_agents: Collection[str], command_ma
 
 
 def _delivery_scope(target: str | None) -> DeliveryScope:
-    return DeliveryScope.BROADCAST if _normalize_actor(target) == 'all' else DeliveryScope.SINGLE
+    return DeliveryScope.BROADCAST if _normalize_target(target) == 'all' else DeliveryScope.SINGLE
 
 
 def _summary_from_payload(project_id: str, payload: dict) -> AskSummary:

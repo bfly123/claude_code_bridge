@@ -3,24 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from provider_core.protocol import (
-    DONE_PREFIX,
     REQ_ID_PREFIX,
-    is_done_text,
     make_req_id,
-    strip_done_text,
 )
 
 
 def wrap_opencode_prompt(message: str, req_id: str) -> str:
     message = (message or "").rstrip()
-    return (
-        f"{REQ_ID_PREFIX} {req_id}\n\n"
-        f"{message}\n\n"
-        "IMPORTANT:\n"
-        "- Reply normally, in English.\n"
-        "- End your reply with this exact final line (verbatim, on its own line):\n"
-        f"{DONE_PREFIX} {req_id}\n"
-    )
+    return f"{REQ_ID_PREFIX} {req_id}\n\n{message}\n"
 
 
 @dataclass(frozen=True)

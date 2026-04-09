@@ -42,6 +42,7 @@ class CodexProviderAdapter:
             'request_anchor': request_anchor_from_runtime_state(submission.runtime_state, fallback=submission.job_id),
             'next_seq': submission.runtime_state.get('next_seq'),
             'anchor_seen': submission.runtime_state.get('anchor_seen'),
+            'no_wrap': submission.runtime_state.get('no_wrap'),
             'bound_turn_id': submission.runtime_state.get('bound_turn_id'),
             'bound_task_id': submission.runtime_state.get('bound_task_id'),
             'reply_buffer': submission.runtime_state.get('reply_buffer'),

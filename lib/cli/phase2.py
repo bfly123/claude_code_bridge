@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Sequence, TextIO
 
-from agents.config_loader import ConfigValidationError, ensure_bootstrap_project_config
+from agents.config_loader import ensure_bootstrap_project_config
 from cli.context import CliContextBuilder
-from cli.models import ParsedOpenCommand
-from cli.parser import CliParser, CliUsageError
+from cli.phase2_errors import handle_phase2_exception, parse_phase2_command
 from cli.phase2_runtime import (
     build_context as _build_context_impl,
     confirm_project_reset as _confirm_project_reset_impl,
@@ -18,32 +15,7 @@ from cli.phase2_runtime import (
     should_auto_open_after_start as _should_auto_open_after_start_impl,
     stream_is_tty as _stream_is_tty_impl,
 )
-from cli.render import (
-    render_ack,
-    render_ask,
-    render_cancel,
-    render_config_validate,
-    render_doctor,
-    render_doctor_bundle,
-    render_fault_arm,
-    render_fault_clear,
-    render_fault_list,
-    render_inbox,
-    render_kill,
-    render_logs,
-    render_mapping,
-    render_open,
-    render_pend,
-    render_ps,
-    render_queue,
-    render_resubmit,
-    render_retry,
-    render_start,
-    render_trace,
-    render_wait,
-    render_watch_batch,
-    write_lines,
-)
+from cli.phase2_services import build_phase2_dispatch_services
 from cli.services.ack import ack_reply
 from cli.services.ask import exit_code_for_ask_status, submit_ask, watch_ask_job, write_ask_output
 from cli.services.cancel import cancel_job
@@ -69,24 +41,6 @@ from cli.services.watch import watch_target
 from project.discovery import ProjectDiscoveryError
 
 
-def _error_prefix(*, kind: str, config_command: bool) -> str:
-    if kind == 'invalid':
-        return 'config_status: invalid' if config_command else 'command_status: invalid'
-    return 'config_status: invalid' if config_command else 'command_status: failed'
-
-
-def _print_phase2_error(err: TextIO, *, kind: str, config_command: bool, exc: Exception) -> None:
-    print(f'{_error_prefix(kind=kind, config_command=config_command)}\nerror: {exc}', file=err)
-
-
-def _parse_phase2_command(argv: Sequence[str], *, config_command: bool, err: TextIO):
-    try:
-        return CliParser().parse(list(argv))
-    except CliUsageError as exc:
-        _print_phase2_error(err, kind='invalid', config_command=config_command, exc=exc)
-        return None
-
-
 def maybe_handle_phase2(
     argv: Sequence[str],
     *,
@@ -97,7 +51,7 @@ def maybe_handle_phase2(
     config_command = _looks_like_config_validate(argv)
     out = stdout or sys.stdout
     err = stderr or sys.stderr
-    command = _parse_phase2_command(argv, config_command=config_command, err=err)
+    command = parse_phase2_command(argv, config_command=config_command, err=err)
     if command is None:
         return 2
 
@@ -105,24 +59,9 @@ def maybe_handle_phase2(
         context = _build_context(command, cwd=cwd, out=out)
         if command.kind != 'config-validate':
             ensure_bootstrap_project_config(context.project.project_root)
-        code = _dispatch(context, command, out)
-    except ProjectDiscoveryError as exc:
-        _print_phase2_error(
-            err,
-            kind='failed',
-            config_command=command.kind == 'config-validate',
-            exc=exc,
-        )
-        return 2 if command.kind == 'config-validate' else 1
-    except (ConfigValidationError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as exc:
-        _print_phase2_error(
-            err,
-            kind='failed',
-            config_command=command.kind == 'config-validate',
-            exc=exc,
-        )
-        return 1
-    return code
+        return _dispatch(context, command, out)
+    except Exception as exc:
+        return handle_phase2_exception(err, command_kind=command.kind, exc=exc)
 
 
 def _build_context(command, *, cwd: Path | None, out: TextIO):
@@ -151,8 +90,8 @@ def _dispatch(context, command, out: TextIO) -> int:
 
 
 def _dispatch_services():
-    return SimpleNamespace(
-        ParsedOpenCommand=ParsedOpenCommand,
+    return build_phase2_dispatch_services(
+        should_auto_open_after_start=_should_auto_open_after_start,
         ack_reply=ack_reply,
         agent_logs=agent_logs,
         arm_fault_rule=arm_fault_rule,
@@ -169,32 +108,8 @@ def _dispatch_services():
         ping_target=ping_target,
         ps_summary=ps_summary,
         queue_target=queue_target,
-        render_ack=render_ack,
-        render_ask=render_ask,
-        render_cancel=render_cancel,
-        render_config_validate=render_config_validate,
-        render_doctor=render_doctor,
-        render_doctor_bundle=render_doctor_bundle,
-        render_fault_arm=render_fault_arm,
-        render_fault_clear=render_fault_clear,
-        render_fault_list=render_fault_list,
-        render_inbox=render_inbox,
-        render_kill=render_kill,
-        render_logs=render_logs,
-        render_mapping=render_mapping,
-        render_open=render_open,
-        render_pend=render_pend,
-        render_ps=render_ps,
-        render_queue=render_queue,
-        render_resubmit=render_resubmit,
-        render_retry=render_retry,
-        render_start=render_start,
-        render_trace=render_trace,
-        render_wait=render_wait,
-        render_watch_batch=render_watch_batch,
         resubmit_message=resubmit_message,
         retry_attempt=retry_attempt,
-        should_auto_open_after_start=_should_auto_open_after_start,
         start_agents=start_agents,
         submit_ask=submit_ask,
         trace_target=trace_target,
@@ -203,7 +118,6 @@ def _dispatch_services():
         watch_ask_job=watch_ask_job,
         watch_target=watch_target,
         write_ask_output=write_ask_output,
-        write_lines=write_lines,
     )
 
 

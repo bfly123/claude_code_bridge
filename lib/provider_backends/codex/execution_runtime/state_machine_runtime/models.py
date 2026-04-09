@@ -66,7 +66,7 @@ def apply_session_rotation(
     )
     poll.next_seq += 1
     poll.session_path = new_session_path
-    poll.anchor_seen = False
+    poll.anchor_seen = bool(submission.runtime_state.get("no_wrap", False))
     poll.bound_turn_id = ""
     poll.bound_task_id = ""
     poll.reply_buffer = ""

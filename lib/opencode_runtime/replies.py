@@ -7,6 +7,7 @@ from .replies_runtime import (
     find_new_assistant_reply_with_state,
     is_aborted_error,
     latest_message_from_messages,
+    observe_latest_assistant,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     'find_new_assistant_reply_with_state',
     'is_aborted_error',
     'latest_message_from_messages',
+    'observe_latest_assistant',
 ]

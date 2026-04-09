@@ -27,41 +27,13 @@ class TmuxRespawnService:
         stderr_log_path: str | None = None,
         remain_on_exit: bool = True,
     ) -> None:
-        if not pane_id:
-            raise ValueError('pane_id is required')
-        try:
-            self.ensure_pane_log_fn(pane_id)
-        except Exception:
-            pass
-
-        cmd_body = (cmd or '').strip()
-        if not cmd_body:
-            raise ValueError('cmd is required')
-
+        cmd_body = _required_cmd_body(pane_id, cmd)
+        _safe_ensure_pane_log(self, pane_id)
         start_dir = self.normalize_start_dir_fn(cwd)
         cmd_body, _ = self.append_stderr_redirection_fn(cmd_body, stderr_log_path)
-
-        tmux_default_shell = ''
-        try:
-            cp = self.tmux_run_fn(['show-option', '-gqv', 'default-shell'], capture=True, timeout=1.0)
-            tmux_default_shell = (getattr(cp, 'stdout', '') or '').strip()
-        except Exception:
-            tmux_default_shell = ''
-
-        shell = self.resolve_shell_fn(
-            env_shell=self.env.get('CCB_TMUX_SHELL', ''),
-            tmux_default_shell=tmux_default_shell,
-            process_shell=self.env.get('SHELL', ''),
-            fallback_shell=self.default_shell_fn()[0],
-        )
-        flags = self.resolve_shell_flags_fn(
-            shell=shell,
-            flags_raw=self.env.get('CCB_TMUX_SHELL_FLAGS', ''),
-        )
-        full = self.build_shell_command_fn(shell=shell, flags=flags, cmd_body=cmd_body)
-
+        full = _resolved_shell_command(self, cmd_body)
         if remain_on_exit:
-            self.tmux_run_fn(['set-option', '-p', '-t', pane_id, 'remain-on-exit', 'on'], check=False)
+            _set_remain_on_exit(self, pane_id)
         tmux_args = self.build_respawn_tmux_args_fn(
             pane_id=pane_id,
             start_dir=start_dir,
@@ -69,4 +41,47 @@ class TmuxRespawnService:
         )
         self.tmux_run_fn(tmux_args, check=True)
         if remain_on_exit:
-            self.tmux_run_fn(['set-option', '-p', '-t', pane_id, 'remain-on-exit', 'on'], check=False)
+            _set_remain_on_exit(self, pane_id)
+
+
+def _required_cmd_body(pane_id: str, cmd: str) -> str:
+    pane_text = str(pane_id or '').strip()
+    if not pane_text:
+        raise ValueError('pane_id is required')
+    cmd_body = (cmd or '').strip()
+    if not cmd_body:
+        raise ValueError('cmd is required')
+    return cmd_body
+
+
+def _safe_ensure_pane_log(service: TmuxRespawnService, pane_id: str) -> None:
+    try:
+        service.ensure_pane_log_fn(pane_id)
+    except Exception:
+        pass
+
+
+def _resolved_shell_command(service: TmuxRespawnService, cmd_body: str) -> str:
+    shell = service.resolve_shell_fn(
+        env_shell=service.env.get('CCB_TMUX_SHELL', ''),
+        tmux_default_shell=_tmux_default_shell(service),
+        process_shell=service.env.get('SHELL', ''),
+        fallback_shell=service.default_shell_fn()[0],
+    )
+    flags = service.resolve_shell_flags_fn(
+        shell=shell,
+        flags_raw=service.env.get('CCB_TMUX_SHELL_FLAGS', ''),
+    )
+    return service.build_shell_command_fn(shell=shell, flags=flags, cmd_body=cmd_body)
+
+
+def _tmux_default_shell(service: TmuxRespawnService) -> str:
+    try:
+        cp = service.tmux_run_fn(['show-option', '-gqv', 'default-shell'], capture=True, timeout=1.0)
+    except Exception:
+        return ''
+    return (getattr(cp, 'stdout', '') or '').strip()
+
+
+def _set_remain_on_exit(service: TmuxRespawnService, pane_id: str) -> None:
+    service.tmux_run_fn(['set-option', '-p', '-t', pane_id, 'remain-on-exit', 'on'], check=False)

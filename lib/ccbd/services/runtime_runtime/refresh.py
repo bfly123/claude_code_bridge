@@ -5,6 +5,11 @@ from pathlib import Path
 from agents.models import RuntimeBindingSource, normalize_runtime_binding_source
 
 from ..provider_runtime_facts import build_provider_runtime_facts, ensure_provider_pane, load_provider_session
+from ..project_namespace_runtime.slot_replacement import (
+    inject_project_slot_recovery_hints,
+    relabel_project_slot_pane,
+    resolve_project_slot_recovery_context,
+)
 
 
 def _workspace_path(runtime) -> str:
@@ -20,6 +25,9 @@ def _attach_missing_session(*, attach_runtime_fn, agent_name: str, workspace_pat
         runtime_ref=runtime.runtime_ref,
         session_ref=runtime.session_ref,
         health='session-missing',
+        slot_key=getattr(runtime, 'slot_key', None) or agent_name,
+        window_id=getattr(runtime, 'window_id', None),
+        workspace_epoch=getattr(runtime, 'workspace_epoch', None),
         binding_source=runtime.binding_source,
     )
 
@@ -43,6 +51,9 @@ def _attach_healthy_runtime(
     provider: str,
     facts,
     active_pane_id: str | None,
+    slot_key: str | None,
+    window_id: str | None,
+    workspace_epoch: int | None,
 ) -> object:
     return attach_runtime_fn(
         agent_name=agent_name,
@@ -64,12 +75,16 @@ def _attach_healthy_runtime(
         tmux_socket_path=facts.tmux_socket_path,
         session_file=facts.session_file,
         session_id=facts.session_id,
+        slot_key=slot_key,
+        window_id=window_id,
+        workspace_epoch=workspace_epoch,
         binding_source=runtime.binding_source,
     )
 
 
 def refresh_provider_binding(
     *,
+    layout,
     registry,
     session_bindings,
     attach_runtime_fn,
@@ -89,6 +104,16 @@ def refresh_provider_binding(
     if binding is None:
         return runtime
 
+    replacement_context = (
+        resolve_project_slot_recovery_context(
+            layout=layout,
+            config=getattr(registry, '_config', None),
+            runtime=runtime,
+            agent_name=agent_name,
+        )
+        if recover
+        else None
+    )
     session = load_provider_session(binding, Path(workspace_path), agent_name)
     if session is None:
         return _attach_missing_session(
@@ -98,9 +123,12 @@ def refresh_provider_binding(
             runtime=runtime,
         )
 
+    inject_project_slot_recovery_hints(session, replacement_context)
     pane_id = _resolve_pane_id(session, recover=recover)
     if recover and pane_id is None:
         return runtime
+    if pane_id is not None:
+        relabel_project_slot_pane(pane_id=pane_id, context=replacement_context)
     facts = build_provider_runtime_facts(
         session,
         binding=binding,
@@ -115,4 +143,9 @@ def refresh_provider_binding(
         provider=spec.provider,
         facts=facts,
         active_pane_id=pane_id,
+        slot_key=(replacement_context.slot_key if replacement_context is not None else getattr(runtime, 'slot_key', None) or agent_name),
+        window_id=(replacement_context.workspace_window_id if replacement_context is not None else getattr(runtime, 'window_id', None)),
+        workspace_epoch=(
+            replacement_context.workspace_epoch if replacement_context is not None else getattr(runtime, 'workspace_epoch', None)
+        ),
     )

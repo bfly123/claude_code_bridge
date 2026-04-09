@@ -1118,7 +1118,7 @@ def test_ccbd_heartbeat_uses_persisted_start_policy_for_recovery_mount(tmp_path:
     assert running.status.value == 'running'
 
 
-def test_ccbd_namespace_reflow_uses_persisted_start_policy(tmp_path: Path, monkeypatch) -> None:
+def test_ccbd_foreign_pane_reflow_uses_persisted_start_policy(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / 'repo-reflow-policy'
     project_root.mkdir()
     config_path = project_root / '.ccb' / 'ccb.config'
@@ -1127,15 +1127,15 @@ def test_ccbd_namespace_reflow_uses_persisted_start_policy(tmp_path: Path, monke
     ctx = bootstrap_project(project_root)
     app = CcbdApp(project_root)
     app.persist_start_policy(auto_permission=True)
-    seen: list[tuple[tuple[str, ...], bool, bool, bool, bool, bool, str | None]] = []
+    seen: list[tuple[tuple[str, ...], bool, bool, bool, bool, bool, bool, str | None]] = []
 
     degraded = replace(
         _runtime('codex', project_id=ctx.project_id, layout=app.paths, pid=1234),
         state=AgentState.DEGRADED,
-        health='pane-missing',
+        health='pane-foreign',
         runtime_ref='tmux:%41',
         tmux_socket_path=str(app.paths.ccbd_tmux_socket_path),
-        pane_state='missing',
+        pane_state='foreign',
     )
     steady = replace(
         _runtime('claude', project_id=ctx.project_id, layout=app.paths, pid=2234),
@@ -1154,6 +1154,7 @@ def test_ccbd_namespace_reflow_uses_persisted_start_policy(tmp_path: Path, monke
         cleanup_tmux_orphans: bool = True,
         interactive_tmux_layout: bool = True,
         recreate_namespace: bool = False,
+        reflow_workspace: bool = False,
         recreate_reason: str | None = None,
     ):
         seen.append(
@@ -1164,6 +1165,7 @@ def test_ccbd_namespace_reflow_uses_persisted_start_policy(tmp_path: Path, monke
                 cleanup_tmux_orphans,
                 interactive_tmux_layout,
                 recreate_namespace,
+                reflow_workspace,
                 recreate_reason,
             )
         )
@@ -1193,6 +1195,7 @@ def test_ccbd_namespace_reflow_uses_persisted_start_policy(tmp_path: Path, monke
         True,
         False,
         True,
+        False,
         True,
         'pane_recovery:codex',
     )]

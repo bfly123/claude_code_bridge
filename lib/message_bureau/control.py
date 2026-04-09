@@ -17,10 +17,11 @@ from .control_queue import agent_queue as control_agent_queue
 from .control_queue import inbox as control_inbox
 from .control_queue import queue_summary as control_queue_summary
 from .control_trace import trace as control_trace
+from .service_state import MessageBureauControlRuntimeState, MessageBureauControlStateMixin
 from .store import AttemptStore, MessageStore, ReplyStore
 
 
-class MessageBureauControlService:
+class MessageBureauControlService(MessageBureauControlStateMixin):
     def __init__(
         self,
         layout: PathLayout,
@@ -37,24 +38,33 @@ class MessageBureauControlService:
         mailbox_kernel: MailboxKernelService | None = None,
         clock=None,
     ) -> None:
-        self._layout = layout
-        self._config = config
-        self._known_mailboxes = known_mailbox_targets(config)
-        self._clock = clock or _utc_now
-        self._mailbox_store = mailbox_store or MailboxStore(layout)
-        self._inbound_store = inbound_store or InboundEventStore(layout)
-        self._lease_store = lease_store or DeliveryLeaseStore(layout)
-        self._message_store = message_store or MessageStore(layout)
-        self._attempt_store = attempt_store or AttemptStore(layout)
-        self._reply_store = reply_store or ReplyStore(layout)
-        self._job_store = job_store or JobStore(layout)
-        self._submission_store = submission_store or SubmissionStore(layout)
-        self._mailbox_kernel = mailbox_kernel or MailboxKernelService(
-            layout,
-            clock=self._clock,
-            mailbox_store=self._mailbox_store,
-            inbound_store=self._inbound_store,
-            lease_store=self._lease_store,
+        resolved_clock = clock or _utc_now
+        mailbox_store = mailbox_store or MailboxStore(layout)
+        inbound_store = inbound_store or InboundEventStore(layout)
+        lease_store = lease_store or DeliveryLeaseStore(layout)
+        message_store = message_store or MessageStore(layout)
+        attempt_store = attempt_store or AttemptStore(layout)
+        reply_store = reply_store or ReplyStore(layout)
+        self._runtime_state = MessageBureauControlRuntimeState(
+            layout=layout,
+            config=config,
+            known_mailboxes=known_mailbox_targets(config),
+            clock=resolved_clock,
+            mailbox_store=mailbox_store,
+            inbound_store=inbound_store,
+            lease_store=lease_store,
+            message_store=message_store,
+            attempt_store=attempt_store,
+            reply_store=reply_store,
+            job_store=job_store or JobStore(layout),
+            submission_store=submission_store or SubmissionStore(layout),
+            mailbox_kernel=mailbox_kernel or MailboxKernelService(
+                layout,
+                clock=resolved_clock,
+                mailbox_store=mailbox_store,
+                inbound_store=inbound_store,
+                lease_store=lease_store,
+            ),
         )
 
     def queue_summary(self, target: str = 'all') -> dict[str, object]:

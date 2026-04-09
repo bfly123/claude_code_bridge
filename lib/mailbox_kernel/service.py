@@ -12,6 +12,7 @@ from .models import (
     MailboxRecord,
     MailboxState,
 )
+from .service_state import MailboxKernelRuntimeState, MailboxKernelStateMixin
 from .store import DeliveryLeaseStore, InboundEventStore, MailboxStore
 from .service_runtime import ack_reply, claim, claim_next, head_pending_event, latest_events, mark_terminal, peek_next, pending_events, refresh_mailbox
 
@@ -25,7 +26,7 @@ _TERMINAL_EVENT_STATES = frozenset(
 _CLAIMABLE_EVENT_STATES = frozenset({InboundEventStatus.CREATED, InboundEventStatus.QUEUED})
 
 
-class MailboxKernelService:
+class MailboxKernelService(MailboxKernelStateMixin):
     def __init__(
         self,
         layout: PathLayout,
@@ -35,23 +36,25 @@ class MailboxKernelService:
         inbound_store: InboundEventStore | None = None,
         lease_store: DeliveryLeaseStore | None = None,
     ) -> None:
-        self._layout = layout
-        self._clock = clock
-        self._mailbox_store = mailbox_store or MailboxStore(layout)
-        self._inbound_store = inbound_store or InboundEventStore(layout)
-        self._lease_store = lease_store or DeliveryLeaseStore(layout)
-        self._normalize_agent_name = normalize_mailbox_owner_name
-        self._terminal_event_states = _TERMINAL_EVENT_STATES
-        self._claimable_event_states = _CLAIMABLE_EVENT_STATES
-        self._mailbox_record_cls = MailboxRecord
-        self._delivery_lease_cls = DeliveryLease
-        self._reply_event_type = InboundEventType.TASK_REPLY
-        self._lease_state_acquired = LeaseState.ACQUIRED
-        self._mailbox_state_delivering = MailboxState.DELIVERING
-        self._mailbox_state_blocked = MailboxState.BLOCKED
-        self._mailbox_state_idle = MailboxState.IDLE
-        self._status_delivering = InboundEventStatus.DELIVERING
-        self._status_consumed = InboundEventStatus.CONSUMED
+        self._runtime_state = MailboxKernelRuntimeState(
+            layout=layout,
+            clock=clock,
+            mailbox_store=mailbox_store or MailboxStore(layout),
+            inbound_store=inbound_store or InboundEventStore(layout),
+            lease_store=lease_store or DeliveryLeaseStore(layout),
+            normalize_agent_name=normalize_mailbox_owner_name,
+            terminal_event_states=_TERMINAL_EVENT_STATES,
+            claimable_event_states=_CLAIMABLE_EVENT_STATES,
+            mailbox_record_cls=MailboxRecord,
+            delivery_lease_cls=DeliveryLease,
+            reply_event_type=InboundEventType.TASK_REPLY,
+            lease_state_acquired=LeaseState.ACQUIRED,
+            mailbox_state_delivering=MailboxState.DELIVERING,
+            mailbox_state_blocked=MailboxState.BLOCKED,
+            mailbox_state_idle=MailboxState.IDLE,
+            status_delivering=InboundEventStatus.DELIVERING,
+            status_consumed=InboundEventStatus.CONSUMED,
+        )
 
     def latest_events(self, agent_name: str) -> tuple[InboundEventRecord, ...]:
         return latest_events(self, agent_name)

@@ -99,6 +99,42 @@ def test_submit_ask_maps_broadcast_payload_and_submission(monkeypatch: pytest.Mo
     }
 
 
+def test_submit_ask_aliases_explicit_cmd_sender_to_user(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-ask-explicit-cmd'
+    project_root.mkdir()
+    context = _build_context(project_root)
+    captured: dict[str, object] = {}
+
+    class _FakeClient:
+        def submit(self, envelope) -> dict:
+            captured['from_actor'] = envelope.from_actor
+            return {
+                'job_id': 'job_1',
+                'agent_name': 'agent1',
+                'target_kind': 'agent',
+                'target_name': 'agent1',
+                'status': 'accepted',
+            }
+
+    monkeypatch.setattr(
+        ask_service,
+        'load_project_config',
+        lambda project_root: SimpleNamespace(config=SimpleNamespace(agents={'agent1': {}, 'agent2': {}})),
+    )
+    monkeypatch.setattr(
+        ask_service,
+        'connect_mounted_daemon',
+        lambda context, allow_restart_stale: SimpleNamespace(client=_FakeClient()),
+    )
+
+    ask_service.submit_ask(
+        context,
+        ParsedAskCommand(project=None, target='agent1', sender='cmd', message='hello'),
+    )
+
+    assert captured['from_actor'] == 'user'
+
+
 def test_watch_ask_job_reconnects_and_preserves_cursor(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-ask-watch'
     project_root.mkdir()
@@ -193,6 +229,70 @@ def test_watch_ask_job_times_out_after_reconnect_failures(monkeypatch: pytest.Mo
         ask_service.watch_ask_job(context, 'job_1', StringIO(), timeout=None, emit_output=False)
 
     assert str(exc_info.value) == 'wait timed out for job_1'
+
+
+def test_watch_ask_job_retries_when_reconnect_attempt_temporarily_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-ask-reconnect-step-fail'
+    project_root.mkdir()
+    context = _build_context(project_root)
+    clock = iter([0.0, 0.1, 0.2, 0.3, 0.4, 0.5])
+
+    class _FlakyClient:
+        def __init__(self) -> None:
+            self.calls: list[int] = []
+
+        def watch(self, job_id: str, *, cursor: int = 0) -> dict:
+            assert job_id == 'job_1'
+            self.calls.append(cursor)
+            raise CcbdClientError('socket closed')
+
+    class _StableClient:
+        def __init__(self) -> None:
+            self.calls: list[int] = []
+
+        def watch(self, job_id: str, *, cursor: int = 0) -> dict:
+            assert job_id == 'job_1'
+            self.calls.append(cursor)
+            return {
+                'job_id': 'job_1',
+                'agent_name': 'agent1',
+                'target_name': 'agent1',
+                'cursor': 1,
+                'generation': 2,
+                'terminal': True,
+                'status': 'completed',
+                'reply': 'done',
+                'events': [],
+            }
+
+    flaky = _FlakyClient()
+    stable = _StableClient()
+    connects = {'count': 0}
+
+    def _connect(context, allow_restart_stale):
+        del context, allow_restart_stale
+        connects['count'] += 1
+        if connects['count'] == 1:
+            return SimpleNamespace(client=flaky)
+        if connects['count'] == 2:
+            raise CcbdServiceError('daemon restarting')
+        return SimpleNamespace(client=stable)
+
+    monkeypatch.setattr(ask_service, 'connect_mounted_daemon', _connect)
+    monkeypatch.setattr(ask_service, 'ask_wait_timeout_seconds', lambda: 1.0)
+    monkeypatch.setattr(ask_service, 'ask_wait_poll_interval_seconds', lambda: 0.0)
+    monkeypatch.setattr(ask_service.time, 'monotonic', lambda: next(clock))
+    monkeypatch.setattr(ask_service.time, 'sleep', lambda seconds: None)
+
+    batch = ask_service.watch_ask_job(context, 'job_1', StringIO(), timeout=None, emit_output=False)
+
+    assert batch.terminal is True
+    assert batch.reply == 'done'
+    assert flaky.calls == [0]
+    assert stable.calls == [0]
 
 
 def test_write_ask_output_appends_newline(tmp_path: Path) -> None:

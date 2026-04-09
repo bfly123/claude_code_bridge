@@ -8,7 +8,9 @@ from provider_core.registry import TEST_DOUBLE_PROVIDER_NAMES
 
 from ..context import build_job_runtime_context
 from ..records import append_event, append_job
+from ..reply_delivery import is_reply_delivery_job
 from ..runtime_state import sync_runtime
+from ..reply_delivery_runtime.start_completion import complete_reply_delivery_after_start
 from .models import QueuedTargetSlot
 
 
@@ -44,13 +46,21 @@ def start_running_job(
     append_event(dispatcher, running, 'job_started', {'status': JobStatus.RUNNING.value}, timestamp=started_at)
     write_running_snapshot(dispatcher, running, started_at=started_at)
     runtime_context = build_job_runtime_context(running, slot.runtime)
-    if dispatcher._execution_service is not None and should_start_execution(dispatcher, running, runtime_context):
-        dispatcher._execution_service.start(running, runtime_context=runtime_context)
     dispatcher._state.mark_active_for(running.target_kind, running.target_name, running.job_id)
     if slot.requires_runtime_sync:
         sync_runtime(dispatcher, running.agent_name, state=AgentState.BUSY)
     if dispatcher._message_bureau is not None:
         dispatcher._message_bureau.mark_attempt_started(running, started_at=started_at)
+    submission = None
+    if dispatcher._execution_service is not None and should_start_execution(dispatcher, running, runtime_context):
+        submission = dispatcher._execution_service.start(running, runtime_context=runtime_context)
+    if is_reply_delivery_job(running) and dispatcher._execution_service is not None:
+        return complete_reply_delivery_after_start(
+            dispatcher,
+            running,
+            started_at=started_at,
+            submission=submission,
+        )
     return running
 
 

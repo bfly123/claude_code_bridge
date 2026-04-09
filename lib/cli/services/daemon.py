@@ -1,25 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
-import os
-import subprocess
-import sys
-import time
-
-from agents.config_identity import project_config_identity_payload
-from agents.config_loader import load_project_config
-from ccbd.daemon_process import CcbdProcessError, spawn_ccbd_process
-from ccbd.keeper import (
-    KeeperStateStore,
-    ShutdownIntent,
-    ShutdownIntentStore,
-    keeper_state_is_running,
-)
 from ccbd.models import LeaseHealth
 from ccbd.services.mount import MountManager
 from ccbd.services.ownership import OwnershipGuard
 from ccbd.socket_client import CcbdClient, CcbdClientError
-from ccbd.system import utc_now
 from cli.kill_runtime.processes import is_pid_alive, kill_pid, terminate_pid_tree
 from cli.context import CliContext
 from .daemon_runtime import (
@@ -28,14 +12,32 @@ from .daemon_runtime import (
     KillSummary,
     LocalPingSummary,
 )
+from .daemon_runtime.compat import (
+    connect_compatible_daemon as _connect_compatible_daemon_runtime_impl,
+)
+from .daemon_runtime.compat import (
+    daemon_matches_project_config as _daemon_matches_project_config,
+)
+from .daemon_runtime.compat import (
+    shutdown_incompatible_daemon as _shutdown_incompatible_daemon_runtime_impl,
+)
+from .daemon_runtime.keeper import clear_shutdown_intent
+from .daemon_runtime.keeper import ensure_keeper_started as _ensure_keeper_started_runtime_impl
+from .daemon_runtime.keeper import keeper_pid as _keeper_pid_runtime_impl
+from .daemon_runtime.keeper import record_shutdown_intent
+from .daemon_runtime.keeper import wait_for_keeper_exit as _wait_for_keeper_exit_runtime_impl
+from .daemon_runtime.facade import incompatible_daemon_error as _incompatible_daemon_error_impl
+from .daemon_runtime.facade import should_restart_unreachable_daemon as _should_restart_unreachable_daemon
+from .daemon_runtime.facade import spawn_ccbd_process as _spawn_ccbd_process
+from .daemon_runtime.processes import lease_pid as _lease_pid
+from .daemon_runtime.processes import restart_unreachable_daemon as _restart_unreachable_daemon_runtime_impl
+from .daemon_runtime.processes import wait_for_pid_exit as _wait_for_pid_exit
 from .daemon_runtime import connect_mounted_daemon as _connect_mounted_daemon_runtime
 from .daemon_runtime import ensure_daemon_started as _ensure_daemon_started_runtime
 from .daemon_runtime import shutdown_daemon as _shutdown_daemon_runtime
 
-
-_DEF_START_TIMEOUT_S = 5.0
-_DEF_SHUTDOWN_TIMEOUT_S = 2.0
-_DEF_KEEPER_READY_TIMEOUT_S = 2.0
+from .daemon_runtime.facade import SHUTDOWN_TIMEOUT_S as _DEF_SHUTDOWN_TIMEOUT_S
+from .daemon_runtime.facade import START_TIMEOUT_S as _DEF_START_TIMEOUT_S
 
 
 def inspect_daemon(context: CliContext):
@@ -126,189 +128,67 @@ def _connect_compatible_daemon(
     *,
     restart_on_mismatch: bool,
 ) -> DaemonHandle | None:
-    if not inspection.socket_connectable:
-        return None
-    client = CcbdClient(context.paths.ccbd_socket_path)
-    if _daemon_matches_project_config(context, client):
-        return DaemonHandle(client=client, inspection=inspection, started=False)
-    if not restart_on_mismatch:
-        return None
-    _shutdown_incompatible_daemon(context, client)
-    return None
-
-
-def _daemon_matches_project_config(context: CliContext, client: CcbdClient) -> bool:
-    expected = project_config_identity_payload(load_project_config(context.project.project_root).config)
-    try:
-        payload = client.ping('ccbd')
-    except CcbdClientError:
-        return False
-    actual_signature = str(payload.get('config_signature') or '').strip()
-    if actual_signature:
-        return actual_signature == expected['config_signature']
-    known_agents = payload.get('known_agents')
-    if not isinstance(known_agents, list):
-        return False
-    actual_agents = tuple(str(item).strip().lower() for item in known_agents if str(item).strip())
-    return actual_agents == tuple(expected['known_agents'])
+    return _connect_compatible_daemon_runtime_impl(
+        context,
+        inspection,
+        restart_on_mismatch=restart_on_mismatch,
+        client_factory=CcbdClient,
+        daemon_matches_project_config_fn=_daemon_matches_project_config,
+        shutdown_incompatible_daemon_fn=_shutdown_incompatible_daemon,
+    )
 
 
 def _shutdown_incompatible_daemon(context: CliContext, client: CcbdClient) -> None:
-    try:
-        client.shutdown()
-    except CcbdClientError:
-        pass
-    deadline = time.time() + _DEF_SHUTDOWN_TIMEOUT_S
-    while time.time() < deadline:
-        _, _, inspection = inspect_daemon(context)
-        if not inspection.socket_connectable or inspection.health in {LeaseHealth.MISSING, LeaseHealth.UNMOUNTED, LeaseHealth.STALE}:
-            return
-        time.sleep(0.05)
-    raise CcbdServiceError(f'{_incompatible_daemon_error()}; old ccbd did not shut down in time')
+    _shutdown_incompatible_daemon_runtime_impl(
+        context,
+        client,
+        inspect_daemon_fn=inspect_daemon,
+        incompatible_daemon_error=_incompatible_daemon_error(),
+        shutdown_timeout_s=_DEF_SHUTDOWN_TIMEOUT_S,
+        unavailable_health_states={
+            LeaseHealth.MISSING,
+            LeaseHealth.UNMOUNTED,
+            LeaseHealth.STALE,
+        },
+    )
 
 
 def _incompatible_daemon_error() -> str:
-    return 'mounted ccbd config does not match current .ccb/ccb.config'
+    return _incompatible_daemon_error_impl()
 
 
-def _should_restart_unreachable_daemon(inspection) -> bool:
-    return (
-        inspection.health is LeaseHealth.DEGRADED
-        and inspection.pid_alive
-        and not inspection.socket_connectable
+def _ensure_keeper_started(context: CliContext) -> bool:
+    return _ensure_keeper_started_runtime_impl(
+        context,
+        mount_manager_factory=MountManager,
+        ownership_guard_factory=OwnershipGuard,
+        process_exists_fn=is_pid_alive,
+        ready_timeout_s=2.0,
+    )
+
+
+def _wait_for_keeper_exit(context: CliContext, *, timeout_s: float) -> bool:
+    return _wait_for_keeper_exit_runtime_impl(
+        context,
+        timeout_s=timeout_s,
+        process_exists_fn=is_pid_alive,
+    )
+
+
+def _keeper_pid(context: CliContext, lease) -> int:
+    return _keeper_pid_runtime_impl(
+        context,
+        lease,
+        process_exists_fn=is_pid_alive,
     )
 
 
 def _restart_unreachable_daemon(context: CliContext, inspection) -> None:
-    lease = inspection.lease
-    if lease is None:
-        return
-    pid = _lease_pid(lease)
-    manager = MountManager(context.paths)
-
-    if pid > 0 and inspection.pid_alive:
-        kill_pid(pid, force=False)
-        if _wait_for_daemon_release(context, timeout_s=_DEF_SHUTDOWN_TIMEOUT_S):
-            manager.mark_unmounted()
-            return
-        kill_pid(pid, force=True)
-        if _wait_for_daemon_release(context, timeout_s=_DEF_SHUTDOWN_TIMEOUT_S):
-            manager.mark_unmounted()
-            return
-        raise CcbdServiceError(f'ccbd is unavailable: {inspection.reason}; pid {pid} did not exit')
-
-
-def _ensure_keeper_started(context: CliContext) -> bool:
-    store = KeeperStateStore(context.paths)
-    state = store.load()
-    if keeper_state_is_running(state, process_exists_fn=is_pid_alive):
-        return True
-
-    manager = MountManager(context.paths)
-    guard = OwnershipGuard(context.paths, manager)
-    with guard.startup_lock():
-        state = store.load()
-        if keeper_state_is_running(state, process_exists_fn=is_pid_alive):
-            return True
-        _spawn_keeper_process(context)
-    return _wait_for_keeper_ready(context, timeout_s=_DEF_KEEPER_READY_TIMEOUT_S)
-
-
-def clear_shutdown_intent(context: CliContext) -> None:
-    ShutdownIntentStore(context.paths).clear()
-
-
-def record_shutdown_intent(context: CliContext, *, reason: str) -> None:
-    ShutdownIntentStore(context.paths).save(
-        ShutdownIntent(
-            project_id=context.project.project_id,
-            requested_at=utc_now(),
-            requested_by_pid=os.getpid(),
-            reason=reason,
-        )
-    )
-
-
-def _wait_for_keeper_ready(context: CliContext, *, timeout_s: float) -> bool:
-    deadline = time.time() + max(0.0, float(timeout_s))
-    store = KeeperStateStore(context.paths)
-    while time.time() < deadline:
-        if keeper_state_is_running(store.load(), process_exists_fn=is_pid_alive):
-            return True
-        time.sleep(0.05)
-    return keeper_state_is_running(store.load(), process_exists_fn=is_pid_alive)
-
-
-def _wait_for_keeper_exit(context: CliContext, *, timeout_s: float) -> bool:
-    deadline = time.time() + max(0.0, float(timeout_s))
-    store = KeeperStateStore(context.paths)
-    while time.time() < deadline:
-        state = store.load()
-        if not keeper_state_is_running(state, process_exists_fn=is_pid_alive):
-            return True
-        time.sleep(0.05)
-    state = store.load()
-    return not keeper_state_is_running(state, process_exists_fn=is_pid_alive)
-
-
-def _keeper_pid(context: CliContext, lease) -> int:
-    state = KeeperStateStore(context.paths).load()
-    if keeper_state_is_running(state, process_exists_fn=is_pid_alive):
-        return int(state.keeper_pid)
-    lease_keeper_pid = int(getattr(lease, 'keeper_pid', 0) or 0)
-    return lease_keeper_pid if lease_keeper_pid > 0 else 0
-
-
-def _lease_pid(lease) -> int:
-    return int(getattr(lease, 'ccbd_pid', 0) or 0)
-
-
-def _wait_for_daemon_release(context: CliContext, *, timeout_s: float) -> bool:
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        _, _, inspection = inspect_daemon(context)
-        if not inspection.pid_alive or inspection.health in {LeaseHealth.MISSING, LeaseHealth.UNMOUNTED, LeaseHealth.STALE}:
-            return True
-        time.sleep(0.05)
-    return False
-
-
-def _wait_for_pid_exit(pid: int, *, timeout_s: float) -> bool:
-    deadline = time.time() + max(0.0, float(timeout_s))
-    while time.time() < deadline:
-        if not is_pid_alive(pid):
-            return True
-        time.sleep(0.05)
-    return not is_pid_alive(pid)
-
-
-def _spawn_ccbd_process(context: CliContext) -> None:
-    try:
-        spawn_ccbd_process(
-            project_root=context.project.project_root,
-            socket_path=context.paths.ccbd_socket_path,
-            ccbd_dir=context.paths.ccbd_dir,
-            timeout_s=_DEF_START_TIMEOUT_S,
-        )
-    except CcbdProcessError as exc:
-        raise CcbdServiceError(str(exc)) from exc
-
-
-def _spawn_keeper_process(context: CliContext) -> None:
-    script = Path(__file__).resolve().parents[2] / 'ccbd' / 'keeper_main.py'
-    env = dict(os.environ)
-    env['PYTHONUNBUFFERED'] = '1'
-    lib_root = str(Path(__file__).resolve().parents[2])
-    current_pythonpath = env.get('PYTHONPATH')
-    env['PYTHONPATH'] = lib_root if not current_pythonpath else lib_root + os.pathsep + current_pythonpath
-    context.paths.ccbd_dir.mkdir(parents=True, exist_ok=True)
-    stdout_log = open(context.paths.ccbd_dir / 'keeper.stdout.log', 'ab')
-    stderr_log = open(context.paths.ccbd_dir / 'keeper.stderr.log', 'ab')
-    subprocess.Popen(
-        [sys.executable, str(script), '--project', str(context.project.project_root)],
-        cwd=str(context.project.project_root),
-        env=env,
-        stdout=stdout_log,
-        stderr=stderr_log,
-        start_new_session=True,
+    _restart_unreachable_daemon_runtime_impl(
+        context,
+        inspection,
+        shutdown_timeout_s=_DEF_SHUTDOWN_TIMEOUT_S,
+        inspect_daemon_fn=inspect_daemon,
+        manager_factory=MountManager,
+        kill_pid_fn=kill_pid,
     )

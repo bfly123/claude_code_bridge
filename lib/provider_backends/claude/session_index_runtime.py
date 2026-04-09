@@ -14,8 +14,8 @@ class SessionIndexLocation:
     project_dir: Path
 
 
-def candidate_paths_for_work_dir(work_dir: Path) -> set[str]:
-    return set(candidate_project_paths(work_dir))
+def candidate_paths_for_work_dir(work_dir: Path, *, include_env_pwd: bool = True) -> set[str]:
+    return set(candidate_project_paths(work_dir, include_env_pwd=include_env_pwd))
 
 
 def resolve_registry_index_location(work_dir: Path, *, root: Path) -> SessionIndexLocation | None:

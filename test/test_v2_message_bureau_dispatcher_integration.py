@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -16,8 +17,9 @@ from agents.models import (
     RuntimeMode,
     WorkspaceMode,
 )
-from ccbd.api_models import DeliveryScope, MessageEnvelope
+from ccbd.api_models import DeliveryScope, JobStatus, MessageEnvelope
 from ccbd.services.dispatcher import JobDispatcher
+from ccbd.services.dispatcher_runtime.reply_delivery import prepare_reply_deliveries
 from ccbd.services.job_heartbeat import JobHeartbeatService
 from ccbd.services.registry import AgentRegistry
 from completion.models import (
@@ -44,6 +46,7 @@ from message_bureau.reply_payloads import delivery_job_id_from_payload
 from project.ids import compute_project_id
 from project.resolver import ProjectContext
 from provider_core.catalog import build_default_provider_catalog
+from provider_execution.base import ProviderSubmission
 from provider_execution.registry import build_default_execution_registry
 from provider_execution.service import ExecutionService
 from provider_execution.service_runtime.models import ExecutionUpdate
@@ -117,6 +120,78 @@ def _failed_decision(*, reason: str = 'api_error', diagnostics: dict[str, object
         finished_at='2026-03-30T00:00:10Z',
         diagnostics=payload,
     )
+
+
+class ActiveReplyDeliveryExecutionService:
+    def __init__(self) -> None:
+        self.started: list[str] = []
+        self.finished: list[str] = []
+        self._state_store = None
+
+    def start(self, job, *, runtime_context=None):
+        del runtime_context
+        self.started.append(job.job_id)
+        return ProviderSubmission(
+            job_id=job.job_id,
+            agent_name=job.agent_name,
+            provider=job.provider,
+            accepted_at='2026-03-30T00:00:00Z',
+            ready_at='2026-03-30T00:00:00Z',
+            source_kind=CompletionSourceKind.SESSION_EVENT_LOG,
+            reply='',
+            diagnostics={'provider': job.provider, 'mode': 'active'},
+            runtime_state={'mode': 'active', 'request_anchor': job.job_id},
+        )
+
+    def cancel(self, job_id: str) -> None:
+        del job_id
+
+    def finish(self, job_id: str) -> None:
+        self.finished.append(job_id)
+
+    def poll(self):
+        return ()
+
+
+class DeferredReplyDeliveryExecutionService:
+    def __init__(self) -> None:
+        self.started: list[str] = []
+        self.finished: list[str] = []
+        self._state_store = None
+        self._active: dict[str, ProviderSubmission] = {}
+        self._pending_replays: dict[str, tuple] = {}
+
+    def start(self, job, *, runtime_context=None):
+        del runtime_context
+        self.started.append(job.job_id)
+        submission = ProviderSubmission(
+            job_id=job.job_id,
+            agent_name=job.agent_name,
+            provider=job.provider,
+            accepted_at='2026-03-30T00:00:00Z',
+            ready_at='2026-03-30T00:00:00Z',
+            source_kind=CompletionSourceKind.SESSION_EVENT_LOG,
+            reply='',
+            diagnostics={'provider': job.provider, 'mode': 'active'},
+            runtime_state={
+                'mode': 'active',
+                'request_anchor': job.job_id,
+                'reply_delivery_complete_on_dispatch': True,
+                'prompt_sent': False,
+            },
+        )
+        self._active[job.job_id] = submission
+        return submission
+
+    def cancel(self, job_id: str) -> None:
+        self._active.pop(job_id, None)
+
+    def finish(self, job_id: str) -> None:
+        self.finished.append(job_id)
+        self._active.pop(job_id, None)
+
+    def poll(self):
+        return ()
 
 
 def _provider_config(*providers: str) -> ProjectConfig:
@@ -342,7 +417,7 @@ def test_dispatcher_silence_does_not_hide_failure_reply_body(tmp_path: Path) -> 
     assert replies[0].diagnostics.get('silence_on_success') is True
 
 
-def test_dispatcher_routes_cmd_reply_into_command_mailbox(tmp_path: Path) -> None:
+def test_dispatcher_aliases_legacy_cmd_sender_to_user_without_mailbox(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-cmd-caller'
     ctx = _bootstrap_test_project(project_root)
     layout = PathLayout(project_root)
@@ -367,16 +442,12 @@ def test_dispatcher_routes_cmd_reply_into_command_mailbox(tmp_path: Path) -> Non
     dispatcher.tick()
     dispatcher.complete(job_id, _decision(reply='done for cmd'))
 
-    cmd_events = InboundEventStore(layout).list_agent('cmd')
-    assert len(cmd_events) == 1
-    assert cmd_events[0].event_type is InboundEventType.TASK_REPLY
-    assert cmd_events[0].status is InboundEventStatus.QUEUED
-
-    mailbox = MailboxStore(layout).load('cmd')
-    assert mailbox is not None
-    assert mailbox.mailbox_state is MailboxState.BLOCKED
-    assert mailbox.queue_depth == 1
-    assert mailbox.pending_reply_count == 1
+    message = MessageStore(layout).list_all()[-1]
+    assert message.from_actor == 'user'
+    assert InboundEventStore(layout).list_agent('codex')[-1].event_type is InboundEventType.TASK_REQUEST
+    assert MailboxStore(layout).load('codex') is not None
+    with pytest.raises(ValueError, match='unknown mailbox target: cmd'):
+        dispatcher.queue('cmd')
 
 
 def test_dispatcher_queue_summary_reflects_mailbox_state_and_pending_reply(tmp_path: Path) -> None:
@@ -434,7 +505,7 @@ def test_dispatcher_queue_summary_reflects_mailbox_state_and_pending_reply(tmp_p
     assert {item['runtime_health'] for item in queue_all['agents']} == {'healthy', 'stopped'}
 
 
-def test_dispatcher_queue_summary_includes_cmd_mailbox_when_reply_pending(tmp_path: Path) -> None:
+def test_dispatcher_queue_summary_ignores_stale_cmd_mailbox_residue(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-cmd-queue-summary'
     ctx = _bootstrap_test_project(project_root)
     layout = PathLayout(project_root)
@@ -443,36 +514,56 @@ def test_dispatcher_queue_summary_includes_cmd_mailbox_when_reply_pending(tmp_pa
     registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
     dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:00Z')
 
-    receipt = dispatcher.submit(
-        MessageEnvelope(
-            project_id=ctx.project_id,
-            to_agent='codex',
-            from_actor='cmd',
-            body='hello cmd queue',
-            task_id='task-cmd-queue',
-            reply_to=None,
-            message_type='ask',
-            delivery_scope=DeliveryScope.SINGLE,
-        )
+    stale_mailbox_path = layout.ccbd_mailboxes_dir / 'cmd' / 'mailbox.json'
+    stale_mailbox_path.parent.mkdir(parents=True, exist_ok=True)
+    stale_mailbox_path.write_text(
+        json.dumps(
+            {
+                'schema_version': 1,
+                'record_type': 'mailbox_record',
+                'mailbox_id': 'mbx_cmd',
+                'agent_name': 'cmd',
+                'active_inbound_event_id': 'iev_cmd',
+                'queue_depth': 1,
+                'pending_reply_count': 1,
+                'last_inbound_started_at': None,
+                'last_inbound_finished_at': None,
+                'mailbox_state': 'blocked',
+                'lease_version': 1,
+                'updated_at': '2026-03-30T00:00:00Z',
+            }
+        ),
+        encoding='utf-8',
     )
-    job_id = receipt.jobs[0].job_id
-    dispatcher.tick()
-    dispatcher.complete(job_id, _decision(reply='reply for cmd queue'))
+    stale_inbox_path = layout.ccbd_mailboxes_dir / 'cmd' / 'inbox.jsonl'
+    stale_inbox_path.parent.mkdir(parents=True, exist_ok=True)
+    stale_inbox_path.write_text(
+        json.dumps(
+            {
+                'schema_version': 1,
+                'record_type': 'inbound_event_record',
+                'inbound_event_id': 'iev_cmd',
+                'agent_name': 'cmd',
+                'event_type': 'task_reply',
+                'message_id': 'msg_cmd',
+                'attempt_id': 'att_cmd',
+                'payload_ref': 'reply:rep_cmd',
+                'priority': 10,
+                'status': 'queued',
+                'created_at': '2026-03-30T00:00:00Z',
+                'started_at': None,
+                'finished_at': None,
+            }
+        )
+        + '\n',
+        encoding='utf-8',
+    )
 
-    queue_cmd = dispatcher.queue('cmd')
-    agent_cmd = queue_cmd['agent']
-    assert agent_cmd['agent_name'] == 'cmd'
-    assert agent_cmd['mailbox_state'] == 'blocked'
-    assert agent_cmd['runtime_state'] == 'mailbox'
-    assert agent_cmd['runtime_health'] == 'mailbox'
-    assert agent_cmd['pending_reply_count'] == 1
-    assert agent_cmd['queued_events'][0]['event_type'] == 'task_reply'
+    with pytest.raises(ValueError, match='unknown mailbox target: cmd'):
+        dispatcher.queue('cmd')
 
     queue_all = dispatcher.queue('all')
-    cmd_item = next(item for item in queue_all['agents'] if item['agent_name'] == 'cmd')
-    assert cmd_item['runtime_state'] == 'mailbox'
-    assert cmd_item['runtime_health'] == 'mailbox'
-    assert cmd_item['pending_reply_count'] == 1
+    assert {item['agent_name'] for item in queue_all['agents']} == {'claude', 'codex', 'gemini'}
 
 
 def test_dispatcher_trace_submission_returns_message_attempt_reply_job_chain(tmp_path: Path) -> None:
@@ -2079,6 +2170,7 @@ def test_dispatcher_tick_promotes_head_reply_into_tracked_delivery_before_queued
     delivery_job = started[0]
     assert delivery_job.job_id != queued_job_id
     assert delivery_job.request.message_type == 'reply_delivery'
+    assert delivery_job.provider_options['no_wrap'] is True
     assert delivery_job.request.body.startswith('CCB_REPLY from=codex ')
     assert 'status=completed' in delivery_job.request.body
     assert 'reply for claude' in delivery_job.request.body
@@ -2189,3 +2281,179 @@ def test_dispatcher_ack_rejects_reply_after_auto_delivery_is_scheduled(tmp_path:
 
     with pytest.raises(ValueError, match='automatic reply delivery has been scheduled'):
         dispatcher.ack_reply('claude')
+
+
+def test_dispatcher_tick_auto_consumes_reply_delivery_head_with_execution_service(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-reply-delivery-autocomplete'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    execution_service = ActiveReplyDeliveryExecutionService()
+    dispatcher = JobDispatcher(
+        layout,
+        config,
+        registry,
+        execution_service=execution_service,
+        clock=lambda: '2026-03-30T00:00:00Z',
+    )
+
+    reply_receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='claude',
+            body='question for codex',
+            task_id='task-reply-autocomplete',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    reply_job_id = reply_receipt.jobs[0].job_id
+    dispatcher.tick()
+    dispatcher.complete(reply_job_id, _decision(reply='reply for claude'))
+
+    queued_receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='user',
+            body='real work queued behind reply',
+            task_id='task-behind-reply-autocomplete',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    queued_job_id = queued_receipt.jobs[0].job_id
+
+    started = dispatcher.tick()
+
+    assert len(started) == 1
+    delivery_job = started[0]
+    assert delivery_job.request.message_type == 'reply_delivery'
+    assert delivery_job.status.value == 'completed'
+    assert delivery_job.job_id in execution_service.started
+    assert delivery_job.job_id in execution_service.finished
+    inbox_after = dispatcher.inbox('claude')
+    assert inbox_after['item_count'] == 1
+    assert inbox_after['head']['event_type'] == 'task_request'
+
+    queue_after = dispatcher.queue('claude')
+    assert queue_after['agent']['mailbox_state'] == 'blocked'
+    assert queue_after['agent']['queue_depth'] == 1
+    assert queue_after['agent']['queued_events'][0]['event_type'] == 'task_request'
+    assert dispatcher.get(queued_job_id).status.value == 'accepted'
+
+    started_after = dispatcher.tick()
+    assert len(started_after) == 1
+    assert started_after[0].job_id == queued_job_id
+
+
+def test_dispatcher_tick_keeps_live_running_reply_delivery_head_with_execution_service(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-reply-delivery-live-running'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    execution_service = DeferredReplyDeliveryExecutionService()
+    dispatcher = JobDispatcher(
+        layout,
+        config,
+        registry,
+        execution_service=execution_service,
+        clock=lambda: '2026-03-30T00:00:00Z',
+    )
+
+    reply_receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='claude',
+            body='question for codex',
+            task_id='task-reply-live-running',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    reply_job_id = reply_receipt.jobs[0].job_id
+    dispatcher.tick()
+    dispatcher.complete(reply_job_id, _decision(reply='reply for claude'))
+
+    started = dispatcher.tick()
+
+    assert len(started) == 1
+    delivery_job = started[0]
+    assert delivery_job.request.message_type == 'reply_delivery'
+    assert delivery_job.status.value == 'running'
+    assert delivery_job.job_id in execution_service.started
+    assert delivery_job.job_id in execution_service._active
+
+    repaired = dispatcher.tick()
+
+    assert repaired == ()
+    still_running = dispatcher.get(delivery_job.job_id)
+    assert still_running is not None
+    assert still_running.status.value == 'running'
+    assert dispatcher.inbox('claude')['item_count'] == 1
+
+
+def test_dispatcher_tick_repairs_stale_running_reply_delivery_head_with_execution_service(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-reply-delivery-repair'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    execution_service = ActiveReplyDeliveryExecutionService()
+    dispatcher = JobDispatcher(
+        layout,
+        config,
+        registry,
+        execution_service=execution_service,
+        clock=lambda: '2026-03-30T00:00:00Z',
+    )
+
+    reply_receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='claude',
+            body='question for codex',
+            task_id='task-reply-repair',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    reply_job_id = reply_receipt.jobs[0].job_id
+    dispatcher.tick()
+    dispatcher.complete(reply_job_id, _decision(reply='reply for claude'))
+
+    created = prepare_reply_deliveries(dispatcher)
+    assert len(created) == 1
+    delivery_job = created[0]
+    inbox = dispatcher.inbox('claude')
+    assert inbox['head'] is not None
+    head_record = InboundEventStore(layout).get_latest('claude', inbox['head']['inbound_event_id'])
+    assert head_record is not None
+    assert delivery_job_id_from_payload(head_record.payload_ref) == delivery_job.job_id
+
+    dispatcher._state.remove_queued('claude', delivery_job.job_id)
+    dispatcher._state.mark_active('claude', delivery_job.job_id)
+    dispatcher._append_job(replace(delivery_job, status=JobStatus.RUNNING, updated_at='2026-03-30T00:00:20Z'))
+
+    repaired = dispatcher.tick()
+
+    stale = dispatcher.get(delivery_job.job_id)
+    assert stale is not None
+    assert stale.status.value == 'incomplete'
+    assert any(job.request.message_type == 'reply_delivery' and job.status.value == 'completed' for job in repaired)
+    assert dispatcher.inbox('claude')['item_count'] == 0

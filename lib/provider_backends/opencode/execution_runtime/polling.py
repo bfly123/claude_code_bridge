@@ -13,8 +13,6 @@ def poll_submission(
     *,
     now: str,
     state_session_path_fn,
-    is_done_text_fn,
-    strip_done_text_fn,
 ) -> ProviderPollResult | None:
     prepared = prepare_active_poll(submission, now=now)
     if prepared is None or isinstance(prepared, ProviderPollResult):
@@ -41,10 +39,9 @@ def poll_submission(
             runtime,
             items,
             reply=reply,
+            state=state,
             provider_session_id=state.get("session_id"),
             now=now,
-            is_done_text_fn=is_done_text_fn,
-            strip_done_text_fn=strip_done_text_fn,
         )
 
     updated = replace(
@@ -59,7 +56,7 @@ def poll_submission(
             "session_path": runtime["session_path"],
         },
     )
-    if not items:
+    if not items and updated.reply == submission.reply and updated.runtime_state == submission.runtime_state:
         return None
     return ProviderPollResult(submission=updated, items=tuple(items))
 
@@ -73,6 +70,7 @@ def _poll_runtime_state(submission: ProviderSubmission) -> dict[str, object]:
         ),
         "next_seq": int(runtime_state.get("next_seq", 1)),
         "anchor_emitted": bool(runtime_state.get("anchor_emitted", False)),
+        "no_wrap": bool(runtime_state.get("no_wrap", False)),
         "reply_buffer": str(runtime_state.get("reply_buffer") or ""),
         "session_path": str(runtime_state.get("session_path") or ""),
     }
@@ -105,7 +103,7 @@ def _apply_session_rotation(
     )
     runtime["next_seq"] = int(runtime["next_seq"]) + 1
     runtime["session_path"] = new_session_path
-    runtime["anchor_emitted"] = False
+    runtime["anchor_emitted"] = bool(runtime["no_wrap"])
     runtime["reply_buffer"] = ""
 
 
@@ -139,18 +137,20 @@ def _append_reply_item(
     items: list,
     *,
     reply,
+    state: dict[str, object],
     provider_session_id,
     now: str,
-    is_done_text_fn,
-    strip_done_text_fn,
 ) -> None:
+    if not _reply_matches_request(runtime, state):
+        return
     request_anchor = str(runtime["request_anchor"] or "") or None
-    done_seen = bool(request_anchor and is_done_text_fn(str(reply), request_anchor))
-    cleaned = _clean_reply(strip_done_text_fn, reply, request_anchor=request_anchor)
+    cleaned = _clean_reply(reply)
     if not cleaned:
         return
     runtime["reply_buffer"] = cleaned
     session_path = str(runtime["session_path"] or "") or None
+    message_id = _coerce_str(state.get("last_assistant_id"))
+    parent_id = _coerce_str(state.get("last_assistant_parent_id"))
     items.append(
         build_item(
             submission,
@@ -164,8 +164,33 @@ def _append_reply_item(
                 "turn_id": request_anchor,
                 "session_path": session_path,
                 "provider_session_id": provider_session_id,
-                "done_marker": done_seen,
-                "ccb_done": done_seen,
+                "provider_turn_ref": message_id,
+                "message_id": message_id,
+                "parent_message_id": parent_id,
+                "completed_at": state.get("last_assistant_completed"),
+            },
+            cursor_kwargs={"session_path": session_path},
+        )
+    )
+    runtime["next_seq"] = int(runtime["next_seq"]) + 1
+    if not _reply_completed(state):
+        return
+    items.append(
+        build_item(
+            submission,
+            kind=CompletionItemKind.TURN_BOUNDARY,
+            timestamp=now,
+            seq=int(runtime["next_seq"]),
+            payload={
+                "reason": "assistant_completed",
+                "last_agent_message": cleaned,
+                "turn_id": request_anchor,
+                "session_path": session_path,
+                "provider_turn_ref": message_id,
+                "message_id": message_id,
+                "parent_message_id": parent_id,
+                "provider_session_id": provider_session_id,
+                "completed_at": state.get("last_assistant_completed"),
             },
             cursor_kwargs={"session_path": session_path},
         )
@@ -173,9 +198,28 @@ def _append_reply_item(
     runtime["next_seq"] = int(runtime["next_seq"]) + 1
 
 
-def _clean_reply(strip_done_text_fn, reply, *, request_anchor: str | None) -> str:
-    if request_anchor:
-        return strip_done_text_fn(str(reply), request_anchor).strip()
+def _reply_matches_request(runtime: dict[str, object], state: dict[str, object]) -> bool:
+    if bool(runtime.get("no_wrap", False)):
+        return True
+    request_anchor = str(runtime.get("request_anchor") or "").strip().lower()
+    observed_req_id = str(state.get("last_assistant_req_id") or "").strip().lower()
+    return bool(request_anchor and observed_req_id and observed_req_id == request_anchor)
+
+
+def _reply_completed(state: dict[str, object]) -> bool:
+    completed = state.get("last_assistant_completed")
+    try:
+        return completed is not None
+    except Exception:
+        return False
+
+
+def _coerce_str(value: object) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _clean_reply(reply) -> str:
     return str(reply).strip()
 
 

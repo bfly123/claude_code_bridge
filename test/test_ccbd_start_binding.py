@@ -42,6 +42,7 @@ def test_usable_project_namespace_binding_requires_matching_namespace_record() -
         binding,
         tmux_socket_path='/tmp/ccb.sock',
         tmux_session_name='ccb-demo',
+        workspace_window_id='@2',
         agent_name='agent1',
         project_id='proj-1',
         tmux_backend_factory=lambda socket_path=None: SimpleNamespace(socket_path=socket_path),
@@ -59,6 +60,7 @@ def test_usable_agent_only_project_binding_accepts_undeclared_socket_binding() -
         binding,
         tmux_socket_path='/tmp/current.sock',
         tmux_session_name='ccb-demo',
+        workspace_window_id='@2',
         agent_name='agent1',
         project_id='proj-1',
         tmux_backend_factory=lambda socket_path=None: SimpleNamespace(socket_path=socket_path),
@@ -107,3 +109,22 @@ def test_relabel_project_namespace_pane_applies_identity_for_project_socket() ->
             },
         )
     ]
+
+
+def test_usable_project_namespace_binding_rejects_old_workspace_window() -> None:
+    binding = _binding()
+    record = SimpleNamespace(matches=lambda **kwargs: kwargs.get('window_id') == '@2')
+
+    usable = usable_project_namespace_binding(
+        binding,
+        tmux_socket_path='/tmp/ccb.sock',
+        tmux_session_name='ccb-demo',
+        workspace_window_id='@3',
+        agent_name='agent1',
+        project_id='proj-1',
+        tmux_backend_factory=lambda socket_path=None: SimpleNamespace(socket_path=socket_path),
+        inspect_project_namespace_pane_fn=lambda backend, pane_id: record,
+        same_tmux_socket_path_fn=lambda left, right: str(left or '') == str(right or ''),
+    )
+
+    assert usable is None

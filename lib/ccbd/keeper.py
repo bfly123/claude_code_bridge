@@ -7,6 +7,7 @@ import time
 from agents.config_identity import project_config_identity_payload
 from agents.config_loader import load_project_config
 from ccbd.daemon_process import spawn_ccbd_process
+from ccbd.keeper_runtime.app_state import KeeperAppState, KeeperAppStateMixin
 from ccbd.keeper_runtime import KeeperState, KeeperStateStore, ShutdownIntent, ShutdownIntentStore, keeper_state_is_running
 from ccbd.keeper_runtime.loop import cleanup_transient_keeper_files, daemon_matches_project_config, reconcile_once, request_shutdown, run_forever
 from ccbd.keeper_runtime.state import compute_project_id
@@ -19,7 +20,7 @@ from cli.kill_runtime.processes import terminate_pid_tree
 from storage.paths import PathLayout
 
 
-class ProjectKeeper:
+class ProjectKeeper(KeeperAppStateMixin):
     def __init__(
         self,
         project_root: str | Path,
@@ -30,17 +31,22 @@ class ProjectKeeper:
         sleep_fn=time.sleep,
         spawn_ccbd_process_fn=spawn_ccbd_process,
     ) -> None:
-        self.project_root = Path(project_root).expanduser().resolve()
-        self.paths = PathLayout(self.project_root)
-        self.clock = clock
-        self.pid = pid or os.getpid()
-        self._sleep = sleep_fn
-        self._spawn_ccbd_process = spawn_ccbd_process_fn
-        self._process_exists = process_exists_fn
-        self._mount_manager = MountManager(self.paths, clock=self.clock)
-        self._ownership_guard = OwnershipGuard(self.paths, self._mount_manager, clock=self.clock)
-        self._state_store = KeeperStateStore(self.paths)
-        self._intent_store = ShutdownIntentStore(self.paths)
+        resolved_project_root = Path(project_root).expanduser().resolve()
+        paths = PathLayout(resolved_project_root)
+        mount_manager = MountManager(paths, clock=clock)
+        self._runtime_state = KeeperAppState(
+            project_root=resolved_project_root,
+            paths=paths,
+            clock=clock,
+            pid=pid or os.getpid(),
+            sleep=sleep_fn,
+            spawn_ccbd_process=spawn_ccbd_process_fn,
+            process_exists=process_exists_fn,
+            mount_manager=mount_manager,
+            ownership_guard=OwnershipGuard(paths, mount_manager, clock=clock),
+            state_store=KeeperStateStore(paths),
+            intent_store=ShutdownIntentStore(paths),
+        )
 
     def run_forever(self, *, poll_interval: float = 0.5, start_timeout_s: float = 5.0) -> int:
         return run_forever(self, poll_interval=poll_interval, start_timeout_s=start_timeout_s)

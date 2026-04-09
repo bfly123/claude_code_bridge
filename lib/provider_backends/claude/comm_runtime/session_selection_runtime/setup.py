@@ -17,6 +17,7 @@ def initialize_reader(
     reader.root = Path(root).expanduser()
     reader.work_dir = work_dir or Path.cwd()
     reader._preferred_session = None
+    reader._preferred_session_locked = False
     reader._use_sessions_index = bool(use_sessions_index)
     reader._include_subagents = bool(include_subagents)
     reader._include_subagent_user = bool(include_subagent_user)

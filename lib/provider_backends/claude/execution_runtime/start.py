@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import re
 import time
 from pathlib import Path
 
@@ -10,7 +9,7 @@ from completion.models import CompletionSourceKind
 from provider_core.instance_resolution import named_agent_instance
 from provider_execution.active import PreparedActiveStart, prepare_active_start, resume_active_submission
 from provider_execution.base import ProviderRuntimeContext, ProviderSubmission
-from provider_execution.common import preferred_session_path, send_prompt_to_runtime_target
+from provider_execution.common import no_wrap_requested, preferred_session_path, send_prompt_to_runtime_target
 
 from ..protocol import wrap_claude_prompt, wrap_claude_turn_prompt
 from provider_hooks.artifacts import completion_dir_from_session_data
@@ -51,38 +50,40 @@ def send_prompt(backend: object, pane_id: str, text: str) -> None:
     send_prompt_to_runtime_target(backend, pane_id, text)
 
 
+def resolved_ready_timeout(timeout_s: float = 8.0) -> float:
+    try:
+        return max(0.0, float(os.environ.get("CCB_CLAUDE_READY_TIMEOUT_S", timeout_s)))
+    except Exception:
+        return max(0.0, timeout_s)
+
+
 def looks_ready(text: str) -> bool:
     normalized = str(text or "")
     lowered = normalized.lower()
+    if _has_prompt_line(normalized):
+        return True
     if "type your message" in lowered or "esc to interrupt" in lowered:
         return True
-    if "for shortcuts" in lowered and _has_prompt_line(normalized):
+    if "for shortcuts" in lowered:
         return True
-    return _has_prompt_line(normalized) and not _looks_like_banner_only(lowered)
-
-
-_PROMPT_LINE_RE = re.compile(r"(^|\n)\s*❯(?:\s|\n|$)")
+    return False
 
 
 def _has_prompt_line(text: str) -> bool:
-    return bool(_PROMPT_LINE_RE.search(str(text or "")))
-
-
-def _looks_like_banner_only(lowered: str) -> bool:
-    text = str(lowered or "")
-    if "welcome back!" not in text:
-        return False
-    return "for shortcuts" not in text and "esc to interrupt" not in text and "type your message" not in text
-
+    for line in str(text or "").splitlines():
+        stripped = line.lstrip()
+        if not stripped.startswith("❯"):
+            continue
+        tail = stripped[1:]
+        if not tail or tail.isspace():
+            return True
+    return False
 
 def wait_for_runtime_ready(backend: object, pane_id: str, *, timeout_s: float = 8.0) -> None:
     get_pane_content = getattr(backend, "get_pane_content", None)
     if not callable(get_pane_content):
         return
-    try:
-        timeout_s = max(0.0, float(os.environ.get("CCB_CLAUDE_READY_TIMEOUT_S", timeout_s)))
-    except Exception:
-        timeout_s = max(0.0, timeout_s)
+    timeout_s = resolved_ready_timeout(timeout_s)
     deadline = time.time() + timeout_s
     saw_content = False
     while time.time() < deadline:
@@ -130,9 +131,8 @@ def start_active_submission(
     state = reader.capture_state()
     request_anchor = request_anchor_fn(job.job_id)
     completion_dir = completion_dir_for_session(prepared.session)
-    wait_for_runtime_ready(prepared.backend, prepared.pane_id)
-    provider_options = dict(getattr(job, "provider_options", {}) or {})
-    no_wrap = bool(provider_options.get("no_wrap"))
+    no_wrap = no_wrap_requested(job)
+    reply_delivery = str(job.request.message_type or "").strip().lower() == "reply_delivery"
     prompt = (
         job.request.body
         if no_wrap
@@ -142,7 +142,6 @@ def start_active_submission(
             else wrap_claude_prompt(job.request.body, request_anchor)
         )
     )
-    send_prompt(prepared.backend, prepared.pane_id, prompt)
 
     return ProviderSubmission(
         job_id=job.job_id,
@@ -161,11 +160,18 @@ def start_active_submission(
             "pane_id": prepared.pane_id,
             "request_anchor": request_anchor,
             "next_seq": 1,
-            "anchor_seen": False,
+            "anchor_seen": no_wrap,
             "reply_buffer": "",
             "raw_buffer": "",
             "session_path": state_session_path(state),
             "completion_dir": completion_dir,
+            "no_wrap": no_wrap,
+            "prompt_text": prompt,
+            "prompt_sent": False,
+            "reply_delivery_complete_on_dispatch": reply_delivery,
+            "reply_delivery_require_ready": reply_delivery,
+            "ready_wait_started_at": now,
+            "ready_timeout_s": resolved_ready_timeout(),
         },
     )
 

@@ -62,6 +62,11 @@ def pane_id_by_title_marker_output(stdout: str, marker: str) -> str | None:
     marker = normalized_marker(marker)
     if not marker:
         return None
+    exact_matches, prefix_matches = collect_pane_title_matches(stdout, marker)
+    return select_marker_match(exact_matches, prefix_matches)
+
+
+def collect_pane_title_matches(stdout: str, marker: str) -> tuple[list[str], list[str]]:
     exact_matches: list[str] = []
     prefix_matches: list[str] = []
     for line in (stdout or "").splitlines():
@@ -69,11 +74,32 @@ def pane_id_by_title_marker_output(stdout: str, marker: str) -> str | None:
         if parsed is None:
             continue
         pid, title = parsed
-        if title == marker:
-            exact_matches.append(pid)
-            continue
-        if title.startswith(marker):
-            prefix_matches.append(pid)
+        record_pane_title_match(
+            pid=pid,
+            title=title,
+            marker=marker,
+            exact_matches=exact_matches,
+            prefix_matches=prefix_matches,
+        )
+    return exact_matches, prefix_matches
+
+
+def record_pane_title_match(
+    *,
+    pid: str,
+    title: str,
+    marker: str,
+    exact_matches: list[str],
+    prefix_matches: list[str],
+) -> None:
+    if title == marker:
+        exact_matches.append(pid)
+        return
+    if title.startswith(marker):
+        prefix_matches.append(pid)
+
+
+def select_marker_match(exact_matches: list[str], prefix_matches: list[str]) -> str | None:
     if len(exact_matches) == 1:
         return exact_matches[0]
     if exact_matches:

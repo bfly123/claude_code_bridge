@@ -14,23 +14,58 @@ def load_claude_skills() -> str:
     if not env_bool('CCB_CLAUDE_SKILLS', True):
         _SKILL_CACHE = ''
         return _SKILL_CACHE
-    skills_dir = Path(__file__).resolve().parents[2] / 'claude_skills'
-    if not skills_dir.is_dir():
-        _SKILL_CACHE = ''
-        return _SKILL_CACHE
-    parts: list[str] = []
-    for name in ('ask.md',):
-        path = skills_dir / name
-        if not path.is_file():
-            continue
-        try:
-            text = path.read_text(encoding='utf-8').strip()
-        except Exception:
-            continue
-        if text:
-            parts.append(text)
-    _SKILL_CACHE = '\n\n'.join(parts).strip()
+    _SKILL_CACHE = load_claude_skills_from_dir(default_claude_skills_dir())
     return _SKILL_CACHE
 
 
-__all__ = ['load_claude_skills']
+def load_claude_skills_from_dir(skills_dir: Path) -> str:
+    if not skills_dir.is_dir():
+        return ''
+    parts: list[str] = []
+    text = _first_existing_skill_text(_skill_paths(skills_dir))
+    if text:
+        parts.append(text)
+    return '\n\n'.join(parts).strip()
+
+
+def default_claude_skills_dir() -> Path:
+    return Path(__file__).resolve().parents[4] / 'claude_skills'
+
+
+def _skill_paths(skills_dir: Path) -> tuple[Path, ...]:
+    return (
+        skills_dir / 'ask' / 'RUNTIME.md',
+        skills_dir / 'ask' / 'SKILL.md',
+        skills_dir / 'ask.md',
+    )
+
+
+def _first_existing_skill_text(paths: tuple[Path, ...]) -> str:
+    for path in paths:
+        text = _read_skill_text(path)
+        if text:
+            return text
+    return ''
+
+
+def _read_skill_text(path: Path) -> str:
+    if not path.is_file():
+        return ''
+    try:
+        text = path.read_text(encoding='utf-8')
+    except Exception:
+        return ''
+    return _strip_front_matter(text).strip()
+
+
+def _strip_front_matter(text: str) -> str:
+    stripped = str(text or '')
+    if not stripped.startswith('---\n'):
+        return stripped
+    end = stripped.find('\n---\n', 4)
+    if end == -1:
+        return stripped
+    return stripped[end + 5 :]
+
+
+__all__ = ['default_claude_skills_dir', 'load_claude_skills', 'load_claude_skills_from_dir']

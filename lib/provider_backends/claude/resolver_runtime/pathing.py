@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 
@@ -11,8 +10,8 @@ def project_key_for_path(path: Path) -> str:
     return re.sub(r"[^A-Za-z0-9]", "-", str(path))
 
 
-def candidate_project_dirs(root: Path, work_dir: Path) -> list[Path]:
-    candidates = candidate_work_dirs(work_dir)
+def candidate_project_dirs(root: Path, work_dir: Path, *, include_env_pwd: bool = True) -> list[Path]:
+    candidates = candidate_work_dirs(work_dir, include_env_pwd=include_env_pwd)
     out: list[Path] = []
     seen: set[str] = set()
     for candidate in candidates:
@@ -24,11 +23,11 @@ def candidate_project_dirs(root: Path, work_dir: Path) -> list[Path]:
     return out
 
 
-def session_path_from_id(session_id: str, work_dir: Path) -> Path | None:
+def session_path_from_id(session_id: str, work_dir: Path, *, include_env_pwd: bool = True) -> Path | None:
     sid = str(session_id or "").strip()
     if not sid:
         return None
-    for project_dir in candidate_project_dirs(CLAUDE_PROJECTS_ROOT, work_dir):
+    for project_dir in candidate_project_dirs(CLAUDE_PROJECTS_ROOT, work_dir, include_env_pwd=include_env_pwd):
         candidate = project_dir / f"{sid}.jsonl"
         if candidate.exists():
             return candidate
@@ -47,14 +46,17 @@ def normalize_session_binding(data: dict, work_dir: Path) -> None:
         adopt_session_path_if_present(data, sid=sid, work_dir=work_dir)
 
 
-def candidate_work_dirs(work_dir: Path) -> list[Path]:
+def candidate_work_dirs(work_dir: Path, *, include_env_pwd: bool = True) -> list[Path]:
     candidates: list[Path] = []
-    env_pwd = os.environ.get("PWD")
-    if env_pwd:
-        try:
-            candidates.append(Path(env_pwd))
-        except Exception:
-            pass
+    if include_env_pwd:
+        from os import environ
+
+        env_pwd = environ.get("PWD")
+        if env_pwd:
+            try:
+                candidates.append(Path(env_pwd))
+            except Exception:
+                pass
     candidates.append(work_dir)
     try:
         candidates.append(work_dir.resolve())

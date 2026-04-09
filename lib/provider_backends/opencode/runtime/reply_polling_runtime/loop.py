@@ -4,6 +4,35 @@ import time
 from typing import Any, Callable
 
 
+def resolve_active_session(
+    state: dict[str, Any],
+    *,
+    session_id: str | None,
+    session_entry: dict[str, Any] | None,
+    reset_state_for_session_fn: Callable,
+) -> tuple[str | None, str | None, dict[str, Any]]:
+    if not session_entry:
+        return session_id, None, state
+    current_session_id = payload_session_id(session_entry)
+    session_id, state = advance_session_state(
+        state,
+        session_id=session_id,
+        current_session_id=current_session_id,
+        reset_state_for_session_fn=reset_state_for_session_fn,
+    )
+    return session_id, current_session_id, state
+
+
+def session_updated_value(session_entry: dict[str, Any], *, session_updated_fn: Callable) -> int:
+    return session_updated_fn(session_entry.get("payload") or {})
+
+
+def should_finish_read_cycle(*, block: bool, reader, deadline: float) -> bool:
+    if not block:
+        return True
+    return sleep_or_timeout(reader, deadline)
+
+
 def read_since(
     reader,
     state: dict[str, Any],
@@ -23,29 +52,21 @@ def read_since(
 
     while True:
         session_entry = get_latest_session_fn(reader)
-        if not session_entry:
-            if should_return_without_session(block):
-                return None, state
-            if sleep_or_timeout(reader, deadline):
-                return None, state
-            continue
-
-        current_session_id = payload_session_id(session_entry)
-        session_id, state = advance_session_state(
+        session_id, current_session_id, state = resolve_active_session(
             state,
             session_id=session_id,
-            current_session_id=current_session_id,
+            session_entry=session_entry,
             reset_state_for_session_fn=reset_state_for_session_fn,
         )
-
         if not current_session_id:
-            if should_return_without_session(block):
-                return None, state
-            if sleep_or_timeout(reader, deadline):
+            if should_finish_read_cycle(block=block, reader=reader, deadline=deadline):
                 return None, state
             continue
 
-        updated_i = session_updated_fn(session_entry.get("payload") or {})
+        updated_i = session_updated_value(
+            session_entry,
+            session_updated_fn=session_updated_fn,
+        )
         prev_updated = int(state.get("session_updated") or -1)
         if should_scan_session(
             block=block,
@@ -70,9 +91,7 @@ def read_since(
             if reply:
                 return reply, state
 
-        if not block:
-            return None, state
-        if sleep_or_timeout(reader, deadline):
+        if should_finish_read_cycle(block=block, reader=reader, deadline=deadline):
             return None, state
 
 
@@ -87,10 +106,6 @@ def payload_session_id(session_entry: dict[str, Any]) -> str | None:
     payload = session_entry.get("payload") or {}
     session_id = payload.get("id")
     return session_id if isinstance(session_id, str) else None
-
-
-def should_return_without_session(block: bool) -> bool:
-    return not block
 
 
 def advance_session_state(
@@ -164,8 +179,11 @@ __all__ = [
     "advance_session_state",
     "payload_session_id",
     "read_since",
+    "resolve_active_session",
     "scan_current_session",
+    "session_updated_value",
     "should_scan_session",
+    "should_finish_read_cycle",
     "sleep_or_timeout",
     "state_session_id",
 ]

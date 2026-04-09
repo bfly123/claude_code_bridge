@@ -38,6 +38,7 @@ def test_upsert_registry_merges_providers(tmp_path: Path, monkeypatch: pytest.Mo
 
     work_dir = tmp_path / "proj"
     work_dir.mkdir()
+    (work_dir / ".ccb").mkdir()
     pid = compute_ccb_project_id(work_dir)
 
     ok1 = pane_registry.upsert_registry(

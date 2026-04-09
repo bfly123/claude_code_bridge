@@ -12,26 +12,30 @@ from ccbd.services.ownership import OwnershipGuard
 from ccbd.services.project_namespace import ProjectNamespaceController
 from ccbd.services.start_policy import CcbdStartPolicyStore
 from ccbd.supervisor_runtime import start_supervisor, stop_all_supervisor
+from ccbd.supervisor_runtime.state_bundle import SupervisorRuntimeState, SupervisorRuntimeStateMixin
 from cli.services.tmux_cleanup_history import TmuxCleanupHistoryStore
 from cli.services.tmux_project_cleanup import cleanup_project_tmux_orphans_by_socket
 
 
-class RuntimeSupervisor:
+class RuntimeSupervisor(SupervisorRuntimeStateMixin):
     def __init__(self, *, project_root: Path, project_id: str, paths, config, registry, runtime_service, project_namespace: ProjectNamespaceController | None = None, clock=utc_now) -> None:
-        self._project_root = Path(project_root).expanduser().resolve()
-        self._project_id = project_id
-        self._paths = paths
-        self._config = config
-        self._config_identity = project_config_identity_payload(config)
-        self._registry = registry
-        self._runtime_service = runtime_service
-        self._project_namespace = project_namespace
-        self._clock = clock
-        self._mount_manager = MountManager(paths, clock=clock)
-        self._ownership_guard = OwnershipGuard(paths, self._mount_manager, clock=clock)
-        self._startup_report_store = CcbdStartupReportStore(paths)
-        self._shutdown_report_store = CcbdShutdownReportStore(paths)
-        self._start_policy_store = CcbdStartPolicyStore(paths)
+        mount_manager = MountManager(paths, clock=clock)
+        self._runtime_state = SupervisorRuntimeState(
+            project_root=Path(project_root).expanduser().resolve(),
+            project_id=project_id,
+            paths=paths,
+            config=config,
+            config_identity=project_config_identity_payload(config),
+            registry=registry,
+            runtime_service=runtime_service,
+            project_namespace=project_namespace,
+            clock=clock,
+            mount_manager=mount_manager,
+            ownership_guard=OwnershipGuard(paths, mount_manager, clock=clock),
+            startup_report_store=CcbdStartupReportStore(paths),
+            shutdown_report_store=CcbdShutdownReportStore(paths),
+            start_policy_store=CcbdStartPolicyStore(paths),
+        )
 
     def start(
         self,
@@ -42,6 +46,7 @@ class RuntimeSupervisor:
         cleanup_tmux_orphans: bool = True,
         interactive_tmux_layout: bool = True,
         recreate_namespace: bool = False,
+        reflow_workspace: bool = False,
         recreate_reason: str | None = None,
     ) -> StartFlowSummary:
         return start_supervisor(
@@ -52,6 +57,7 @@ class RuntimeSupervisor:
             cleanup_tmux_orphans=cleanup_tmux_orphans,
             interactive_tmux_layout=interactive_tmux_layout,
             recreate_namespace=recreate_namespace,
+            reflow_workspace=reflow_workspace,
             recreate_reason=recreate_reason,
             run_start_flow_fn=run_start_flow,
         )

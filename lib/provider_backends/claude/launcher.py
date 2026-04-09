@@ -142,10 +142,9 @@ def write_claude_settings_overlay(
     *,
     profile: ResolvedProviderProfile | None = None,
 ) -> Path | None:
-    del profile
     return _write_claude_settings_overlay_impl(
         runtime_dir,
-        user_settings_path=Path.home() / '.claude' / 'settings.json',
+        profile=profile,
     )
 
 

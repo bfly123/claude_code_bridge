@@ -56,6 +56,9 @@ class RuntimeService:
         tmux_socket_path: str | None = None,
         session_file: str | None = None,
         session_id: str | None = None,
+        slot_key: str | None = None,
+        window_id: str | None = None,
+        workspace_epoch: int | None = None,
         lifecycle_state: str | None = None,
         managed_by: str | None = None,
         binding_source: str | RuntimeBindingSource | None = None,
@@ -83,6 +86,9 @@ class RuntimeService:
             tmux_socket_path=tmux_socket_path,
             session_file=session_file,
             session_id=session_id,
+            slot_key=slot_key,
+            window_id=window_id,
+            workspace_epoch=workspace_epoch,
             lifecycle_state=lifecycle_state,
             managed_by=managed_by,
             binding_source=binding_source,
@@ -111,6 +117,7 @@ class RuntimeService:
 
     def refresh_provider_binding(self, agent_name: str, *, recover: bool = False) -> AgentRuntime | None:
         return refresh_provider_binding_impl(
+            layout=self._layout,
             registry=self._registry,
             session_bindings=self._session_bindings,
             attach_runtime_fn=self.attach,

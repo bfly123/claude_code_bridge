@@ -5,6 +5,7 @@ from .reply_delivery_runtime import (
     claimable_reply_delivery_job_ids,
     is_reply_delivery_job,
     prepare_reply_deliveries,
+    repair_reply_delivery_heads,
     resolve_reply_delivery_terminal,
 )
 
@@ -14,5 +15,6 @@ __all__ = [
     'claimable_reply_delivery_job_ids',
     'is_reply_delivery_job',
     'prepare_reply_deliveries',
+    'repair_reply_delivery_heads',
     'resolve_reply_delivery_terminal',
 ]

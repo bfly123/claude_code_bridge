@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import time
-
 from ccbd.services.project_namespace import ProjectNamespaceController
 from ccbd.services.start_policy import CcbdStartPolicyStore
 from ccbd.system import utc_now
@@ -11,6 +9,8 @@ from cli.services.kill_runtime.agent_cleanup import (
     extra_agent_dir_names as _extra_agent_dir_names_impl,
     prepare_local_shutdown as _prepare_local_shutdown_impl,
 )
+from cli.services.kill_runtime.finalize import finalize_kill as _finalize_kill_impl
+from cli.services.kill_runtime.lifecycle import destroy_project_namespace as _destroy_project_namespace_impl
 from cli.services.kill_runtime.pid_cleanup import (
     collect_agent_pid_candidates as _collect_agent_pid_candidates_impl,
     path_within as _path_within_impl,
@@ -19,6 +19,11 @@ from cli.services.kill_runtime.pid_cleanup import (
     read_proc_path as _read_proc_path_impl,
     remove_pid_files as _remove_pid_files_impl,
     terminate_runtime_pids as _terminate_runtime_pids_impl,
+)
+from cli.services.kill_runtime.remote import (
+    await_remote_shutdown as _await_remote_shutdown_impl,
+    request_remote_stop as _request_remote_stop_impl,
+    resolve_shutdown_summary as _resolve_shutdown_summary_impl,
 )
 from cli.services.kill_runtime.reporting import (
     merge_cleanup_summaries as _merge_cleanup_summaries_impl,
@@ -52,25 +57,16 @@ def kill_project(context: CliContext, command: ParsedKillCommand):
 
 
 def _request_remote_stop(context: CliContext, *, force: bool) -> KillSummary | None:
-    try:
-        handle = connect_mounted_daemon(context, allow_restart_stale=False)
-    except CcbdServiceError:
-        return None
-    if handle is None or handle.client is None:
-        return None
-    try:
-        record_shutdown_intent(context, reason='kill')
-        stop_all_client = (
-            CcbdClient(context.paths.ccbd_socket_path, timeout_s=_STOP_ALL_TIMEOUT_S)
-            if isinstance(handle.client, CcbdClient)
-            else handle.client
-        )
-        payload = stop_all_client.stop_all(force=force)
-    except Exception:
-        if not force:
-            raise
-        return None
-    return _summary_from_stop_all_payload(payload)
+    return _request_remote_stop_impl(
+        context,
+        force=force,
+        connect_mounted_daemon_fn=connect_mounted_daemon,
+        record_shutdown_intent_fn=record_shutdown_intent,
+        ccbd_client_cls=CcbdClient,
+        summary_from_stop_all_payload_fn=_summary_from_stop_all_payload,
+        stop_all_timeout_s=_STOP_ALL_TIMEOUT_S,
+        service_error_cls=CcbdServiceError,
+    )
 
 
 def _prepare_local_shutdown(context: CliContext, *, force: bool):
@@ -82,30 +78,24 @@ def _prepare_local_shutdown(context: CliContext, *, force: bool):
 
 
 def _destroy_project_namespace(context: CliContext, *, force: bool) -> None:
-    ProjectNamespaceController(context.paths, context.project.project_id).destroy(
-        reason='kill',
+    _destroy_project_namespace_impl(
+        context,
         force=force,
+        project_namespace_controller_cls=ProjectNamespaceController,
+        start_policy_store_cls=CcbdStartPolicyStore,
     )
-    try:
-        CcbdStartPolicyStore(context.paths).clear()
-    except Exception:
-        pass
 
 
 def _resolve_shutdown_summary(context: CliContext, *, remote_summary: KillSummary | None, force: bool) -> KillSummary:
-    if remote_summary is not None:
-        return _await_remote_shutdown(context, force=force)
-    try:
-        return shutdown_daemon(context, force=force)
-    except CcbdServiceError:
-        if not force:
-            raise
-        return KillSummary(
-            project_id=context.project.project_id,
-            state='unmounted',
-            socket_path=str(context.paths.ccbd_socket_path),
-            forced=force,
-        )
+    return _resolve_shutdown_summary_impl(
+        context,
+        remote_summary=remote_summary,
+        force=force,
+        shutdown_daemon_fn=shutdown_daemon,
+        await_remote_shutdown_fn=_await_remote_shutdown,
+        service_error_cls=CcbdServiceError,
+        kill_summary_cls=KillSummary,
+    )
 
 
 def _finalize_kill(
@@ -116,85 +106,43 @@ def _finalize_kill(
     remote_summary: KillSummary | None,
     summary: KillSummary,
 ) -> KillSummary:
-    set_tmux_ui_active(False)
-    cleanup_summaries = cleanup_project_tmux_orphans_by_socket(
-        project_id=context.project.project_id,
-        active_panes_by_socket={socket_name: () for socket_name in preparation.tmux_sockets},
-    )
-    _terminate_runtime_pids(
-        project_root=context.project.project_root,
-        pid_candidates=preparation.pid_candidates,
-    )
-    if cleanup_summaries:
-        TmuxCleanupHistoryStore(context.paths).append(
-            TmuxCleanupEvent(
-                event_kind='kill',
-                project_id=context.project.project_id,
-                occurred_at=utc_now(),
-                summaries=cleanup_summaries,
-            )
-        )
-    all_cleanup_summaries = _merge_cleanup_summaries(
-        remote_summary.cleanup_summaries if remote_summary is not None else (),
-        cleanup_summaries,
-    )
-    final_summary = KillSummary(
-        project_id=(remote_summary or summary).project_id,
-        state=summary.state,
-        socket_path=summary.socket_path,
-        forced=force,
-        cleanup_summaries=all_cleanup_summaries,
-    )
-    _record_kill_report(
+    return _finalize_kill_impl(
         context,
-        trigger='kill' if remote_summary is not None else 'kill_fallback',
-        forced=force,
-        cleanup_summaries=all_cleanup_summaries,
+        force=force,
+        preparation=preparation,
+        remote_summary=remote_summary,
+        summary=summary,
+        set_tmux_ui_active_fn=set_tmux_ui_active,
+        cleanup_project_tmux_orphans_by_socket_fn=cleanup_project_tmux_orphans_by_socket,
+        terminate_runtime_pids_fn=_terminate_runtime_pids,
+        tmux_cleanup_history_store_cls=TmuxCleanupHistoryStore,
+        tmux_cleanup_event_cls=TmuxCleanupEvent,
+        merge_cleanup_summaries_fn=_merge_cleanup_summaries,
+        record_kill_report_fn=_record_kill_report,
+        kill_summary_cls=KillSummary,
+        clock_fn=utc_now,
     )
-    return final_summary
 
 
 def _await_remote_shutdown(context: CliContext, *, force: bool, timeout_s: float = 2.5) -> KillSummary:
-    deadline = time.time() + max(0.1, float(timeout_s))
-    last_inspection = None
-    while time.time() < deadline:
-        _, _, inspection = inspect_daemon(context)
-        last_inspection = inspection
-        if not inspection.socket_connectable and inspection.health in {LeaseHealth.MISSING, LeaseHealth.UNMOUNTED, LeaseHealth.STALE}:
-            break
-        time.sleep(0.05)
-    lease = None if last_inspection is None else last_inspection.lease
-    return KillSummary(
-        project_id=context.project.project_id,
-        state=lease.mount_state.value if lease is not None else 'unmounted',
-        socket_path=str(context.paths.ccbd_socket_path),
-        forced=force,
+    return _await_remote_shutdown_impl(
+        context,
+        force=force,
+        inspect_daemon_fn=inspect_daemon,
+        lease_health_cls=LeaseHealth,
+        kill_summary_cls=KillSummary,
+        timeout_s=timeout_s,
     )
 
 
-def _summary_from_stop_all_payload(payload: dict) -> KillSummary:
-    return _summary_from_stop_all_payload_impl(payload)
-
-
-def _merge_cleanup_summaries(*groups: tuple[ProjectTmuxCleanupSummary, ...]) -> tuple[ProjectTmuxCleanupSummary, ...]:
-    return _merge_cleanup_summaries_impl(*groups)
-
-
-def _extra_agent_dir_names(context: CliContext, configured_agent_names: tuple[str, ...]) -> tuple[str, ...]:
-    return _extra_agent_dir_names_impl(context, configured_agent_names)
-
-
-def _collect_agent_pid_candidates(
-    agent_dir,
-    *,
-    runtime,
-    fallback_to_agent_dir: bool,
-) -> dict[int, list]:
-    return _collect_agent_pid_candidates_impl(
-        agent_dir=agent_dir,
-        runtime=runtime,
-        fallback_to_agent_dir=fallback_to_agent_dir,
-    )
+_summary_from_stop_all_payload = _summary_from_stop_all_payload_impl
+_merge_cleanup_summaries = _merge_cleanup_summaries_impl
+_extra_agent_dir_names = _extra_agent_dir_names_impl
+_collect_agent_pid_candidates = _collect_agent_pid_candidates_impl
+_read_proc_path = _read_proc_path_impl
+_read_proc_cmdline = _read_proc_cmdline_impl
+_path_within = _path_within_impl
+_remove_pid_files = _remove_pid_files_impl
 
 
 def _terminate_runtime_pids(*, project_root, pid_candidates) -> None:
@@ -233,19 +181,3 @@ def _pid_matches_project(pid: int, *, project_root, hint_paths) -> bool:
         read_proc_cmdline_fn=_read_proc_cmdline,
         path_within_fn=_path_within,
     )
-
-
-def _read_proc_path(pid: int, entry: str):
-    return _read_proc_path_impl(pid, entry)
-
-
-def _read_proc_cmdline(pid: int) -> str:
-    return _read_proc_cmdline_impl(pid)
-
-
-def _path_within(path, root) -> bool:
-    return _path_within_impl(path, root)
-
-
-def _remove_pid_files(paths) -> None:
-    _remove_pid_files_impl(paths)

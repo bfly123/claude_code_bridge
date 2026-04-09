@@ -22,10 +22,8 @@ def extract_from_opencode(
     project_id: Optional[str] = None,
 ) -> TransferContext:
     _session_file, data = load_session_data(work_dir, source_session_files, 'opencode')
-    resolved_session_id_value = str(
-        session_id or data.get('opencode_session_id') or data.get('opencode_storage_session_id') or ''
-    ).strip()
-    resolved_project_id = str(project_id or data.get('opencode_project_id') or '').strip()
+    resolved_session_id_value = _opencode_session_id(data, session_id=session_id)
+    resolved_project_id = _opencode_project_id(data, project_id=project_id)
 
     from provider_backends.opencode.comm import OpenCodeLogReader
 
@@ -35,17 +33,10 @@ def extract_from_opencode(
         session_id_filter=resolved_session_id_value or None,
     )
 
-    resolved_session_path = None
-    if not resolved_session_id_value:
-        state = log_reader.capture_state()
-        resolved_session_path = expand_optional_path(state.get('session_path'))
-        resolved_session_id_value = str(state.get('session_id') or '').strip()
-        resolved_session_id_value = resolved_session_id(
-            session_id=resolved_session_id_value,
-            session_path=resolved_session_path,
-        )
-        if resolved_session_id_value == 'unknown':
-            raise SessionNotFoundError('No OpenCode session found')
+    resolved_session_id_value, resolved_session_path = _resolve_opencode_session_identity(
+        log_reader,
+        session_id=resolved_session_id_value,
+    )
 
     pairs = _opencode_pairs(
         log_reader,
@@ -62,6 +53,34 @@ def extract_from_opencode(
         session_path=resolved_session_path,
         last_n=last_n,
     )
+
+
+def _opencode_session_id(data: dict, *, session_id: Optional[str]) -> str:
+    return str(
+        session_id or data.get('opencode_session_id') or data.get('opencode_storage_session_id') or ''
+    ).strip()
+
+
+def _opencode_project_id(data: dict, *, project_id: Optional[str]) -> str:
+    return str(project_id or data.get('opencode_project_id') or '').strip()
+
+
+def _resolve_opencode_session_identity(
+    log_reader,
+    *,
+    session_id: str,
+) -> tuple[str, Optional[Path]]:
+    if session_id:
+        return session_id, None
+    state = log_reader.capture_state()
+    resolved_session_path = expand_optional_path(state.get('session_path'))
+    resolved_session_id_value = resolved_session_id(
+        session_id=str(state.get('session_id') or '').strip(),
+        session_path=resolved_session_path,
+    )
+    if resolved_session_id_value == 'unknown':
+        raise SessionNotFoundError('No OpenCode session found')
+    return resolved_session_id_value, resolved_session_path
 
 
 def _opencode_pairs(log_reader, *, session_id: str, fetch_n: int):

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from opencode_runtime.replies import observe_latest_assistant
+
 from ..storage_reader import read_messages, read_parts
 
 
@@ -19,8 +21,11 @@ def reset_state_for_session(state: dict[str, Any], session_id: str) -> dict[str,
     new_state['session_updated'] = -1
     new_state['assistant_count'] = 0
     new_state['last_assistant_id'] = None
+    new_state['last_assistant_parent_id'] = None
     new_state['last_assistant_completed'] = None
-    new_state['last_assistant_has_done'] = False
+    new_state['last_assistant_req_id'] = None
+    new_state['last_assistant_text_hash'] = None
+    new_state['last_assistant_aborted'] = False
     return new_state
 
 
@@ -55,16 +60,18 @@ def refresh_observed_state(reader, state: dict[str, Any], session_id: str, *, up
         ]
         new_state['assistant_count'] = len(assistants)
         if assistants:
-            latest = assistants[-1]
-            new_state['last_assistant_id'] = latest.get('id')
-            completed = (latest.get('time') or {}).get('completed')
-            try:
-                new_state['last_assistant_completed'] = int(completed) if completed is not None else None
-            except Exception:
-                new_state['last_assistant_completed'] = None
-            parts = read_parts(reader, str(latest.get('id')))
-            text = reader._extract_text(parts, allow_reasoning_fallback=True)
-            new_state['last_assistant_has_done'] = bool(text) and ('CCB_DONE:' in text)
+            observed = observe_latest_assistant(
+                current_messages,
+                read_parts=lambda message_id: read_parts(reader, message_id),
+                extract_req_id_from_text=getattr(reader, '_extract_req_id_from_text', None),
+            )
+            if observed is not None:
+                new_state['last_assistant_id'] = observed.get('assistant_id')
+                new_state['last_assistant_parent_id'] = observed.get('parent_id')
+                new_state['last_assistant_completed'] = observed.get('completed')
+                new_state['last_assistant_req_id'] = observed.get('req_id')
+                new_state['last_assistant_text_hash'] = observed.get('text_hash')
+                new_state['last_assistant_aborted'] = bool(observed.get('aborted'))
     except Exception:
         pass
     return new_state

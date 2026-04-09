@@ -12,7 +12,7 @@ from .execution_runtime import poll_submission as _poll_submission_impl
 from .execution_runtime import start_submission as _start_submission_impl
 from .execution_runtime.helpers import load_session as _load_session_impl
 from .execution_runtime.helpers import state_session_path as _state_session_path_impl
-from .protocol import is_done_text, strip_done_text, wrap_opencode_prompt
+from .protocol import wrap_opencode_prompt
 from .session import load_project_session
 
 
@@ -45,8 +45,6 @@ class OpenCodeProviderAdapter:
             submission,
             now=now,
             state_session_path_fn=_state_session_path,
-            is_done_text_fn=is_done_text,
-            strip_done_text_fn=strip_done_text,
         )
 
 

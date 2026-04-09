@@ -3,18 +3,17 @@ from __future__ import annotations
 from agents.models import AgentValidationError, normalize_agent_name
 
 
-COMMAND_MAILBOX_ACTOR = 'cmd'
 USER_ACTOR = 'user'
 NON_MAILBOX_ACTORS = frozenset({'system', 'manual', 'email'})
-COMMAND_MAILBOX_ALIASES = frozenset({COMMAND_MAILBOX_ACTOR})
+USER_ACTOR_ALIASES = frozenset({'cmd'})
 
 
 def normalize_actor_name(actor: str | None) -> str:
     normalized = str(actor or '').strip().lower()
     if not normalized:
         raise AgentValidationError('actor cannot be empty')
-    if normalized in COMMAND_MAILBOX_ALIASES:
-        return COMMAND_MAILBOX_ACTOR
+    if normalized in USER_ACTOR_ALIASES:
+        return USER_ACTOR
     if normalized == USER_ACTOR or normalized in NON_MAILBOX_ACTORS:
         return normalized
     return normalize_agent_name(normalized)
@@ -29,9 +28,7 @@ def normalize_mailbox_owner_name(actor: str | None) -> str:
 
 def known_mailbox_targets(config) -> frozenset[str]:
     agents = getattr(config, 'agents', {}) or {}
-    targets = {COMMAND_MAILBOX_ACTOR}
-    targets.update(normalize_agent_name(name) for name in agents)
-    return frozenset(targets)
+    return frozenset(normalize_agent_name(name) for name in agents)
 
 
 def normalize_mailbox_target(actor: str | None, *, known_targets: frozenset[str]) -> str | None:
@@ -48,10 +45,9 @@ def normalize_mailbox_target(actor: str | None, *, known_targets: frozenset[str]
 
 
 __all__ = [
-    'COMMAND_MAILBOX_ACTOR',
-    'COMMAND_MAILBOX_ALIASES',
     'NON_MAILBOX_ACTORS',
     'USER_ACTOR',
+    'USER_ACTOR_ALIASES',
     'known_mailbox_targets',
     'normalize_actor_name',
     'normalize_mailbox_owner_name',

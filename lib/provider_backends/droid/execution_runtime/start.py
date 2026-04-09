@@ -6,7 +6,7 @@ from ccbd.api_models import JobRecord
 from completion.models import CompletionSourceKind
 from provider_execution.active import PreparedActiveStart, prepare_active_start
 from provider_execution.base import ProviderRuntimeContext, ProviderSubmission
-from provider_execution.common import preferred_session_path, send_prompt_to_runtime_target
+from provider_execution.common import no_wrap_requested, preferred_session_path, send_prompt_to_runtime_target
 
 
 def start_submission(
@@ -43,7 +43,9 @@ def start_submission(
         reader.set_session_id_hint(session_id)
     state = reader.capture_state()
     request_anchor = request_anchor_fn(job.job_id)
-    send_prompt_to_runtime_target(prepared.backend, prepared.pane_id, wrap_prompt_fn(job.request.body, request_anchor))
+    no_wrap = no_wrap_requested(job)
+    prompt = job.request.body if no_wrap else wrap_prompt_fn(job.request.body, request_anchor)
+    send_prompt_to_runtime_target(prepared.backend, prepared.pane_id, prompt)
 
     return ProviderSubmission(
         job_id=job.job_id,
@@ -62,10 +64,11 @@ def start_submission(
             "pane_id": prepared.pane_id,
             "request_anchor": request_anchor,
             "next_seq": 1,
-            "anchor_seen": False,
+            "anchor_seen": no_wrap,
             "reply_buffer": "",
             "raw_buffer": "",
             "session_path": state_session_path(state),
+            "no_wrap": no_wrap,
         },
     )
 

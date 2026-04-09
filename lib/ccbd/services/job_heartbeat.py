@@ -1,10 +1,15 @@
 from __future__ import annotations
 
-from ccbd.api_models import JobRecord, JobStatus, TargetKind
 from ccbd.system import utc_now
-from heartbeat import HeartbeatAction, HeartbeatPolicy, HeartbeatStateStore, evaluate_heartbeat
-from mailbox_runtime.targets import known_mailbox_targets, normalize_mailbox_target
+from heartbeat import HeartbeatPolicy, HeartbeatStateStore
 from storage.paths import PathLayout
+
+from .job_heartbeat_runtime import (
+    cleanup_inactive_heartbeats,
+    should_track_heartbeat_job,
+    tick_job_heartbeat,
+    tracked_running_jobs,
+)
 
 _DEFAULT_SUBJECT_KIND = 'job_progress'
 _TRACKED_MESSAGE_TYPES = frozenset({'ask'})
@@ -24,185 +29,24 @@ class JobHeartbeatService:
         self._policy = policy
         self._store = store or HeartbeatStateStore(layout)
         self._clock = clock
-        self._subject_kind = str(subject_kind or _DEFAULT_SUBJECT_KIND).strip() or _DEFAULT_SUBJECT_KIND
+        self._subject_kind = (
+            str(subject_kind or _DEFAULT_SUBJECT_KIND).strip() or _DEFAULT_SUBJECT_KIND
+        )
+        self._tracked_message_types = _TRACKED_MESSAGE_TYPES
 
     def tick(self, dispatcher) -> tuple[str, ...]:
         active_job_ids: set[str] = set()
-        for _target_kind, _target_name, job_id in dispatcher._state.active_items():
-            job = dispatcher.get(job_id)
-            if not self._should_track(job):
-                continue
-            if self._tick_job(dispatcher, job):
+        for job in tracked_running_jobs(self, dispatcher):
+            if tick_job_heartbeat(self, dispatcher, job):
                 active_job_ids.add(job.job_id)
-        self._cleanup_inactive(active_job_ids)
+        cleanup_inactive_heartbeats(self, active_job_ids)
         return tuple(sorted(active_job_ids))
 
-    def _should_track(self, job: JobRecord | None) -> bool:
-        if job is None or job.status is not JobStatus.RUNNING:
-            return False
-        if job.target_kind is not TargetKind.AGENT:
-            return False
-        message_type = str(job.request.message_type or '').strip().lower()
-        return message_type in _TRACKED_MESSAGE_TYPES
-
-    def _tick_job(self, dispatcher, job: JobRecord) -> bool:
-        snapshot = dispatcher.get_snapshot(job.job_id)
-        if _snapshot_is_terminal(snapshot):
-            self._store.remove(self._subject_kind, job.job_id)
-            return False
-        observed_last_progress_at = (
-            str(snapshot.updated_at).strip()
-            if snapshot is not None and str(snapshot.updated_at).strip()
-            else str(job.updated_at).strip()
-        )
-        if not observed_last_progress_at:
-            return False
-        prior_state = self._store.load(self._subject_kind, job.job_id)
-        now = self._clock()
-        next_state, decision = evaluate_heartbeat(
-            policy=self._policy,
-            subject_kind=self._subject_kind,
-            subject_id=job.job_id,
-            owner=job.agent_name,
-            observed_last_progress_at=observed_last_progress_at,
-            now=now,
-            state=prior_state,
-        )
-        if decision.action is HeartbeatAction.RESET:
-            self._store.save(next_state)
-            dispatcher._append_event(
-                job,
-                'job_heartbeat_reset',
-                {
-                    'subject_kind': self._subject_kind,
-                    'action': decision.action.value,
-                    'notice_count': decision.notice_count,
-                    'last_progress_at': decision.last_progress_at,
-                },
-                timestamp=now,
-            )
-            return True
-        if not decision.notice_due:
-            return True
-
-        mailbox_target = normalize_mailbox_target(
-            job.request.from_actor,
-            known_targets=known_mailbox_targets(dispatcher._config),
-        )
-        diagnostics = _heartbeat_diagnostics(
+    def _should_track(self, job) -> bool:
+        return should_track_heartbeat_job(
             job,
-            decision=decision,
-            snapshot=snapshot,
-            mailbox_target=mailbox_target,
-            subject_kind=self._subject_kind,
+            tracked_message_types=self._tracked_message_types,
         )
-        if dispatcher._message_bureau is None or mailbox_target is None:
-            self._store.save(next_state)
-            dispatcher._append_event(
-                job,
-                'job_heartbeat_skipped_no_mailbox',
-                diagnostics,
-                timestamp=now,
-            )
-            return True
-
-        reply_id = dispatcher._message_bureau.record_notice(
-            job,
-            reply=_heartbeat_notice_body(job, decision=decision, snapshot=snapshot),
-            diagnostics=diagnostics,
-            finished_at=now,
-            deliver_to_actor=mailbox_target,
-        )
-        self._store.save(next_state)
-        dispatcher._append_event(
-            job,
-            'job_heartbeat_notice_sent',
-            {
-                **diagnostics,
-                'reply_id': reply_id,
-            },
-            timestamp=now,
-        )
-        return True
-
-    def _cleanup_inactive(self, active_job_ids: set[str]) -> None:
-        for state in self._store.list_all(subject_kind=self._subject_kind):
-            if state.subject_id in active_job_ids:
-                continue
-            self._store.remove(state.subject_kind, state.subject_id)
-
-
-def _heartbeat_notice_body(job: JobRecord, *, decision, snapshot) -> str:
-    lines = [
-        'CCB_HEARTBEAT '
-        f'from={job.agent_name} '
-        f'job={job.job_id} '
-        f'notice={decision.notice_count} '
-        f'silent_for={_format_silence(decision.silence_seconds)} '
-        f'last_progress={decision.last_progress_at}',
-    ]
-    task_id = str(job.request.task_id or '').strip()
-    if task_id:
-        lines[0] = f'{lines[0]} task={task_id}'
-    preview = _snapshot_preview(snapshot)
-    if preview:
-        lines.extend(['', preview])
-    return '\n'.join(lines).rstrip()
-
-
-def _heartbeat_diagnostics(
-    job: JobRecord,
-    *,
-    decision,
-    snapshot,
-    mailbox_target: str | None,
-    subject_kind: str,
-) -> dict[str, object]:
-    payload: dict[str, object] = {
-        'notice': True,
-        'notice_kind': 'heartbeat',
-        'heartbeat_subject_kind': subject_kind,
-        'heartbeat_action': decision.action.value,
-        'heartbeat_notice_count': decision.notice_count,
-        'heartbeat_silence_seconds': round(float(decision.silence_seconds), 3),
-        'last_progress_at': decision.last_progress_at,
-        'job_id': job.job_id,
-        'task_id': str(job.request.task_id or '').strip() or None,
-        'caller_actor': job.request.from_actor,
-        'caller_mailbox': mailbox_target,
-    }
-    preview = _snapshot_preview(snapshot)
-    if preview:
-        payload['reply_preview'] = preview
-    return payload
-
-
-def _snapshot_preview(snapshot) -> str:
-    if snapshot is None:
-        return ''
-    return str(snapshot.latest_reply_preview or '').strip()
-
-
-def _snapshot_is_terminal(snapshot) -> bool:
-    if snapshot is None:
-        return False
-    try:
-        if bool(getattr(snapshot.state, 'terminal', False)):
-            return True
-    except Exception:
-        return False
-    try:
-        return bool(getattr(snapshot.latest_decision, 'terminal', False))
-    except Exception:
-        return False
-
-
-def _format_silence(value: float) -> str:
-    try:
-        seconds = int(round(float(value)))
-    except Exception:
-        return str(value)
-    return f'{seconds}s'
 
 
 __all__ = ['JobHeartbeatService']

@@ -102,16 +102,16 @@ def reconcile_connectable_daemon(app, *, state: KeeperState, inspection, now: st
 
 
 def restart_state_from_inspection(app, *, state: KeeperState, inspection, occurred_at: str) -> KeeperState | None:
-    degraded = degraded_restart_state(app, state=state, inspection=inspection, occurred_at=occurred_at)
-    if degraded is not None:
-        return degraded
+    stale = stale_restart_state(app, state=state, inspection=inspection, occurred_at=occurred_at)
+    if stale is not None:
+        return stale
     if inspection.health in {LeaseHealth.MISSING, LeaseHealth.UNMOUNTED, LeaseHealth.STALE}:
         return state.with_restart_attempt(occurred_at=occurred_at)
     return None
 
 
-def degraded_restart_state(app, *, state: KeeperState, inspection, occurred_at: str) -> KeeperState | None:
-    if inspection.health is not LeaseHealth.DEGRADED or not inspection.pid_alive or inspection.lease is None:
+def stale_restart_state(app, *, state: KeeperState, inspection, occurred_at: str) -> KeeperState | None:
+    if inspection.health is not LeaseHealth.STALE or not inspection.pid_alive or inspection.lease is None:
         return None
     pid = int(inspection.lease.ccbd_pid or 0)
     if pid > 0:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from mailbox_kernel import (
     DeliveryLeaseStore,
     InboundEventRecord,
@@ -188,7 +190,7 @@ def test_mailbox_kernel_ack_reply_claims_and_consumes_head_reply(tmp_path: Path)
     assert mailbox.pending_reply_count == 0
 
 
-def test_mailbox_kernel_supports_command_mailbox_ack_flow(tmp_path: Path) -> None:
+def test_mailbox_kernel_rejects_cmd_alias_as_mailbox_owner(tmp_path: Path) -> None:
     layout = PathLayout(tmp_path / 'repo')
     inbound_store = InboundEventStore(layout)
     mailbox_store = MailboxStore(layout)
@@ -201,30 +203,10 @@ def test_mailbox_kernel_supports_command_mailbox_ack_flow(tmp_path: Path) -> Non
         lease_store=lease_store,
     )
 
-    inbound_store.append(
-        InboundEventRecord(
-            inbound_event_id='evt-cmd-reply',
-            agent_name='cmd',
-            event_type=InboundEventType.TASK_REPLY,
-            message_id='msg-cmd',
-            attempt_id='att-cmd',
-            payload_ref='reply:rep-cmd',
-            priority=10,
-            status=InboundEventStatus.QUEUED,
-            created_at='2026-03-30T10:00:00Z',
+    with pytest.raises(ValueError, match="actor 'user' does not own a mailbox"):
+        service.ack_reply(
+            'cmd',
+            'evt-cmd-reply',
+            started_at='2026-03-30T10:00:05Z',
+            finished_at='2026-03-30T10:00:05Z',
         )
-    )
-
-    consumed = service.ack_reply(
-        'cmd',
-        'evt-cmd-reply',
-        started_at='2026-03-30T10:00:05Z',
-        finished_at='2026-03-30T10:00:05Z',
-    )
-
-    assert consumed is not None
-    assert consumed.agent_name == 'cmd'
-    mailbox = mailbox_store.load('cmd')
-    assert mailbox is not None
-    assert mailbox.mailbox_state is MailboxState.IDLE
-    assert mailbox.queue_depth == 0

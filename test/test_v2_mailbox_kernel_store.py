@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from mailbox_kernel import (
     DeliveryLease,
     DeliveryLeaseStore,
@@ -111,58 +113,52 @@ def test_delivery_lease_store_roundtrip_and_remove(tmp_path: Path) -> None:
     assert store.load('agent1') is None
 
 
-def test_mailbox_store_allows_command_mailbox_owner(tmp_path: Path) -> None:
+def test_mailbox_store_rejects_cmd_mailbox_owner(tmp_path: Path) -> None:
     layout = PathLayout(tmp_path / 'repo')
     mailbox_store = MailboxStore(layout)
     inbound_store = InboundEventStore(layout)
     lease_store = DeliveryLeaseStore(layout)
 
-    mailbox_store.save(
-        MailboxRecord(
-            mailbox_id='mbx-cmd',
-            agent_name='cmd',
-            active_inbound_event_id='evt-cmd',
-            queue_depth=1,
-            pending_reply_count=1,
-            last_inbound_started_at='2026-03-30T10:00:00Z',
-            last_inbound_finished_at=None,
-            mailbox_state=MailboxState.BLOCKED,
-            lease_version=1,
-            updated_at='2026-03-30T10:00:00Z',
+    with pytest.raises(ValueError, match="actor 'user' does not own a mailbox"):
+        mailbox_store.save(
+            MailboxRecord(
+                mailbox_id='mbx-cmd',
+                agent_name='cmd',
+                active_inbound_event_id='evt-cmd',
+                queue_depth=1,
+                pending_reply_count=1,
+                last_inbound_started_at='2026-03-30T10:00:00Z',
+                last_inbound_finished_at=None,
+                mailbox_state=MailboxState.BLOCKED,
+                lease_version=1,
+                updated_at='2026-03-30T10:00:00Z',
+            )
         )
-    )
-    inbound_store.append(
-        InboundEventRecord(
-            inbound_event_id='evt-cmd',
-            agent_name='cmd',
-            event_type=InboundEventType.TASK_REPLY,
-            message_id='msg-cmd',
-            attempt_id='att-cmd',
-            payload_ref='reply:rep-cmd',
-            priority=10,
-            status=InboundEventStatus.QUEUED,
-            created_at='2026-03-30T10:00:00Z',
-        )
-    )
-    lease_store.save(
-        DeliveryLease(
-            agent_name='cmd',
-            inbound_event_id='evt-cmd',
-            lease_version=1,
-            acquired_at='2026-03-30T10:00:00Z',
-            last_progress_at='2026-03-30T10:00:01Z',
-            expires_at=None,
-            lease_state=LeaseState.ACQUIRED,
-        )
-    )
 
-    loaded_mailbox = mailbox_store.load('cmd')
-    loaded_events = inbound_store.list_agent('cmd')
-    loaded_lease = lease_store.load('cmd')
+    with pytest.raises(ValueError, match="actor 'user' does not own a mailbox"):
+        inbound_store.append(
+            InboundEventRecord(
+                inbound_event_id='evt-cmd',
+                agent_name='cmd',
+                event_type=InboundEventType.TASK_REPLY,
+                message_id='msg-cmd',
+                attempt_id='att-cmd',
+                payload_ref='reply:rep-cmd',
+                priority=10,
+                status=InboundEventStatus.QUEUED,
+                created_at='2026-03-30T10:00:00Z',
+            )
+        )
 
-    assert loaded_mailbox is not None
-    assert loaded_mailbox.agent_name == 'cmd'
-    assert len(loaded_events) == 1
-    assert loaded_events[0].agent_name == 'cmd'
-    assert loaded_lease is not None
-    assert loaded_lease.agent_name == 'cmd'
+    with pytest.raises(ValueError, match="actor 'user' does not own a mailbox"):
+        lease_store.save(
+            DeliveryLease(
+                agent_name='cmd',
+                inbound_event_id='evt-cmd',
+                lease_version=1,
+                acquired_at='2026-03-30T10:00:00Z',
+                last_progress_at='2026-03-30T10:00:01Z',
+                expires_at=None,
+                lease_state=LeaseState.ACQUIRED,
+            )
+        )

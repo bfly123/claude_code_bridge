@@ -56,7 +56,7 @@ class _MailboxKernel:
 
 def _service(*, mailbox_store, inbound_store, attempt_store, message_store, reply_store, mailbox_kernel):
     return SimpleNamespace(
-        _known_mailboxes={'agent1', 'cmd'},
+        _known_mailboxes={'agent1'},
         _config=SimpleNamespace(agents={'agent1': object()}),
         _clock=lambda: '2026-04-05T00:00:00Z',
         _mailbox_store=mailbox_store,
@@ -118,23 +118,12 @@ def test_agent_queue_derives_delivering_state_without_mailbox_record() -> None:
     assert payload['queue_depth'] == 1
 
 
-def test_queue_summary_includes_command_mailbox_when_it_has_activity() -> None:
-    cmd_event = InboundEventRecord(
-        inbound_event_id='iev_cmd',
-        agent_name='cmd',
-        event_type=InboundEventType.SYSTEM_SIGNAL,
-        message_id='msg_cmd',
-        attempt_id=None,
-        payload_ref=None,
-        priority=1,
-        status=InboundEventStatus.QUEUED,
-        created_at='2026-04-05T00:00:00Z',
-    )
+def test_queue_summary_ignores_stale_cmd_residue() -> None:
     service = _service(
         mailbox_store=_MailboxStore(
             {
                 'agent1': None,
-                'cmd': MailboxRecord(
+                'cmd': SimpleNamespace(
                     mailbox_id='mbx_cmd',
                     agent_name='cmd',
                     active_inbound_event_id=None,
@@ -148,18 +137,18 @@ def test_queue_summary_includes_command_mailbox_when_it_has_activity() -> None:
                 ),
             }
         ),
-        inbound_store=_InboundStore({'agent1': [], 'cmd': [cmd_event]}),
+        inbound_store=_InboundStore({'agent1': [], 'cmd': [SimpleNamespace(inbound_event_id='iev_cmd')]}),
         attempt_store=_SingleStore({}),
         message_store=_SingleStore({}),
-        reply_store=_SingleStore({}, list_records={'msg_cmd': []}),
-        mailbox_kernel=_MailboxKernel(cmd_event),
+        reply_store=_SingleStore({}),
+        mailbox_kernel=_MailboxKernel(None),
     )
 
     payload = queue_summary(service, 'all')
 
-    assert payload['agent_count'] == 2
-    assert {item['agent_name'] for item in payload['agents']} == {'agent1', 'cmd'}
-    assert payload['total_queue_depth'] == 1
+    assert payload['agent_count'] == 1
+    assert {item['agent_name'] for item in payload['agents']} == {'agent1'}
+    assert payload['total_queue_depth'] == 0
 
 
 def test_ack_reply_returns_reply_metadata_and_next_head() -> None:

@@ -8,6 +8,7 @@ from cli.models import ParsedStartCommand
 import cli.services.tmux_start_layout as tmux_start_layout
 from project.resolver import bootstrap_project
 from storage.paths import PathLayout
+from terminal_runtime.tmux_identity import pane_visual
 
 
 def _context(project_root: Path) -> CliContext:
@@ -58,7 +59,7 @@ def test_prepare_tmux_start_layout_uses_current_pane_as_cmd_anchor(monkeypatch, 
     assert ('title', '%3', 'agent3') in calls
 
 
-def test_prepare_tmux_start_layout_assigns_ordered_styles(monkeypatch, tmp_path: Path) -> None:
+def test_prepare_tmux_start_layout_assigns_slot_stable_styles(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-layout-styles'
     ctx = _context(project_root)
     config = load_project_config(project_root).config
@@ -101,13 +102,17 @@ def test_prepare_tmux_start_layout_assigns_ordered_styles(monkeypatch, tmp_path:
     )
 
     assert layout.agent_panes == {'agent1': '%2', 'agent2': '%1', 'agent3': '%3'}
-    assert options[('%0', '@ccb_label_style')] == '#[fg=#1e1e2e]#[bg=#7dcfff]#[bold]'
-    assert options[('%2', '@ccb_label_style')] == '#[fg=#1e1e2e]#[bg=#ff9e64]#[bold]'
-    assert options[('%1', '@ccb_label_style')] == '#[fg=#1e1e2e]#[bg=#9ece6a]#[bold]'
-    assert options[('%3', '@ccb_label_style')] == '#[fg=#1e1e2e]#[bg=#f7768e]#[bold]'
-    assert styles['%2'] == ('fg=#ff9e64', 'fg=#ff9e64,bold')
-    assert styles['%1'] == ('fg=#9ece6a', 'fg=#9ece6a,bold')
-    assert styles['%3'] == ('fg=#f7768e', 'fg=#f7768e,bold')
+    cmd_visual = pane_visual(project_id=ctx.project.project_id, slot_key='cmd', is_cmd=True)
+    agent1_visual = pane_visual(project_id=ctx.project.project_id, slot_key='agent1', order_index=0)
+    agent2_visual = pane_visual(project_id=ctx.project.project_id, slot_key='agent2', order_index=1)
+    agent3_visual = pane_visual(project_id=ctx.project.project_id, slot_key='agent3', order_index=2)
+    assert options[('%0', '@ccb_label_style')] == cmd_visual.label_style
+    assert options[('%2', '@ccb_label_style')] == agent1_visual.label_style
+    assert options[('%1', '@ccb_label_style')] == agent2_visual.label_style
+    assert options[('%3', '@ccb_label_style')] == agent3_visual.label_style
+    assert styles['%2'] == (agent1_visual.border_style, agent1_visual.active_border_style)
+    assert styles['%1'] == (agent2_visual.border_style, agent2_visual.active_border_style)
+    assert styles['%3'] == (agent3_visual.border_style, agent3_visual.active_border_style)
 
 
 def test_prepare_tmux_start_layout_uses_root_pane_for_first_agent_when_cmd_disabled(monkeypatch, tmp_path: Path) -> None:

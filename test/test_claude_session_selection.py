@@ -25,7 +25,7 @@ def _write_session(path: Path, *, text: str = 'hello', sidechain: bool | None = 
     path.write_text(''.join(lines), encoding='utf-8')
 
 
-def test_latest_session_prefers_newer_scanned_session_over_existing_preferred(tmp_path: Path, monkeypatch) -> None:
+def test_latest_session_keeps_explicit_preferred_session_over_newer_candidate(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path / 'claude-root'
     work_dir = tmp_path / 'project-a'
     work_dir.mkdir()
@@ -39,9 +39,33 @@ def test_latest_session_prefers_newer_scanned_session_over_existing_preferred(tm
     os.utime(newer, (newer.stat().st_atime, newer.stat().st_mtime + 20))
 
     reader = ClaudeLogReader(root=root, work_dir=work_dir, use_sessions_index=False)
-    reader._preferred_session = older
+    reader.set_preferred_session(older)
 
-    assert reader.current_session_path() == newer
+    assert reader._preferred_session == older
+    assert reader._preferred_session_locked is True
+    assert reader.current_session_path() == older
+
+
+def test_latest_session_ignores_env_pwd_project_namespace_for_workspace_reader(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = tmp_path / 'claude-root'
+    project_root = tmp_path / 'project-a'
+    work_dir = project_root / '.ccb' / 'workspaces' / 'agent1'
+    project_root.mkdir(parents=True)
+    work_dir.mkdir(parents=True)
+    monkeypatch.setenv('PWD', str(project_root))
+
+    root_session = root / _project_key(project_root) / 'root.jsonl'
+    workspace_session = root / _project_key(work_dir) / 'workspace.jsonl'
+    _write_session(root_session, text='root')
+    _write_session(workspace_session, text='workspace')
+    os.utime(root_session, (root_session.stat().st_atime, root_session.stat().st_mtime + 20))
+
+    reader = ClaudeLogReader(root=root, work_dir=work_dir, use_sessions_index=False)
+
+    assert reader.current_session_path() == workspace_session
 
 
 def test_scan_latest_session_skips_sidechain_when_normal_session_exists(tmp_path: Path, monkeypatch) -> None:

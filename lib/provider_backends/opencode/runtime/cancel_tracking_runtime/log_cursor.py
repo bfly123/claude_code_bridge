@@ -22,7 +22,7 @@ def detect_cancel_event_in_logs(
     current_path, offset, cursor_mtime = _normalize_cursor(cursor)
     latest_path = latest_opencode_log_file()
     if latest_path is None:
-        return False, {"path": None, "offset": 0, "mtime": 0.0}
+        return False, _empty_cursor()
 
     active_path, active_offset, active_mtime = _select_active_log_path(
         current_path=current_path,
@@ -32,7 +32,7 @@ def detect_cancel_event_in_logs(
     )
     size = _safe_stat_size(active_path)
     if size is None:
-        return False, {"path": str(active_path), "offset": 0, "mtime": active_mtime}
+        return False, _missing_size_cursor(active_path, active_mtime)
     if active_offset < 0 or active_offset > size:
         active_offset = 0
 
@@ -41,16 +41,33 @@ def detect_cancel_event_in_logs(
     if chunk is None or not chunk:
         return False, new_cursor
 
-    for line in chunk.splitlines():
-        if not is_cancel_log_line(line, session_id=session_id):
-            continue
-        ts = parse_opencode_log_epoch_s(line)
-        if ts is None:
-            continue
-        if ts + 0.1 < float(since_epoch_s):
-            continue
+    if _chunk_contains_cancel_event(chunk, session_id=session_id, since_epoch_s=since_epoch_s):
         return True, new_cursor
     return False, new_cursor
+
+
+def _empty_cursor() -> dict[str, Any]:
+    return {"path": None, "offset": 0, "mtime": 0.0}
+
+
+def _missing_size_cursor(path: Path, mtime: float) -> dict[str, Any]:
+    return {"path": str(path), "offset": 0, "mtime": mtime}
+
+
+def _chunk_contains_cancel_event(chunk: str, *, session_id: str, since_epoch_s: float) -> bool:
+    for line in chunk.splitlines():
+        if _cancel_line_matches(line, session_id=session_id, since_epoch_s=since_epoch_s):
+            return True
+    return False
+
+
+def _cancel_line_matches(line: str, *, session_id: str, since_epoch_s: float) -> bool:
+    if not is_cancel_log_line(line, session_id=session_id):
+        return False
+    ts = parse_opencode_log_epoch_s(line)
+    if ts is None:
+        return False
+    return ts + 0.1 >= float(since_epoch_s)
 
 
 def _select_active_log_path(

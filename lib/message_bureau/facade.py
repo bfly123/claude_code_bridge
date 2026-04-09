@@ -21,10 +21,11 @@ from .facade_recording import (
     record_submission as _record_submission_impl,
     record_terminal as _record_terminal_impl,
 )
+from .service_state import MessageBureauFacadeRuntimeState, MessageBureauFacadeStateMixin
 from .store import AttemptStore, MessageStore, ReplyStore
 
 
-class MessageBureauFacade:
+class MessageBureauFacade(MessageBureauFacadeStateMixin):
     def __init__(
         self,
         layout: PathLayout,
@@ -39,22 +40,30 @@ class MessageBureauFacade:
         lease_store: DeliveryLeaseStore | None = None,
         mailbox_kernel: MailboxKernelService | None = None,
     ) -> None:
-        self._layout = layout
-        self._clock = clock
-        self._known_agents = frozenset(getattr(config, 'agents', {}).keys())
-        self._known_mailboxes = known_mailbox_targets(config)
-        self._message_store = message_store or MessageStore(layout)
-        self._attempt_store = attempt_store or AttemptStore(layout)
-        self._reply_store = reply_store or ReplyStore(layout)
-        self._mailbox_store = mailbox_store or MailboxStore(layout)
-        self._inbound_store = inbound_store or InboundEventStore(layout)
-        self._lease_store = lease_store or DeliveryLeaseStore(layout)
-        self._mailbox_kernel = mailbox_kernel or MailboxKernelService(
-            layout,
+        message_store = message_store or MessageStore(layout)
+        attempt_store = attempt_store or AttemptStore(layout)
+        reply_store = reply_store or ReplyStore(layout)
+        mailbox_store = mailbox_store or MailboxStore(layout)
+        inbound_store = inbound_store or InboundEventStore(layout)
+        lease_store = lease_store or DeliveryLeaseStore(layout)
+        self._runtime_state = MessageBureauFacadeRuntimeState(
+            layout=layout,
             clock=clock,
-            mailbox_store=self._mailbox_store,
-            inbound_store=self._inbound_store,
-            lease_store=self._lease_store,
+            known_agents=frozenset(getattr(config, 'agents', {}).keys()),
+            known_mailboxes=known_mailbox_targets(config),
+            message_store=message_store,
+            attempt_store=attempt_store,
+            reply_store=reply_store,
+            mailbox_store=mailbox_store,
+            inbound_store=inbound_store,
+            lease_store=lease_store,
+            mailbox_kernel=mailbox_kernel or MailboxKernelService(
+                layout,
+                clock=clock,
+                mailbox_store=mailbox_store,
+                inbound_store=inbound_store,
+                lease_store=lease_store,
+            ),
         )
 
     def record_submission(

@@ -111,6 +111,7 @@ def test_attach_runtime_updates_active_existing_runtime() -> None:
     assert updated.queue_depth == 3
     assert updated.socket_path == '/tmp/agent.sock'
     assert updated.project_id == 'proj-1'
+    assert updated.slot_key == 'agent1'
 
 
 def test_attach_runtime_creates_new_runtime_with_runtime_ref_derived_fields() -> None:
@@ -138,3 +139,4 @@ def test_attach_runtime_creates_new_runtime_with_runtime_ref_derived_fields() ->
     assert created.session_ref == 'session-4'
     assert created.binding_generation == 1
     assert created.binding_source is RuntimeBindingSource.PROVIDER_SESSION
+    assert created.slot_key == 'agent1'

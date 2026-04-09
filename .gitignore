@@ -7,6 +7,7 @@ docs/
 !docs/
 !docs/**/*.md
 tests/
+test/dir1/.ccb/
 .ccb_config/
 .ccb/*
 !.ccb/ccb.config

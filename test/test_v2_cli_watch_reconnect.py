@@ -8,6 +8,7 @@ import pytest
 from ccbd.socket_client import CcbdClientError
 from cli.context import CliContext, CliContextBuilder
 from cli.models import ParsedPendCommand, ParsedWatchCommand
+from cli.services.daemon import CcbdServiceError
 from cli.services import pend as pend_service
 from cli.services import watch as watch_service
 from storage.paths import PathLayout
@@ -215,6 +216,39 @@ def test_watch_target_preserves_cursor_across_reconnect(monkeypatch: pytest.Monk
     assert [batch.terminal for batch in batches] == [False, True]
     assert first.calls == [0, 2]
     assert second.calls == [2]
+
+
+def test_watch_target_retries_when_reconnect_attempt_temporarily_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-watch-reconnect-step-fail'
+    project_root.mkdir()
+    context = _context(project_root)
+    flaky = _FlakyWatchClient()
+    stable = _StableWatchClient()
+    connects = {'count': 0}
+
+    def _connect(context, allow_restart_stale):
+        del context, allow_restart_stale
+        connects['count'] += 1
+        if connects['count'] == 1:
+            return SimpleNamespace(client=flaky)
+        if connects['count'] == 2:
+            raise CcbdServiceError('daemon restarting')
+        return SimpleNamespace(client=stable)
+
+    monkeypatch.setattr(watch_service, 'connect_mounted_daemon', _connect)
+    monkeypatch.setenv('CCB_WATCH_TIMEOUT_S', '1')
+    monkeypatch.setenv('CCB_WATCH_POLL_INTERVAL_S', '0')
+
+    batches = list(watch_service.watch_target(context, ParsedWatchCommand(project=None, target='job_demo')))
+
+    assert len(batches) == 1
+    assert batches[0].terminal is True
+    assert batches[0].reply == 'done'
+    assert flaky.calls == [0]
+    assert stable.calls == [0]
 
 
 def test_pend_target_reconnects_after_socket_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

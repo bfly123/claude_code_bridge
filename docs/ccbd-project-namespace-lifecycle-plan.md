@@ -13,6 +13,7 @@
 
 - `docs/ccbd-project-control-plane-refactor-plan.md`
 - `docs/ccbd-startup-supervision-contract.md`
+- `docs/ccbd-pane-recovery-continuous-attach-plan.md`
 
 若旧文档中仍残留 shared/default tmux 假设、pane 枚举式 cleanup 假设、或 `start` 与 UI attach 混杂的表述，以本文为准。
 

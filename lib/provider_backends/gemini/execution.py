@@ -53,9 +53,17 @@ class GeminiProviderAdapter:
             'request_anchor': request_anchor_from_runtime_state(submission.runtime_state, fallback=submission.job_id),
             'next_seq': submission.runtime_state.get('next_seq'),
             'anchor_emitted': submission.runtime_state.get('anchor_emitted'),
+            'no_wrap': submission.runtime_state.get('no_wrap'),
             'reply_buffer': submission.runtime_state.get('reply_buffer'),
             'session_path': submission.runtime_state.get('session_path'),
             'completion_dir': submission.runtime_state.get('completion_dir'),
+            'prompt_text': submission.runtime_state.get('prompt_text'),
+            'prompt_sent': submission.runtime_state.get('prompt_sent'),
+            'prompt_sent_at': submission.runtime_state.get('prompt_sent_at'),
+            'ready_wait_started_at': submission.runtime_state.get('ready_wait_started_at'),
+            'ready_timeout_s': submission.runtime_state.get('ready_timeout_s'),
+            'ready_prompt_fingerprint': submission.runtime_state.get('ready_prompt_fingerprint'),
+            'ready_prompt_seen_at': submission.runtime_state.get('ready_prompt_seen_at'),
         }
 
     def resume(

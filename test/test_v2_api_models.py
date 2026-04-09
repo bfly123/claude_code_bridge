@@ -35,7 +35,7 @@ def test_message_envelope_normalizes_agent_names_and_system_sender() -> None:
     assert envelope.from_actor == 'system'
 
 
-def test_message_envelope_preserves_cmd_and_email_actor_contract() -> None:
+def test_message_envelope_aliases_cmd_to_user_and_preserves_email_actor() -> None:
     cmd_envelope = MessageEnvelope(
         project_id='proj',
         to_agent='Agent1',
@@ -57,7 +57,7 @@ def test_message_envelope_preserves_cmd_and_email_actor_contract() -> None:
         delivery_scope=DeliveryScope.SINGLE,
     )
 
-    assert cmd_envelope.from_actor == 'cmd'
+    assert cmd_envelope.from_actor == 'user'
     assert email_envelope.from_actor == 'email'
 
 
@@ -148,7 +148,7 @@ def test_message_envelope_rejects_invalid_sender() -> None:
         )
 
 
-def test_submission_record_normalizes_command_mailbox_actor() -> None:
+def test_submission_record_aliases_cmd_sender_to_user() -> None:
     submission = SubmissionRecord(
         submission_id='sub-1',
         project_id='proj',
@@ -160,7 +160,7 @@ def test_submission_record_normalizes_command_mailbox_actor() -> None:
         updated_at='2026-03-18T00:00:01Z',
     )
 
-    assert submission.from_actor == 'cmd'
+    assert submission.from_actor == 'user'
 
 
 def test_job_record_normalizes_agent_target_identity() -> None:

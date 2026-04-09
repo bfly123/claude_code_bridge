@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -9,6 +8,8 @@ from pane_registry_runtime import upsert_registry
 from project.identity import compute_ccb_project_id
 from provider_core.session_binding_runtime import find_bound_session_file
 from terminal_runtime import get_backend_for_session, get_pane_id_from_session
+
+from .communicator_state import ensure_log_reader, initialize_state
 
 
 class PaneLogCommunicatorBase:
@@ -23,20 +24,11 @@ class PaneLogCommunicatorBase:
     reader_cls = None
 
     def __init__(self, lazy_init: bool = False):
-        self.session_info = self._load_session_info()
-        if not self.session_info:
-            raise RuntimeError(self.missing_session_message)
-
-        self.ccb_session_id = str(self.session_info.get('ccb_session_id') or '').strip()
-        self.terminal = self.session_info.get('terminal', 'tmux')
-        self.pane_id = get_pane_id_from_session(self.session_info) or ''
-        self.pane_title_marker = self.session_info.get('pane_title_marker') or ''
-        self.backend = get_backend_for_session(self.session_info)
-        self.timeout = int(os.environ.get(self.sync_timeout_env, os.environ.get('CCB_SYNC_TIMEOUT', '3600')))
-        self.project_session_file = self.session_info.get('_session_file')
-
-        self._log_reader = None
-        self._log_reader_primed = False
+        initialize_state(
+            self,
+            get_pane_id_from_session_fn=get_pane_id_from_session,
+            get_backend_for_session_fn=get_backend_for_session,
+        )
 
         self._publish_registry()
 
@@ -54,20 +46,7 @@ class PaneLogCommunicatorBase:
         return self._log_reader
 
     def _ensure_log_reader(self) -> None:
-        if self._log_reader is not None:
-            return
-        work_dir_hint = self.session_info.get('work_dir')
-        log_work_dir = Path(work_dir_hint) if isinstance(work_dir_hint, str) and work_dir_hint else None
-
-        pane_log_path: Optional[Path] = None
-        raw_log_path = self.session_info.get('pane_log_path')
-        if raw_log_path:
-            pane_log_path = Path(str(raw_log_path)).expanduser()
-        elif self.session_info.get('runtime_dir'):
-            pane_log_path = Path(str(self.session_info['runtime_dir'])) / 'pane.log'
-
-        self._log_reader = self.reader_cls(work_dir=log_work_dir, pane_log_path=pane_log_path)
-        self._log_reader_primed = True
+        ensure_log_reader(self, reader_cls=self.reader_cls)
 
     def _find_session_file(self) -> Optional[Path]:
         return find_bound_session_file(

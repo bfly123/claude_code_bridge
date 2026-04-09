@@ -10,6 +10,7 @@ def usable_project_binding(
     cmd_enabled: bool,
     tmux_socket_path: str,
     tmux_session_name: str | None,
+    workspace_window_id: str | None,
     agent_name: str,
     project_id: str,
 ):
@@ -18,6 +19,7 @@ def usable_project_binding(
         cmd_enabled=cmd_enabled,
         tmux_socket_path=tmux_socket_path,
         tmux_session_name=tmux_session_name,
+        workspace_window_id=workspace_window_id,
         agent_name=agent_name,
         project_id=project_id,
         tmux_backend_factory=deps.tmux_backend_cls,

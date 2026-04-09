@@ -558,7 +558,7 @@ def test_ccbd_inbox_and_ack_roundtrip_reply_delivery(tmp_path: Path) -> None:
     assert not thread.is_alive()
 
 
-def test_ccbd_inbox_and_ack_roundtrip_for_cmd_mailbox(tmp_path: Path) -> None:
+def test_ccbd_legacy_cmd_sender_aliases_to_user_without_cmd_mailbox(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-inbox-ack-cmd'
     ctx = _prepare_project(
         project_root,
@@ -595,23 +595,17 @@ def test_ccbd_inbox_and_ack_roundtrip_for_cmd_mailbox(tmp_path: Path) -> None:
     app.dispatcher.tick()
     app.dispatcher.complete(job_id, _decision(reply='socket cmd reply'))
 
-    inbox = client.inbox('cmd')
-    assert inbox['target'] == 'cmd'
-    assert inbox['head']['event_type'] == 'task_reply'
-    assert inbox['head']['reply'] == 'socket cmd reply'
+    completed = client.get(job_id)
+    assert completed['status'] == 'completed'
+    assert completed['reply'] == 'socket cmd reply'
 
     queue = client.queue('all')
-    cmd_agent = next(item for item in queue['agents'] if item['agent_name'] == 'cmd')
-    assert cmd_agent['runtime_state'] == 'mailbox'
-    assert cmd_agent['pending_reply_count'] == 1
+    assert {item['agent_name'] for item in queue['agents']} == {'claude', 'codex'}
 
-    ack = client.ack('cmd')
-    assert ack['acknowledged_inbound_event_id'] == inbox['head']['inbound_event_id']
-    assert ack['reply'] == 'socket cmd reply'
-
-    queue_after = client.queue('cmd')
-    assert queue_after['agent']['mailbox_state'] == 'idle'
-    assert queue_after['agent']['queue_depth'] == 0
+    with pytest.raises(CcbdClientError, match='unknown mailbox target: cmd'):
+        client.inbox('cmd')
+    with pytest.raises(CcbdClientError, match='unknown mailbox target: cmd'):
+        client.ack('cmd')
 
     client.shutdown()
     thread.join(timeout=2)
@@ -1607,7 +1601,7 @@ def test_ccbd_socket_gemini_rotate_clears_stale_reply_preview(monkeypatch, tmp_p
     assert not thread.is_alive()
 
 
-def test_ccbd_socket_opencode_legacy_completion_via_tracker(monkeypatch, tmp_path: Path) -> None:
+def test_ccbd_socket_opencode_completed_reply_uses_session_boundary_tracker(monkeypatch, tmp_path: Path) -> None:
     from provider_execution import opencode as opencode_adapter_module
 
     fixed_req_id = 'job_opencode1'
@@ -1639,7 +1633,16 @@ def test_ccbd_socket_opencode_legacy_completion_via_tracker(monkeypatch, tmp_pat
             return {'session_path': str(tmp_path / 'opencode-session.json'), 'session_id': 'ses-demo'}
 
         def try_get_message(self, state):
-            return f'legacy final\nCCB_DONE: {fixed_req_id}', state
+            return (
+                'legacy final',
+                {
+                    **state,
+                    'last_assistant_id': 'msg-final',
+                    'last_assistant_parent_id': 'msg-user',
+                    'last_assistant_req_id': fixed_req_id,
+                    'last_assistant_completed': 1234,
+                },
+            )
 
     monkeypatch.setattr(opencode_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
     monkeypatch.setattr(opencode_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
@@ -1677,8 +1680,8 @@ def test_ccbd_socket_opencode_legacy_completion_via_tracker(monkeypatch, tmp_pat
 
     completed = _wait_for_job_status(client, job_id, 'completed', timeout=3.0)
     assert completed['reply'] == 'legacy final'
-    assert completed['completion_reason'] == 'terminal_done_marker'
-    assert completed['completion_confidence'] == 'degraded'
+    assert completed['completion_reason'] == 'assistant_completed'
+    assert completed['completion_confidence'] == 'observed'
     assert sent and sent[0][0] == '%4'
     assert fixed_req_id in sent[0][1]
 

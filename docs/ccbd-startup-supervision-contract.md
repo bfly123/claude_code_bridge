@@ -20,6 +20,8 @@ Diagnostics-specific rules live in [docs/ccbd-diagnostics-contract.md](/home/bfl
 
 Module/function-level redesign for the project-scoped tmux namespace model lives in [docs/ccbd-project-namespace-lifecycle-plan.md](/home/bfly/yunwei/ccb_source/docs/ccbd-project-namespace-lifecycle-plan.md).
 
+Detailed redesign for pane recovery layering and continuous foreground attach lives in [docs/ccbd-pane-recovery-continuous-attach-plan.md](/home/bfly/yunwei/ccb_source/docs/ccbd-pane-recovery-continuous-attach-plan.md).
+
 User-facing config and tmux layout rules live in [docs/ccb-config-layout-contract.md](/home/bfly/yunwei/ccb_source/docs/ccb-config-layout-contract.md). Startup behavior must honor that layout contract rather than inventing its own pane topology.
 
 ## 2. Problem Statement
@@ -176,6 +178,12 @@ Startup must be a single project-scoped transaction:
 - the project backend is healthy and authoritative
 - the project tmux namespace exists at the project-owned socket/session recorded under `.ccb/ccbd/`
 - the project tmux namespace has the current session-scoped CCB UI contract applied on that project-owned socket/session
+- that project session contains the current namespace window contract:
+  - one control window used as the long-lived session anchor
+  - one workspace window used as the visible pane layout anchor
+- project-generated tmux identifiers must remain tmux-target-safe:
+  - project namespace session names must be normalized before use as tmux targets
+  - transient workspace reflow operations must address windows by tmux `window_id`, not temporary dotted window names
 - config is valid for the current anchor
 - desired agents have reached an acceptable mounted state
 
@@ -209,6 +217,7 @@ Foreground command split:
   - after the fresh post-reset startup completes, later ordinary `ccb` runs return to the default `-a -r` semantics
 - `ccb open`
   - attaches to the existing project namespace only
+  - must select the authoritative workspace window inside that session before attach completes
   - must not create a new daemon, namespace, or desired-agent plan
   - must fail clearly when namespace authority is absent
 
@@ -222,6 +231,11 @@ Project namespace compatibility:
 - for a fresh namespace, the `cmd` pane bootstrap happens only after layout finalization and must replace that silent placeholder in place
 - startup must not rely on "real shell first, respawn later" behavior for the `cmd` pane, because that leaves stale prompt residue and can surface zsh no-newline `%` markers
 - `cmd`-anchored projects must treat exact project-namespace pane membership as the reuse gate for pane-backed bindings
+- for project-namespace reuse, exact membership means:
+  - same project-owned tmux socket
+  - same authoritative tmux session
+  - same logical `slot_key`
+  - same current authoritative workspace `window_id`
 - agent-only legacy layouts with `cmd` disabled may reuse instance-scoped provider session evidence when that session file does not explicitly declare a conflicting tmux socket
 - that legacy reuse exception is narrow:
   - if the session file explicitly declares a tmux socket and it is not the project socket, startup must reject it
@@ -232,6 +246,8 @@ Project namespace compatibility:
 
 The project backend must continuously keep desired agents mounted.
 
+When `.ccb/ccb.config` enables `cmd`, the backend must also continuously keep the project-owned `cmd` slot present and healthy inside the authoritative workspace window.
+
 This responsibility belongs to a daemon-owned supervision loop, not to:
 
 - the next CLI command
@@ -241,28 +257,51 @@ This responsibility belongs to a daemon-owned supervision loop, not to:
 
 The supervision loop must run on backend heartbeat/tick and reconcile every desired agent, regardless of whether there is queued work.
 
+For `cmd`-enabled projects:
+
+- `cmd` is a project-namespace slot, not an entry in `AgentRegistry`
+- `cmd` supervision must therefore happen at the namespace layer, not by pretending `cmd` is a provider runtime
+- a healthy `cmd` slot means the authoritative workspace root pane still matches:
+  - `role=cmd`
+  - `slot_key=cmd`
+  - `managed_by=ccbd`
+  - current authoritative workspace `window_id`
+
 ### 5.7 Pane Death Recovery Contract
 
 When a desired agent's pane dies, the daemon must reconcile it in the background using this order:
 
 1. inspect current runtime authority
 2. inspect provider session and terminal facts
-3. if the failed runtime belongs to the project tmux namespace and project-wide reflow is safe, recreate the project namespace and relaunch the configured layout
-4. otherwise, if `ensure_pane()` can recover the pane, rebind runtime authority
-5. otherwise tear down stale binding authority
-6. relaunch runtime through the normal launch path
-7. persist recovery result and retry/backoff state
+3. if `ensure_pane()` can recover the pane, rebind runtime authority in place
+4. if the original pane target is gone but the current project workspace window is still healthy, local recovery must create the replacement pane inside that current workspace window and immediately rebind it to the same logical `slot_key`
+5. otherwise, if the project tmux session is still healthy and namespace-level repair is needed, reflow the workspace window inside that same session and relaunch the configured layout there
+6. otherwise, if runtime facts prove session-level corruption and full project-wide reflow is safe, recreate the project namespace and relaunch the configured layout
+7. otherwise tear down stale binding authority
+8. relaunch runtime through the normal launch path
+9. persist recovery result and retry/backoff state
 
 Important rule:
 
 - recovery must happen even if the agent is idle and no new job arrives
+- when `cmd` is enabled, pane death or slot drift for `cmd` must also be detected and repaired on heartbeat even if no user command is running in that pane
+- `cmd` recovery must first try session-preserving local slot replacement inside the current workspace window before escalating to project reflow
+- ordinary `pane-dead` / `pane-missing` recovery must not use project-server destruction as the first-line path
+- pane-backed runtime authority must carry `slot_key`, current workspace `window_id`, and `workspace_epoch`; pane id is evidence, not identity
+- local replacement must target the authoritative current workspace window for that project session, not whichever tmux target the provider backend would create by default
+- if local replacement changes pane id inside a project-owned namespace and project-wide reflow is currently safe, the daemon must immediately continue into session-preserving workspace reflow so the pane returns to canonical layout position
+- session-preserving workspace reflow is the first namespace-level escalation for `pane_recovery:*`
+- if local replacement cannot restore `cmd`, `cmd` slot recovery must escalate through that same session-preserving `pane_recovery:*` reflow path, with `pane_recovery:cmd` as the canonical reason
 - if pane recovery is done by project-namespace reflow, pane position must return to the canonical layout derived from `.ccb/ccb.config`, not whichever slot tmux happens to assign during local recovery
+- workspace reflow must preserve the tmux server and tmux session; only the workspace window may be replaced
 - recovery must always use restore semantics even if the original foreground `ccb` invocation did not pass `-r`
 - recovery must inherit `auto_permission` from the persisted project start policy rather than falling back to hardcoded defaults
 
 Project-namespace reflow safety rules:
 
-- only reflow panes that belong to the project-owned tmux socket/session recorded under `.ccb/ccbd/`
+- project-wide full reflow is an escalation path, not the default response to ordinary pane death
+- session-preserving workspace reflow is allowed only when the affected runtime belongs to the project-owned tmux socket/session recorded under `.ccb/ccbd/`
+- full project reflow is allowed only when the session itself is no longer a trustworthy repair boundary
 - only reflow when no other configured agent is currently `BUSY`
 - if reflow is not safe, fall back to local provider recovery rather than disrupting unrelated work
 
@@ -283,6 +322,12 @@ Target architecture:
 - the keeper may restart `ccbd` after crashes
 - the keeper never owns project runtime authority
 - the keeper must reap exited direct children so crashed `ccbd` pids do not linger as zombie evidence
+- keeper/CLI forced takeover is allowed only after the lease has entered a true takeover window:
+  - `MISSING`
+  - `UNMOUNTED`
+  - `STALE`
+- `DEGRADED` with a live pid plus fresh heartbeat is observation only, not restart authority, even if the project socket is temporarily unreachable
+- therefore temporary UNIX-socket accept stalls during active work must surface as degraded availability, not a keeper-triggered daemon replacement
 
 If keeper is absent, the system can only provide "restart on next `ccb` command", which is weaker than the target contract.
 

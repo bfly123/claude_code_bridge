@@ -15,6 +15,7 @@ def start_supervisor(
     cleanup_tmux_orphans: bool,
     interactive_tmux_layout: bool,
     recreate_namespace: bool,
+    reflow_workspace: bool,
     recreate_reason: str | None,
     run_start_flow_fn,
 ):
@@ -29,6 +30,7 @@ def start_supervisor(
                 supervisor._project_namespace,
                 layout_signature=namespace_layout_signature,
                 recreate_namespace=recreate_namespace,
+                reflow_workspace=reflow_workspace,
                 recreate_reason=recreate_reason,
             )
             if supervisor._project_namespace is not None
@@ -47,8 +49,12 @@ def start_supervisor(
             interactive_tmux_layout=interactive_tmux_layout,
             tmux_socket_path=namespace.tmux_socket_path if namespace is not None else None,
             tmux_session_name=namespace.tmux_session_name if namespace is not None else None,
+            tmux_workspace_window_name=getattr(namespace, 'workspace_window_name', None) if namespace is not None else None,
             namespace_epoch=namespace.namespace_epoch if namespace is not None else None,
+            workspace_window_id=getattr(namespace, 'workspace_window_id', None) if namespace is not None else None,
+            workspace_epoch=getattr(namespace, 'workspace_epoch', None) if namespace is not None else None,
             fresh_namespace=bool(getattr(namespace, 'created_this_call', False)),
+            fresh_workspace=bool(getattr(namespace, 'workspace_recreated_this_call', False)),
             clock=supervisor._clock,
         )
     except Exception as exc:

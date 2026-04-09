@@ -94,6 +94,55 @@ def test_doctor_summary_includes_latest_tmux_cleanup_fields(tmp_path: Path) -> N
     assert payload['ccbd']['tmux_cleanup_total_killed'] == 1
 
 
+def test_doctor_summary_includes_installation_and_requirement_fields(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-doctor-install'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    context = CliContextBuilder().build(ParsedDoctorCommand(project=None), cwd=project_root, bootstrap_if_missing=False)
+
+    monkeypatch.setattr(
+        'cli.services.doctor.installation_summary',
+        lambda: {
+            'path': '/tmp/install',
+            'version': '5.2.8',
+            'commit': 'abc1234',
+            'date': '2026-04-09',
+            'channel': 'stable',
+            'platform': 'linux',
+            'arch': 'x86_64',
+            'build_time': '2026-04-09T10:11:12Z',
+            'installed_at': '2026-04-09T10:15:00Z',
+            'source_kind': 'release',
+            'install_mode': 'release',
+        },
+    )
+    monkeypatch.setattr(
+        'cli.services.doctor.requirements_summary',
+        lambda: {
+            'python_executable': '/usr/bin/python3',
+            'python_version': '3.11.0',
+            'tmux_available': True,
+            'tmux_path': '/usr/bin/tmux',
+            'provider_commands': (
+                {
+                    'provider': 'codex',
+                    'executable': 'codex',
+                    'available': True,
+                    'path': '/usr/bin/codex',
+                },
+            ),
+        },
+    )
+
+    payload = doctor_summary(context)
+
+    assert payload['installation']['install_mode'] == 'release'
+    assert payload['installation']['channel'] == 'stable'
+    assert payload['requirements']['tmux_available'] is True
+    assert payload['requirements']['provider_commands'][0]['provider'] == 'codex'
+
+
 def test_doctor_summary_includes_namespace_state_and_latest_event(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-doctor-namespace'
     (project_root / '.ccb').mkdir(parents=True, exist_ok=True)

@@ -79,4 +79,4 @@ def reset_stable_state(state: ReadinessState) -> None:
     state.stable_since = None
 
 
-__all__ = ['looks_ready', 'wait_for_runtime_ready']
+__all__ = ['looks_ready', 'resolved_timeout', 'wait_for_runtime_ready']

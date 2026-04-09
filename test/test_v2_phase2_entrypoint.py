@@ -1079,7 +1079,7 @@ def test_ccb_opencode_real_adapter_blackbox_pane_dead_fails_degraded(monkeypatch
         assert not thread.is_alive()
 
 
-def test_ccb_opencode_real_adapter_blackbox_terminal_done_marker_completion(monkeypatch, tmp_path: Path) -> None:
+def test_ccb_opencode_real_adapter_blackbox_completed_reply_without_done_marker(monkeypatch, tmp_path: Path) -> None:
     from provider_execution import opencode as opencode_adapter_module
 
     project_root = tmp_path / 'repo-opencode-legacy'
@@ -1112,7 +1112,16 @@ def test_ccb_opencode_real_adapter_blackbox_terminal_done_marker_completion(monk
             return {'session_path': str(tmp_path / 'opencode-session.json'), 'session_id': 'ses-demo'}
 
         def try_get_message(self, state):
-            return f'legacy final\nCCB_DONE: {anchor["req_id"]}', state
+            return (
+                'legacy final',
+                {
+                    **state,
+                    'last_assistant_id': 'msg-final',
+                    'last_assistant_parent_id': 'msg-user',
+                    'last_assistant_req_id': anchor["req_id"],
+                    'last_assistant_completed': 1234,
+                },
+            )
 
     monkeypatch.setattr(opencode_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
     monkeypatch.setattr(opencode_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
@@ -1133,8 +1142,8 @@ def test_ccb_opencode_real_adapter_blackbox_terminal_done_marker_completion(monk
 
         pend = _wait_for_phase2_status(project_root, job_id, 'completed', timeout=5.0)
         assert 'reply: legacy final' in pend
-        assert 'completion_reason: terminal_done_marker' in pend
-        assert 'completion_confidence: degraded' in pend
+        assert 'completion_reason: assistant_completed' in pend
+        assert 'completion_confidence: observed' in pend
 
         code, stdout, stderr = _run_phase2_local(['watch', job_id], cwd=project_root)
         assert code == 0, stderr
@@ -1183,10 +1192,28 @@ def test_ccb_opencode_real_adapter_blackbox_cancel_stops_legacy_completion(monke
         def try_get_message(self, state):
             self._calls += 1
             if self._calls == 1:
-                return 'partial before cancel', state
+                return (
+                    'partial before cancel',
+                    {
+                        **state,
+                        'last_assistant_id': 'msg-partial',
+                        'last_assistant_parent_id': 'msg-user',
+                        'last_assistant_req_id': anchor["req_id"],
+                        'last_assistant_completed': None,
+                    },
+                )
             if self._calls < 50:
                 return None, state
-            return f'final after cancel\nCCB_DONE: {anchor["req_id"]}', state
+            return (
+                'final after cancel',
+                {
+                    **state,
+                    'last_assistant_id': 'msg-final',
+                    'last_assistant_parent_id': 'msg-user',
+                    'last_assistant_req_id': anchor["req_id"],
+                    'last_assistant_completed': 9999,
+                },
+            )
 
     monkeypatch.setattr(opencode_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
     monkeypatch.setattr(opencode_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
@@ -2872,6 +2899,169 @@ def test_ccb_two_named_gemini_agents_concurrent_ask_isolated(monkeypatch, tmp_pa
 
         assert any(pane_id == '%41' and request_ids[0] in text for pane_id, text in sent)
         assert any(pane_id == '%42' and request_ids[1] in text for pane_id, text in sent)
+    finally:
+        _assert_phase2_app_shutdown_clean(project_root, app, thread)
+
+
+def test_ccb_two_named_opencode_agents_concurrent_ask_isolated(monkeypatch, tmp_path: Path) -> None:
+    from jobs.store import JobEventStore, JobStore
+    from provider_backends.opencode.session_runtime.model import OpenCodeProjectSession
+    from provider_execution import opencode as opencode_adapter_module
+    from storage.paths import PathLayout
+
+    project_root = tmp_path / 'repo-dual-opencode'
+    shared_work_dir = project_root / '.ccb' / 'workspaces' / 'shared-opencode'
+    shared_work_dir.mkdir(parents=True, exist_ok=True)
+    _write(project_root / '.ccb' / 'ccb.config', _dual_named_agent_config_text('agent1', 'opencode', 'agent2', 'opencode'))
+    _write(
+        project_root / '.ccb' / '.opencode-agent1-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%51',
+                'work_dir': str(shared_work_dir),
+                'opencode_project_id': 'proj-shared',
+                'opencode_session_id': 'ses-agent1',
+                'active': True,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+    _write(
+        project_root / '.ccb' / '.opencode-agent2-session',
+        json.dumps(
+            {
+                'terminal': 'tmux',
+                'pane_id': '%52',
+                'work_dir': str(shared_work_dir),
+                'opencode_project_id': 'proj-shared',
+                'opencode_session_id': 'ses-agent2',
+                'active': True,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + '\n',
+    )
+
+    request_ids = ('job_6e11b1', 'job_6e11b2')
+    sent: list[tuple[str, str]] = []
+    anchors: dict[str, str | None] = {'ses-agent1': None, 'ses-agent2': None}
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            sent.append((pane_id, text))
+            match = re.search(r'^CCB_REQ_ID:\s*(\S+)\s*$', text, re.MULTILINE)
+            if pane_id == '%51':
+                anchors['ses-agent1'] = match.group(1) if match else None
+            elif pane_id == '%52':
+                anchors['ses-agent2'] = match.group(1) if match else None
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id in {'%51', '%52'}
+
+    class FakeReader:
+        def __init__(self, *args, **kwargs) -> None:
+            self.project_id = kwargs.get('project_id')
+            self.session_id_filter = kwargs.get('session_id_filter')
+            self.work_dir = Path(kwargs.get('work_dir') or '')
+            self._emitted = False
+            if self.session_id_filter == 'ses-agent1':
+                self.reply = 'opencode agent1 final'
+            elif self.session_id_filter == 'ses-agent2':
+                self.reply = 'opencode agent2 final'
+            else:
+                raise AssertionError(f'unexpected opencode session filter: {self.session_id_filter!r}')
+
+        def capture_state(self):
+            return {
+                'session_path': str(self.work_dir / f'{self.session_id_filter}.json'),
+                'session_id': self.session_id_filter,
+            }
+
+        def try_get_message(self, state):
+            if self._emitted:
+                return None, state
+            self._emitted = True
+            req_id = anchors.get(str(self.session_id_filter)) or ''
+            return (
+                self.reply,
+                {
+                    **state,
+                    'last_assistant_id': f'msg-{self.session_id_filter}',
+                    'last_assistant_parent_id': f'usr-{self.session_id_filter}',
+                    'last_assistant_req_id': req_id,
+                    'last_assistant_completed': 1234,
+                },
+            )
+
+    monkeypatch.setattr(OpenCodeProjectSession, 'ensure_pane', lambda self: (True, self.pane_id))
+    monkeypatch.setattr(opencode_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(opencode_adapter_module, 'OpenCodeLogReader', FakeReader)
+    app = CcbdApp(project_root)
+    _freeze_job_ids(app, monkeypatch, *request_ids)
+    thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread.start()
+    _wait_for_path(app.paths.ccbd_socket_path)
+
+    try:
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        assert code == 0, stderr
+        assert 'agents: agent1, agent2' in stdout
+
+        runtime_agent1 = json.loads((project_root / '.ccb' / 'agents' / 'agent1' / 'runtime.json').read_text(encoding='utf-8'))
+        runtime_agent2 = json.loads((project_root / '.ccb' / 'agents' / 'agent2' / 'runtime.json').read_text(encoding='utf-8'))
+        assert runtime_agent1['agent_name'] == 'agent1'
+        assert runtime_agent2['agent_name'] == 'agent2'
+        assert runtime_agent1['runtime_ref'] != runtime_agent2['runtime_ref']
+
+        code, stdout1, stderr = _run_phase2_local(['ask', 'agent1', 'from', 'user', 'hello opencode agent1'], cwd=project_root)
+        assert code == 0, stderr
+        job1 = _extract_accepted_job_id(stdout1, target='agent1')
+
+        code, stdout2, stderr = _run_phase2_local(['ask', 'agent2', 'from', 'user', 'hello opencode agent2'], cwd=project_root)
+        assert code == 0, stderr
+        job2 = _extract_accepted_job_id(stdout2, target='agent2')
+
+        pend1 = _wait_for_phase2_status(project_root, 'agent1', 'completed')
+        pend2 = _wait_for_phase2_status(project_root, 'agent2', 'completed')
+        assert f'job_id: {job1}' in pend1
+        assert f'job_id: {job2}' in pend2
+        assert 'reply: opencode agent1 final' in pend1
+        assert 'reply: opencode agent2 final' in pend2
+        assert 'completion_reason: assistant_completed' in pend1
+        assert 'completion_reason: assistant_completed' in pend2
+        assert 'opencode agent2 final' not in pend1
+        assert 'opencode agent1 final' not in pend2
+
+        code, watch1, stderr = _run_phase2_local(['watch', job1], cwd=project_root)
+        assert code == 0, stderr
+        code, watch2, stderr = _run_phase2_local(['watch', job2], cwd=project_root)
+        assert code == 0, stderr
+        assert 'agent_name: agent1' in watch1
+        assert 'agent_name: agent2' in watch2
+        assert 'opencode agent2 final' not in watch1
+        assert 'opencode agent1 final' not in watch2
+
+        layout = PathLayout(project_root)
+        event_store = JobEventStore(layout)
+        _, events1 = event_store.read_since('agent1', 0)
+        _, events2 = event_store.read_since('agent2', 0)
+        assert all(event.agent_name == 'agent1' for event in events1)
+        assert all(event.agent_name == 'agent2' for event in events2)
+        assert any(event.job_id == job1 for event in events1)
+        assert any(event.job_id == job2 for event in events2)
+        assert not any(event.job_id == job2 for event in events1)
+        assert not any(event.job_id == job1 for event in events2)
+
+        job_store = JobStore(layout)
+        latest1 = job_store.get_latest('agent1', job1)
+        latest2 = job_store.get_latest('agent2', job2)
+        assert latest1 is not None and latest1.status.value == 'completed'
+        assert latest2 is not None and latest2.status.value == 'completed'
+
+        assert any(pane_id == '%51' and request_ids[0] in text for pane_id, text in sent)
+        assert any(pane_id == '%52' and request_ids[1] in text for pane_id, text in sent)
     finally:
         _assert_phase2_app_shutdown_clean(project_root, app, thread)
 

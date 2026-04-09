@@ -24,9 +24,7 @@ class OpenCodeProjectSession(PaneLogProjectSessionBase):
     @property
     def opencode_session_id_filter(self) -> str | None:
         session_id = self.opencode_session_id
-        if session_id and session_id.startswith("ses_"):
-            return session_id
-        return None
+        return session_id or None
 
     @property
     def opencode_project_id(self) -> str:

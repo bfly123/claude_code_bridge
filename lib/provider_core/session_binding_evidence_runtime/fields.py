@@ -27,34 +27,16 @@ def session_ref(session, *, session_id_attr: str, session_path_attr: str) -> str
 
 
 def session_tmux_socket_name(session) -> str | None:
-    terminal = str(getattr(session, 'terminal', '') or '').strip().lower()
-    if terminal != 'tmux':
+    if not _session_uses_tmux(session):
         return None
-    data = getattr(session, 'data', None)
-    if isinstance(data, dict):
-        text = str(data.get('tmux_socket_name') or '').strip()
-        if text:
-            return text
-    backend = session_backend(session)
-    if backend is None:
-        return None
-    return str(getattr(backend, '_socket_name', '') or '').strip() or None
+    return _session_data_text(session, 'tmux_socket_name') or _backend_text(session, '_socket_name')
 
 
 def session_tmux_socket_path(session) -> str | None:
-    terminal = str(getattr(session, 'terminal', '') or '').strip().lower()
-    if terminal != 'tmux':
+    if not _session_uses_tmux(session):
         return None
-    data = getattr(session, 'data', None)
-    if isinstance(data, dict):
-        text = str(data.get('tmux_socket_path') or '').strip()
-        if text:
-            return str(Path(text).expanduser())
-    backend = session_backend(session)
-    if backend is None:
-        return None
-    text = str(getattr(backend, '_socket_path', '') or '').strip()
-    return str(Path(text).expanduser()) if text else None
+    text = _session_data_text(session, 'tmux_socket_path') or _backend_text(session, '_socket_path')
+    return _expanded_path_text(text)
 
 
 def session_id(session, *, session_id_attr: str) -> str | None:
@@ -83,18 +65,13 @@ def session_runtime_root(session) -> str | None:
 
 
 def session_runtime_pid(session, *, provider: str) -> int | None:
-    data = getattr(session, 'data', None)
-    if isinstance(data, dict):
-        for key in ('runtime_pid', 'pid'):
-            value = coerce_pid(data.get(key))
-            if value is not None:
-                return value
-    runtime_root = session_runtime_root(session)
-    if not runtime_root:
+    direct_pid = _session_data_pid(session)
+    if direct_pid is not None:
+        return direct_pid
+    runtime_root = _runtime_root_path(session)
+    if runtime_root is None:
         return None
-    root = Path(runtime_root)
-    preferred = root / f'{str(provider or "").strip().lower()}.pid'
-    for candidate in (preferred, *sorted(root.glob('*.pid'))):
+    for candidate in _pid_file_candidates(runtime_root, provider=provider):
         value = read_pid_file(candidate)
         if value is not None:
             return value
@@ -110,12 +87,64 @@ def session_pane_title_marker(session) -> str | None:
     text = str(getattr(session, 'pane_title_marker', '') or '').strip()
     if text:
         return text
+    return _session_data_text(session, 'pane_title_marker')
+
+
+def _session_uses_tmux(session) -> bool:
+    return str(getattr(session, 'terminal', '') or '').strip().lower() == 'tmux'
+
+
+def _session_data(session) -> dict | None:
     data = getattr(session, 'data', None)
     if isinstance(data, dict):
-        text = str(data.get('pane_title_marker') or '').strip()
-        if text:
-            return text
+        return data
     return None
+
+
+def _session_data_text(session, key: str) -> str | None:
+    data = _session_data(session)
+    if data is None:
+        return None
+    text = str(data.get(key) or '').strip()
+    return text or None
+
+
+def _backend_text(session, attr_name: str) -> str | None:
+    backend = session_backend(session)
+    if backend is None:
+        return None
+    text = str(getattr(backend, attr_name, '') or '').strip()
+    return text or None
+
+
+def _expanded_path_text(text: str | None) -> str | None:
+    if not text:
+        return None
+    return str(Path(text).expanduser())
+
+
+def _session_data_pid(session) -> int | None:
+    data = _session_data(session)
+    if data is None:
+        return None
+    for key in ('runtime_pid', 'pid'):
+        value = coerce_pid(data.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _runtime_root_path(session) -> Path | None:
+    runtime_root = session_runtime_root(session)
+    if not runtime_root:
+        return None
+    return Path(runtime_root)
+
+
+def _pid_file_candidates(runtime_root: Path, *, provider: str) -> tuple[Path, ...]:
+    provider_name = str(provider or '').strip().lower()
+    preferred = runtime_root / f'{provider_name}.pid'
+    return (preferred, *sorted(runtime_root.glob('*.pid')))
 
 
 def coerce_pid(value: object) -> int | None:

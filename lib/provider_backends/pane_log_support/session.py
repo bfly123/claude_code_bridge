@@ -38,6 +38,23 @@ def now_str() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S")
 
 
+def session_tmux_identity_lookup(data: dict) -> dict[str, str]:
+    lookup: dict[str, str] = {}
+    agent_name = str(data.get("agent_name") or "").strip()
+    if agent_name:
+        lookup["@ccb_agent"] = agent_name
+    project_id = str(data.get("ccb_project_id") or "").strip()
+    if project_id:
+        lookup["@ccb_project_id"] = project_id
+    slot_key = str(data.get("ccb_slot") or "").strip()
+    if slot_key:
+        lookup["@ccb_slot"] = slot_key
+    managed_by = str(data.get("ccb_managed_by") or "").strip()
+    if managed_by:
+        lookup["@ccb_managed_by"] = managed_by
+    return lookup
+
+
 @dataclass
 class PaneLogProjectSessionBase:
     session_file: Path
@@ -71,14 +88,7 @@ class PaneLogProjectSessionBase:
         return str(self.data.get("start_cmd") or "").strip()
 
     def user_option_lookup(self) -> dict[str, str]:
-        lookup: dict[str, str] = {}
-        agent_name = str(self.data.get("agent_name") or "").strip()
-        if agent_name:
-            lookup["@ccb_agent"] = agent_name
-        project_id = str(self.data.get("ccb_project_id") or "").strip()
-        if project_id:
-            lookup["@ccb_project_id"] = project_id
-        return lookup
+        return session_tmux_identity_lookup(self.data)
 
     def _attach_pane_log(self, backend: object, pane_id: str) -> None:
         attach_pane_log_impl(self, backend, pane_id)
@@ -114,24 +124,44 @@ def load_project_session_for_provider(
 
 
 def compute_session_key_for_provider(session, *, provider: str, instance: Optional[str] = None) -> str:
+    work_dir = Path(session.work_dir)
+    pid = _resolved_project_id(session, work_dir)
+    worktree_scope = _resolved_worktree_scope(work_dir)
+    return _session_key(
+        _session_key_prefix(provider, instance=instance),
+        project_id=pid,
+        worktree_scope=worktree_scope,
+    )
+
+
+def _resolved_project_id(session, work_dir: Path) -> str:
     pid = str(session.data.get("ccb_project_id") or "").strip()
-    if not pid:
-        try:
-            pid = compute_ccb_project_id(Path(session.work_dir))
-        except Exception:
-            pid = ""
-    worktree_scope = ""
-    try:
-        worktree_scope = compute_worktree_scope_id(Path(session.work_dir))
-    except Exception:
-        worktree_scope = ""
-    prefix = provider
-    if instance:
-        prefix = f"{provider}:{instance}"
-    if pid and worktree_scope:
-        return f"{prefix}:{pid}:{worktree_scope}"
     if pid:
-        return f"{prefix}:{pid}"
+        return pid
+    try:
+        return compute_ccb_project_id(work_dir)
+    except Exception:
+        return ""
+
+
+def _resolved_worktree_scope(work_dir: Path) -> str:
+    try:
+        return compute_worktree_scope_id(work_dir)
+    except Exception:
+        return ""
+
+
+def _session_key_prefix(provider: str, *, instance: Optional[str]) -> str:
+    if instance:
+        return f"{provider}:{instance}"
+    return provider
+
+
+def _session_key(prefix: str, *, project_id: str, worktree_scope: str) -> str:
+    if project_id and worktree_scope:
+        return f"{prefix}:{project_id}:{worktree_scope}"
+    if project_id:
+        return f"{prefix}:{project_id}"
     if worktree_scope:
         return f"{prefix}:unknown:{worktree_scope}"
     return f"{prefix}:unknown"
@@ -154,4 +184,5 @@ __all__ = [
     "load_project_session_for_provider",
     "now_str",
     "read_session_json",
+    "session_tmux_identity_lookup",
 ]

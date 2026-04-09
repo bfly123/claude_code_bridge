@@ -45,6 +45,7 @@ def prepare_tmux_start_layout(
                 agent_label='cmd',
                 project_id=context.project.project_id,
                 is_cmd=True,
+                slot_key='cmd',
             )
             return
         agent_panes[item] = pane_id
@@ -55,6 +56,7 @@ def prepare_tmux_start_layout(
             agent_label=item,
             project_id=context.project.project_id,
             order_index=style_index_by_agent[item],
+            slot_key=item,
         )
 
     _materialize_layout(
@@ -115,6 +117,7 @@ def _label_pane(
     project_id: str,
     order_index: int | None = None,
     is_cmd: bool = False,
+    slot_key: str | None = None,
 ) -> None:
     apply_ccb_pane_identity(
         backend,
@@ -124,6 +127,7 @@ def _label_pane(
         project_id=project_id,
         order_index=order_index,
         is_cmd=is_cmd,
+        slot_key=slot_key,
     )
 
 

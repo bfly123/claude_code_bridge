@@ -67,25 +67,42 @@ def _kill_pid_tree_once(pid: int, *, force: bool) -> bool:
     if pid <= 0:
         return False
     if os.name == "nt":
-        try:
-            args = ["taskkill", "/T", "/PID", str(pid)]
-            if force:
-                args.insert(1, "/F")
-            subprocess.run(args, capture_output=True)
-            return True
-        except Exception:
-            return False
+        return _kill_pid_tree_windows(pid, force=force)
+    return _kill_pid_tree_posix(pid, force=force)
 
+
+def _kill_pid_tree_windows(pid: int, *, force: bool) -> bool:
+    try:
+        subprocess.run(_taskkill_tree_args(pid, force=force), capture_output=True)
+        return True
+    except Exception:
+        return False
+
+
+def _taskkill_tree_args(pid: int, *, force: bool) -> list[str]:
+    args = ["taskkill", "/T", "/PID", str(pid)]
+    if force:
+        args.insert(1, "/F")
+    return args
+
+
+def _kill_pid_tree_posix(pid: int, *, force: bool) -> bool:
     sig = signal.SIGKILL if force else signal.SIGTERM
+    if _kill_process_group(pid, sig):
+        return True
+    return kill_pid(pid, force=force)
+
+
+def _kill_process_group(pid: int, sig: signal.Signals) -> bool:
     pgid = _safe_getpgid(pid)
     current_pgid = _safe_getpgrp()
-    if pgid is not None and pgid > 1 and pgid != current_pgid:
-        try:
-            os.killpg(pgid, sig)
-            return True
-        except Exception:
-            pass
-    return kill_pid(pid, force=force)
+    if pgid is None or pgid <= 1 or pgid == current_pgid:
+        return False
+    try:
+        os.killpg(pgid, sig)
+        return True
+    except Exception:
+        return False
 
 
 def _wait_for_pid_exit(pid: int, *, timeout_s: float, is_pid_alive_fn: Callable[[int], bool]) -> bool:

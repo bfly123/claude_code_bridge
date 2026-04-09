@@ -7,6 +7,8 @@ from completion.models import CompletionConfidence, CompletionDecision, Completi
 
 from ..context import build_job_runtime_context
 from ..records import append_event, get_job
+from ..reply_delivery import is_reply_delivery_job
+from ..reply_delivery_runtime.decisions import reply_delivery_failed_decision
 from ..runtime_state import sync_runtime
 
 
@@ -74,6 +76,29 @@ def _restore_current_job(dispatcher, *, target_kind: TargetKind, job_id: str):
     current = get_job(dispatcher, job_id)
     if current is None or current.status is not dispatcher._running_status:
         return None, None
+    if is_reply_delivery_job(current):
+        repaired = dispatcher.complete(
+            current.job_id,
+            reply_delivery_failed_decision(
+                current,
+                finished_at=dispatcher._clock(),
+                reason='reply_delivery_restart_requeued',
+                diagnostics={
+                    'restore_status': 'abandoned',
+                    'restore_reason': 'reply_delivery_does_not_resume',
+                },
+            ),
+        )
+        entry = CcbdRestoreEntry(
+            job_id=current.job_id,
+            agent_name=current.agent_name,
+            provider=current.provider,
+            status='abandoned',
+            reason='reply_delivery_does_not_resume',
+            resume_capable=False,
+            pending_items_count=0,
+        )
+        return repaired, entry
     runtime = dispatcher._registry.get(current.agent_name) if target_kind is TargetKind.AGENT else None
     runtime_context = build_job_runtime_context(current, runtime)
     restored = dispatcher._execution_service.restore(current, runtime_context=runtime_context)

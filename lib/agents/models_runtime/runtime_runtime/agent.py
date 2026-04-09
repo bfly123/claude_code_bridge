@@ -36,6 +36,9 @@ class AgentRuntime:
     tmux_socket_path: str | None = None
     session_file: str | None = None
     session_id: str | None = None
+    slot_key: str | None = None
+    window_id: str | None = None
+    workspace_epoch: int | None = None
     lifecycle_state: str | None = None
     binding_generation: int = 1
     managed_by: str = 'ccbd'
@@ -81,6 +84,9 @@ class AgentRuntime:
             'tmux_socket_path': self.tmux_socket_path,
             'session_file': self.session_file,
             'session_id': self.session_id,
+            'slot_key': self.slot_key,
+            'window_id': self.window_id,
+            'workspace_epoch': self.workspace_epoch,
             'lifecycle_state': self.lifecycle_state,
             'binding_generation': self.binding_generation,
             'managed_by': self.managed_by,

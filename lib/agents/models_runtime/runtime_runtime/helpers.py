@@ -27,6 +27,10 @@ def default_reconcile_state(state: AgentState) -> str:
 
 def normalize_runtime_defaults(runtime) -> None:
     runtime.binding_source = normalize_runtime_binding_source(runtime.binding_source)
+    runtime.slot_key = normalized_text(getattr(runtime, 'slot_key', None)) or runtime.agent_name
+    runtime.window_id = normalized_text(getattr(runtime, 'window_id', None))
+    workspace_epoch = getattr(runtime, 'workspace_epoch', None)
+    runtime.workspace_epoch = int(workspace_epoch) if workspace_epoch is not None else None
     if not str(runtime.lifecycle_state or '').strip():
         runtime.lifecycle_state = runtime.state.value
     runtime.desired_state = normalized_text(runtime.desired_state) or default_desired_state(runtime.state)
@@ -46,6 +50,8 @@ def validate_runtime_fields(runtime) -> None:
         raise AgentValidationError('binding_generation must be positive')
     if runtime.daemon_generation is not None and runtime.daemon_generation <= 0:
         raise AgentValidationError('daemon_generation must be positive when set')
+    if runtime.workspace_epoch is not None and runtime.workspace_epoch <= 0:
+        raise AgentValidationError('workspace_epoch must be positive when set')
     if runtime.restart_count < 0:
         raise AgentValidationError('restart_count cannot be negative')
     if not str(runtime.managed_by or '').strip():

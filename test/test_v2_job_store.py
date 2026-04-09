@@ -93,7 +93,7 @@ def test_event_and_submission_stores_roundtrip(tmp_path: Path) -> None:
     assert latest.job_ids == ['job-1', 'job-2']
 
 
-def test_submission_store_roundtrips_command_mailbox_sender(tmp_path: Path) -> None:
+def test_submission_store_aliases_legacy_cmd_sender_to_user(tmp_path: Path) -> None:
     layout = PathLayout(tmp_path / 'repo')
     submission_store = SubmissionStore(layout)
 
@@ -112,7 +112,7 @@ def test_submission_store_roundtrips_command_mailbox_sender(tmp_path: Path) -> N
 
     latest = submission_store.get_latest('sub-cmd')
     assert latest is not None
-    assert latest.from_actor == 'cmd'
+    assert latest.from_actor == 'user'
 
 
 def test_job_store_supports_explicit_target_lookup(tmp_path: Path) -> None:

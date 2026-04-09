@@ -5,6 +5,7 @@ import time
 from ccbd.models import LeaseHealth
 
 from .models import CcbdServiceError, DaemonHandle
+from .lifecycle_start import DaemonStartState, finalize_daemon_start, poll_daemon_start_iteration
 
 
 def ensure_daemon_started(
@@ -21,49 +22,31 @@ def ensure_daemon_started(
     start_timeout_s: float,
 ) -> DaemonHandle:
     clear_shutdown_intent_fn(context)
-    keeper_started = bool(ensure_keeper_started_fn(context))
-    started = False
-    incompatible_restart_requested = False
-    unreachable_restart_requested = False
-    direct_spawn_requested = False
+    state = DaemonStartState(keeper_started=bool(ensure_keeper_started_fn(context)))
     deadline = time.time() + start_timeout_s
 
     while time.time() < deadline:
-        _manager, _guard, inspection = inspect_daemon_fn(context)
-        if inspection.socket_connectable:
-            handle = connect_compatible_daemon_fn(
-                context,
-                inspection,
-                restart_on_mismatch=not incompatible_restart_requested,
-            )
-            if handle is not None:
-                return DaemonHandle(client=handle.client, inspection=inspection, started=started)
-            if not incompatible_restart_requested:
-                started = True
-                incompatible_restart_requested = True
-        elif should_restart_unreachable_daemon_fn(inspection) and not unreachable_restart_requested:
-            restart_unreachable_daemon_fn(context, inspection)
-            started = True
-            unreachable_restart_requested = True
-        elif inspection.health in {LeaseHealth.MISSING, LeaseHealth.UNMOUNTED, LeaseHealth.STALE}:
-            started = True
-            if keeper_started:
-                # Project-scoped keeper owns daemon keepalive once it is active.
-                # CLI should wait for keeper-driven spawn instead of double-spawning.
-                pass
-            elif not direct_spawn_requested:
-                spawn_ccbd_process_fn(context)
-                keeper_started = bool(ensure_keeper_started_fn(context))
-                direct_spawn_requested = True
+        handle = poll_daemon_start_iteration(
+            context,
+            state=state,
+            ensure_keeper_started_fn=ensure_keeper_started_fn,
+            inspect_daemon_fn=inspect_daemon_fn,
+            connect_compatible_daemon_fn=connect_compatible_daemon_fn,
+            should_restart_unreachable_daemon_fn=should_restart_unreachable_daemon_fn,
+            restart_unreachable_daemon_fn=restart_unreachable_daemon_fn,
+            spawn_ccbd_process_fn=spawn_ccbd_process_fn,
+        )
+        if handle is not None:
+            return handle
         time.sleep(0.05)
 
-    _manager, _guard, inspection = inspect_daemon_fn(context)
-    handle = connect_compatible_daemon_fn(context, inspection, restart_on_mismatch=False)
-    if handle is not None:
-        return DaemonHandle(client=handle.client, inspection=inspection, started=started)
-    if inspection.socket_connectable:
-        raise CcbdServiceError(incompatible_daemon_error_fn())
-    raise CcbdServiceError(f'ccbd is unavailable: {inspection.reason}')
+    return finalize_daemon_start(
+        context,
+        started=state.started,
+        inspect_daemon_fn=inspect_daemon_fn,
+        connect_compatible_daemon_fn=connect_compatible_daemon_fn,
+        incompatible_daemon_error_fn=incompatible_daemon_error_fn,
+    )
 
 
 def connect_mounted_daemon(
@@ -81,14 +64,15 @@ def connect_mounted_daemon(
     if handle is not None:
         return handle
     _manager, _guard, inspection = inspect_daemon_fn(context)
+    if allow_restart_stale and (
+        inspection.health in {LeaseHealth.MISSING, LeaseHealth.UNMOUNTED, LeaseHealth.STALE}
+        or should_restart_unreachable_daemon_fn(inspection)
+    ):
+        return ensure_daemon_started_fn(context)
     if inspection.health is LeaseHealth.UNMOUNTED:
         raise CcbdServiceError('project ccbd is unmounted; run `ccb [agents...]` first')
     if inspection.health is LeaseHealth.MISSING:
         raise CcbdServiceError('project ccbd is not mounted; run `ccb [agents...]` first')
-    if allow_restart_stale and (
-        inspection.health is LeaseHealth.STALE or should_restart_unreachable_daemon_fn(inspection)
-    ):
-        return ensure_daemon_started_fn(context)
     if inspection.socket_connectable:
         handle = connect_compatible_daemon_fn(context, inspection, restart_on_mismatch=False)
         if handle is not None:

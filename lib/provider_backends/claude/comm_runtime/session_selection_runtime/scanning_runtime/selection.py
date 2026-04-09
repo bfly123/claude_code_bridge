@@ -14,6 +14,8 @@ def latest_session(reader) -> Path | None:
     scanned = scan_latest_session(reader) if index_session is None else None
     if preferred is not None:
         return preferred
+    if getattr(reader, '_preferred_session_locked', False):
+        return None
     if index_session:
         reader._preferred_session = index_session
         return index_session
@@ -31,15 +33,22 @@ def latest_session(reader) -> Path | None:
 def _preferred_session(reader) -> Path | None:
     preferred = reader._preferred_session
     if preferred and not session_belongs_to_current_project(reader, preferred):
-        reader._preferred_session = None
+        _clear_preferred_session(reader)
         preferred = None
     if preferred and preferred.exists():
+        if getattr(reader, '_preferred_session_locked', False):
+            return preferred
         candidate = _newer_candidate(preferred, parse_sessions_index(reader), scan_latest_session(reader))
         if candidate is not None:
             reader._preferred_session = candidate
             return candidate
         return preferred
     return None
+
+
+def _clear_preferred_session(reader) -> None:
+    reader._preferred_session = None
+    reader._preferred_session_locked = False
 
 
 def _newer_candidate(preferred: Path, index_session: Path | None, scanned: Path | None) -> Path | None:

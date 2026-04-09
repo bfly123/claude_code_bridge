@@ -36,6 +36,7 @@ def test_render_ask_includes_submission_and_jobs() -> None:
 
     assert render_ask(summary) == (
         'accepted jobs=job-1@agent1,job-2@agent2',
+        '[CCB_ASYNC_SUBMITTED jobs=job-1@agent1,job-2@agent2]',
     )
 
 
@@ -331,6 +332,7 @@ def test_render_ask_and_watch_batch_use_target_name_when_present() -> None:
 
     assert render_ask(summary) == (
         'accepted job=job-1 target=reviewer',
+        '[CCB_ASYNC_SUBMITTED job=job-1 target=reviewer]',
     )
     assert render_watch_batch(batch) == (
         'event: evt-1 job-1 reviewer job_started 2026-03-18T00:00:00Z',
@@ -371,6 +373,30 @@ def test_render_ps_and_doctor_keep_expected_line_shapes() -> None:
     doctor_payload = {
         'project': '/tmp/repo',
         'project_id': 'proj-1',
+        'installation': {
+            'path': '/tmp/install',
+            'install_mode': 'release',
+            'source_kind': 'release',
+            'version': '5.2.8',
+            'channel': 'stable',
+            'build_time': '2026-04-09T10:11:12Z',
+            'platform': 'linux',
+            'arch': 'x86_64',
+        },
+        'requirements': {
+            'python_executable': '/usr/bin/python3',
+            'python_version': '3.11.0',
+            'tmux_available': True,
+            'tmux_path': '/usr/bin/tmux',
+            'provider_commands': (
+                {
+                    'provider': 'codex',
+                    'executable': 'codex',
+                    'available': True,
+                    'path': '/usr/bin/codex',
+                },
+            ),
+        },
         'ccbd': {
             'state': 'mounted',
             'health': 'healthy',
@@ -448,6 +474,10 @@ def test_render_ps_and_doctor_keep_expected_line_shapes() -> None:
     )
 
     assert doctor_lines[0] == 'project: /tmp/repo'
+    assert 'install_mode: release' in doctor_lines
+    assert 'install_channel: stable' in doctor_lines
+    assert 'requirement_tmux_available: True' in doctor_lines
+    assert 'requirement_provider: name=codex executable=codex available=True path=/usr/bin/codex' in doctor_lines
     assert 'ccbd_state: mounted' in doctor_lines
     assert 'ccbd_namespace_tmux_session_name: ccb-repo' in doctor_lines
     assert 'agent: name=codex health=healthy provider=codex completion=protocol_turn' in doctor_lines

@@ -21,6 +21,16 @@ def destroy_project_namespace(controller, *, reason: str):
         tmux_socket_path=tmux_socket_path,
         tmux_session_name=tmux_session_name,
         layout_version=controller._layout_version,
+        control_window_name=(
+            str(current.control_window_name)
+            if current is not None and current.control_window_name
+            else controller._layout.ccbd_tmux_control_window_name
+        ),
+        workspace_window_name=(
+            str(current.workspace_window_name)
+            if current is not None and current.workspace_window_name
+            else controller._layout.ccbd_tmux_workspace_window_name
+        ),
     )
     controller._state_store.save(next_state)
     controller._event_store.append(

@@ -39,7 +39,7 @@ def write_ask_usage(
         "      [--silence] <target> [--] <message...>",
         file=out,
     )
-    print("      sender is inferred from the current workspace agent and falls back to cmd", file=out)
+    print("      sender is inferred from the current workspace agent and falls back to user", file=out)
     print("      message text may be supplied on stdin", file=out)
     print(f"  {command_name} wait <job_id>", file=out)
     print(f"  {command_name} get <job_id>", file=out)

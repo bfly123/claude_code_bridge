@@ -27,6 +27,7 @@ from provider_profiles.models import ResolvedProviderProfile
 from project.ids import compute_project_id
 from project.resolver import ProjectContext
 from storage.paths import PathLayout
+from terminal_runtime.tmux_identity import pane_visual
 from workspace.planner import WorkspacePlanner
 
 
@@ -64,6 +65,64 @@ def _write_provider_profile(runtime_dir: Path, profile: ResolvedProviderProfile)
         json.dumps(profile.to_record(), ensure_ascii=False, indent=2),
         encoding='utf-8',
     )
+
+
+def test_ensure_agent_runtime_reconciles_claude_workspace_before_launch(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-claude-hooks'
+    home = tmp_path / 'home'
+    (project_root / '.ccb').mkdir(parents=True)
+    monkeypatch.setenv('HOME', str(home))
+    user_settings_path = home / '.claude' / 'settings.json'
+    user_settings_path.parent.mkdir(parents=True, exist_ok=True)
+    user_settings_path.write_text(
+        json.dumps(
+            {
+                'env': {
+                    'ANTHROPIC_AUTH_TOKEN': 'token-system',
+                    'ANTHROPIC_BASE_URL': 'https://api.system.invalid',
+                }
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    ctx = _context(project_root, ParsedStartCommand(project=None, agent_names=('agent3',), restore=False, auto_permission=False))
+    spec = _spec('agent3', provider='claude')
+    plan = WorkspacePlanner().plan(spec, ctx.project)
+    workspace_settings = plan.workspace_path / '.claude' / 'settings.json'
+    workspace_settings.parent.mkdir(parents=True, exist_ok=True)
+    workspace_settings.write_text(
+        json.dumps(
+            {
+                'env': {
+                    'ANTHROPIC_AUTH_TOKEN': 'token-stale',
+                    'ANTHROPIC_BASE_URL': 'https://api.stale.invalid',
+                }
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    observed: dict[str, object] = {}
+
+    def fake_ensure_impl(*args, **kwargs):
+        del args, kwargs
+        observed['workspace_settings_exists'] = workspace_settings.exists()
+        return runtime_launch.RuntimeLaunchResult(launched=False, binding=None)
+
+    monkeypatch.setattr(runtime_launch, '_ensure_agent_runtime_impl', fake_ensure_impl)
+
+    result = ensure_agent_runtime(ctx, ctx.command, spec, plan, None)
+
+    assert result == runtime_launch.RuntimeLaunchResult(launched=False, binding=None)
+    assert observed['workspace_settings_exists'] is False
+    settings_local_path = plan.workspace_path / '.claude' / 'settings.local.json'
+    settings_local = json.loads(settings_local_path.read_text(encoding='utf-8'))
+    assert settings_local['hooks']['Stop'][0]['hooks'][0]['command']
 
 
 def test_ensure_agent_runtime_launches_named_codex_session(monkeypatch, tmp_path: Path) -> None:
@@ -136,11 +195,16 @@ def test_ensure_agent_runtime_launches_named_codex_session(monkeypatch, tmp_path
     assert payload['codex_start_cmd'].startswith('export ')
     assert 'disable_paste_burst=true' in payload['codex_start_cmd']
     assert spawned['kwargs']['env']['CCB_SESSION_FILE'] == str(expected_session)
+    expected_lib_root = str((Path(codex_launcher.__file__).resolve().parents[2]))
+    assert expected_lib_root in str(spawned['kwargs']['env']['PYTHONPATH'])
+    assert Path(spawned['kwargs']['stdout'].name) == ctx.paths.agent_dir('agent1') / 'provider-runtime' / 'codex' / 'bridge.stdout.log'
+    assert Path(spawned['kwargs']['stderr'].name) == ctx.paths.agent_dir('agent1') / 'provider-runtime' / 'codex' / 'bridge.stderr.log'
     assert tmux_state['title'] == ('%42', 'agent1')
     assert tmux_state['user_option'] == ('%42', '@ccb_project_id', ctx.project.project_id)
     assert (ctx.paths.agent_dir('agent1') / 'provider-runtime' / 'codex' / 'bridge.pid').read_text(encoding='utf-8').strip() == '9911'
     assert (ctx.paths.agent_dir('agent1') / 'provider-runtime' / 'codex' / 'codex.pid').read_text(encoding='utf-8').strip() == '4242'
     assert spawned['args'][0] == __import__('sys').executable
+    assert spawned['args'][1:4] == ['-m', 'provider_backends.codex.bridge', '--runtime-dir']
 
 
 def test_ensure_agent_runtime_uses_agent_scoped_session_name_for_codex_agent(monkeypatch, tmp_path: Path) -> None:
@@ -548,10 +612,11 @@ def test_ensure_agent_runtime_uses_assigned_tmux_pane(monkeypatch, tmp_path: Pat
     assert result.binding.runtime_ref == 'tmux:%43'
     assert tmux_state['respawn'][0] == '%43'
     assert tmux_state['respawn'][2] == str(plan.workspace_path)
-    assert ('%43', '@ccb_label_style', '#[fg=#1e1e2e]#[bg=#f7768e]#[bold]') in tmux_state['options']
+    visual = pane_visual(project_id=ctx.project.project_id, slot_key='agent1', order_index=0)
+    assert ('%43', '@ccb_label_style', visual.label_style) in tmux_state['options']
     assert ('%43', '@ccb_agent', 'agent1') in tmux_state['options']
     assert ('%43', '@ccb_project_id', ctx.project.project_id) in tmux_state['options']
-    assert ('%43', 'fg=#f7768e', 'fg=#f7768e,bold') in tmux_state['styles']
+    assert ('%43', visual.border_style, visual.active_border_style) in tmux_state['styles']
 
 
 def test_ensure_agent_runtime_launches_named_droid_session(monkeypatch, tmp_path: Path) -> None:
@@ -1126,16 +1191,11 @@ def test_claude_launcher_build_start_cmd_uses_overlay_and_drops_dead_local_user_
 
     start_cmd = claude_launcher.build_start_cmd(command, spec, runtime_dir, 'claude-sess-1')
 
-    settings_path = runtime_dir / 'claude-settings.json'
     assert start_cmd == (
-        f'unset ANTHROPIC_BASE_URL; claude --setting-sources user,project,local --settings '
-        f'{shlex.quote(str(settings_path))} --dangerously-skip-permissions --continue'
+        'unset ANTHROPIC_BASE_URL; '
+        'claude --setting-sources user,project,local --dangerously-skip-permissions --continue'
     )
-    assert settings_path.exists()
-    assert json.loads(settings_path.read_text(encoding='utf-8')) == {
-        'model': 'opus',
-        'skipDangerousModePermissionPrompt': True,
-    }
+    assert not (runtime_dir / 'claude-settings.json').exists()
 
 
 
@@ -1213,7 +1273,54 @@ def test_claude_launcher_build_start_cmd_uses_isolated_profile_api_env(monkeypat
     assert 'unset ANTHROPIC_AUTH_TOKEN' in start_cmd
     assert f'ANTHROPIC_AUTH_TOKEN={shlex.quote("profile-token")}' in start_cmd
     assert 'https://example.invalid/claude' not in start_cmd
-    assert json.loads((runtime_dir / 'claude-settings.json').read_text(encoding='utf-8')) == {'model': 'opus'}
+    assert '--settings' not in start_cmd
+    assert not (runtime_dir / 'claude-settings.json').exists()
+
+
+def test_claude_launcher_build_start_cmd_uses_agent_settings_overlay_when_present(monkeypatch, tmp_path: Path) -> None:
+    runtime_dir = tmp_path / 'runtime'
+    profile_root = tmp_path / 'profile'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    profile_root.mkdir(parents=True, exist_ok=True)
+    (profile_root / 'settings.json').write_text(
+        json.dumps(
+            {
+                'env': {'ANTHROPIC_AUTH_TOKEN': 'secret'},
+                'model': 'opus',
+            },
+            ensure_ascii=False,
+        ),
+        encoding='utf-8',
+    )
+    _write_provider_profile(
+        runtime_dir,
+        ResolvedProviderProfile(
+            provider='claude',
+            agent_name='reviewer',
+            mode='inherit',
+            profile_root=str(profile_root),
+            runtime_home=None,
+            env={},
+            inherit_api=True,
+        ),
+    )
+    spec = _spec('reviewer', provider='claude')
+    command = ParsedStartCommand(project=None, agent_names=('reviewer',), restore=True, auto_permission=False)
+
+    monkeypatch.setattr('provider_backends.claude.launcher.Path.home', lambda: tmp_path / 'home')
+    monkeypatch.setattr(
+        claude_launcher,
+        '_resolve_claude_restore_target',
+        lambda **kwargs: ProviderRestoreTarget(run_cwd=runtime_dir, has_history=False),
+    )
+
+    start_cmd = claude_launcher.build_start_cmd(command, spec, runtime_dir, 'claude-sess-local')
+
+    settings_path = runtime_dir / 'claude-settings.json'
+    assert start_cmd == (
+        f'claude --setting-sources user,project,local --settings {shlex.quote(str(settings_path))}'
+    )
+    assert json.loads(settings_path.read_text(encoding='utf-8')) == {'model': 'opus'}
 
 
 def test_gemini_launcher_build_start_cmd_uses_isolated_profile_api_env(tmp_path: Path) -> None:

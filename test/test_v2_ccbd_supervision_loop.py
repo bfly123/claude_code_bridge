@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 from agents.models import AgentRuntime, AgentSpec, AgentState, PermissionMode, ProjectConfig, QueuePolicy, RestoreMode, RuntimeMode, WorkspaceMode
 from ccbd.services.registry import AgentRegistry
 from ccbd.services.runtime import RuntimeService
+from ccbd.services.project_namespace_pane import ProjectNamespacePaneRecord
 from ccbd.supervision import RuntimeSupervisionLoop, SupervisionEventStore
 from project.resolver import bootstrap_project
 from provider_core.contracts import ProviderSessionBinding
@@ -89,6 +91,58 @@ def _binding_map(provider: str, session: RecoveringBindingSession) -> dict[str, 
     }
 
 
+class _FakeCmdReplacementBackend:
+    def __init__(self) -> None:
+        self.tmux_calls: list[list[str]] = []
+        self.respawn_calls: list[dict[str, object]] = []
+        self.pane_titles: dict[str, str] = {}
+        self.pane_options: dict[str, dict[str, str]] = {}
+
+    def _tmux_run(self, args: list[str], *, capture: bool = False, check: bool = False, timeout=None):
+        del check, timeout
+        self.tmux_calls.append(list(args))
+        if args[:1] == ['split-pane']:
+            return SimpleNamespace(returncode=0, stdout='%cmd\n' if capture else '', stderr='')
+        raise AssertionError(f'unexpected tmux args: {args}')
+
+    def respawn_pane(
+        self,
+        pane_id: str,
+        *,
+        cmd: str,
+        cwd: str | None = None,
+        stderr_log_path: str | None = None,
+        remain_on_exit: bool = True,
+    ) -> None:
+        self.respawn_calls.append(
+            {
+                'pane_id': pane_id,
+                'cmd': cmd,
+                'cwd': cwd,
+                'stderr_log_path': stderr_log_path,
+                'remain_on_exit': remain_on_exit,
+            }
+        )
+
+    def set_pane_title(self, pane_id: str, title: str) -> None:
+        self.pane_titles[pane_id] = title
+
+    def set_pane_user_option(self, pane_id: str, name: str, value: str) -> None:
+        self.pane_options.setdefault(pane_id, {})[name] = value
+
+    def set_pane_style(
+        self,
+        pane_id: str,
+        *,
+        border_style: str | None = None,
+        active_border_style: str | None = None,
+    ) -> None:
+        if border_style is not None:
+            self.pane_options.setdefault(pane_id, {})['pane-border-style'] = border_style
+        if active_border_style is not None:
+            self.pane_options.setdefault(pane_id, {})['pane-active-border-style'] = active_border_style
+
+
 def test_runtime_supervision_loop_recovers_idle_degraded_agent(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-supervision-recover'
     project_root.mkdir()
@@ -143,14 +197,26 @@ def test_runtime_supervision_loop_recovers_idle_degraded_agent(tmp_path: Path) -
     assert events[1].daemon_generation == 7
 
 
-def test_runtime_supervision_loop_reflows_project_namespace_on_pane_recovery(tmp_path: Path, monkeypatch) -> None:
+def test_runtime_supervision_loop_reflows_after_local_replacement_when_project_namespace_is_safe(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-supervision-reflow'
     project_root.mkdir()
     ctx = bootstrap_project(project_root)
     layout = PathLayout(project_root)
     config = _provider_config('codex', 'claude')
     registry = AgentRegistry(layout, config)
-    runtime_service = RuntimeService(layout, registry, ctx.project_id, clock=lambda: '2026-03-18T00:00:00Z')
+    session = RecoveringBindingSession(
+        pane_id='%41',
+        fake_session_id='codex-session-old',
+        recovered_pane_id='%55',
+        recovered_session_id='codex-session-local',
+    )
+    runtime_service = RuntimeService(
+        layout,
+        registry,
+        ctx.project_id,
+        session_bindings=_binding_map('codex', session),
+        clock=lambda: '2026-03-18T00:00:00Z',
+    )
     degraded = _runtime('codex', project_id=ctx.project_id, layout=layout, pid=101, health='pane-dead')
     degraded.runtime_ref = 'tmux:%41'
     degraded.tmux_socket_path = str(layout.ccbd_tmux_socket_path)
@@ -172,21 +238,16 @@ def test_runtime_supervision_loop_reflows_project_namespace_on_pane_recovery(tmp
                     **refreshed.__dict__,
                     'state': AgentState.IDLE,
                     'health': 'healthy',
-                    'runtime_ref': 'tmux:%55',
+                    'runtime_ref': 'tmux:%99',
                     'session_ref': 'codex-session-reflowed',
-                    'reconcile_state': 'steady',
+                    'pane_id': '%99',
+                    'active_pane_id': '%99',
                     'pane_state': 'alive',
-                    'pane_id': '%55',
-                    'active_pane_id': '%55',
                     'last_failure_reason': None,
                 }
             )
         )
 
-    def _refresh(*args, **kwargs):
-        raise AssertionError('project namespace pane recovery should use namespace reflow, not local ensure_pane')
-
-    monkeypatch.setattr(runtime_service, 'refresh_provider_binding', _refresh)
     loop = RuntimeSupervisionLoop(
         project_id=ctx.project_id,
         layout=layout,
@@ -204,13 +265,14 @@ def test_runtime_supervision_loop_reflows_project_namespace_on_pane_recovery(tmp
     assert remount_calls == ['pane_recovery:codex']
     runtime = registry.get('codex')
     assert runtime is not None
-    assert runtime.runtime_ref == 'tmux:%55'
+    assert runtime.runtime_ref == 'tmux:%99'
     assert runtime.session_ref == 'codex-session-reflowed'
+    assert session.ensure_calls == 1
     events = SupervisionEventStore(layout).read_all()
     assert [event.event_kind for event in events] == ['recover_started', 'recover_succeeded']
 
 
-def test_runtime_supervision_loop_skips_namespace_reflow_when_other_agent_busy(tmp_path: Path, monkeypatch) -> None:
+def test_runtime_supervision_loop_recovers_missing_pane_locally_even_when_other_agent_busy(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-supervision-reflow-busy'
     project_root.mkdir()
     ctx = bootstrap_project(project_root)
@@ -230,10 +292,10 @@ def test_runtime_supervision_loop_skips_namespace_reflow_when_other_agent_busy(t
         session_bindings=_binding_map('codex', session),
         clock=lambda: '2026-03-18T00:00:00Z',
     )
-    degraded = _runtime('codex', project_id=ctx.project_id, layout=layout, pid=101, health='pane-dead')
+    degraded = _runtime('codex', project_id=ctx.project_id, layout=layout, pid=101, health='pane-missing')
     degraded.runtime_ref = 'tmux:%41'
     degraded.tmux_socket_path = str(layout.ccbd_tmux_socket_path)
-    degraded.pane_state = 'dead'
+    degraded.pane_state = 'missing'
     busy = _runtime('claude', project_id=ctx.project_id, layout=layout, pid=202, health='healthy')
     busy.state = AgentState.BUSY
     busy.runtime_ref = 'tmux:%202'
@@ -428,6 +490,291 @@ def test_runtime_supervision_loop_reflows_project_namespace_on_foreign_namespace
     assert runtime.session_ref == 'codex-session-reflowed'
     events = SupervisionEventStore(layout).read_all()
     assert [event.event_kind for event in events] == ['recover_started', 'recover_succeeded']
+
+
+def test_runtime_supervision_loop_keeps_healthy_cmd_slot_stable(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-supervision-cmd-healthy'
+    project_root.mkdir()
+    ctx = bootstrap_project(project_root)
+    layout = PathLayout(project_root)
+    config = replace(_provider_config('codex'), cmd_enabled=True, layout_spec='cmd; codex')
+    registry = AgentRegistry(layout, config)
+    runtime_service = RuntimeService(layout, registry, ctx.project_id, clock=lambda: '2026-03-18T00:00:00Z')
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101, health='healthy'))
+    remount_calls: list[str] = []
+
+    class _NamespaceController:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self._backend_factory = lambda socket_path=None: object()
+
+        def load(self):
+            return SimpleNamespace(
+                ui_attachable=True,
+                tmux_socket_path=str(layout.ccbd_tmux_socket_path),
+                tmux_session_name=layout.ccbd_tmux_session_name,
+                workspace_window_id='@2',
+            )
+
+        def root_pane_id(self, namespace=None) -> str:
+            del namespace
+            return '%8'
+
+    monkeypatch.setattr('ccbd.supervision.cmd_slot.ProjectNamespaceController', _NamespaceController)
+    monkeypatch.setattr(
+        'ccbd.supervision.cmd_slot.inspect_project_namespace_pane',
+        lambda backend, pane_id: ProjectNamespacePaneRecord(
+            pane_id=pane_id,
+            session_name=layout.ccbd_tmux_session_name,
+            window_id='@2',
+            role='cmd',
+            slot_key='cmd',
+            project_id=ctx.project_id,
+            managed_by='ccbd',
+            alive=True,
+        ),
+    )
+
+    loop = RuntimeSupervisionLoop(
+        project_id=ctx.project_id,
+        layout=layout,
+        config=config,
+        registry=registry,
+        runtime_service=runtime_service,
+        remount_project_fn=lambda reason: remount_calls.append(reason),
+        clock=lambda: '2026-03-18T00:00:10Z',
+        generation_getter=lambda: 46,
+    )
+
+    statuses = loop.reconcile_once()
+
+    assert statuses == {'codex': 'healthy'}
+    assert remount_calls == []
+
+
+def test_runtime_supervision_loop_reflows_when_cmd_slot_is_missing(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-supervision-cmd-missing'
+    project_root.mkdir()
+    ctx = bootstrap_project(project_root)
+    layout = PathLayout(project_root)
+    config = replace(_provider_config('codex'), cmd_enabled=True, layout_spec='cmd; codex')
+    registry = AgentRegistry(layout, config)
+    runtime_service = RuntimeService(layout, registry, ctx.project_id, clock=lambda: '2026-03-18T00:00:00Z')
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101, health='healthy'))
+    remount_calls: list[str] = []
+    fake_backend = _FakeCmdReplacementBackend()
+
+    class _NamespaceController:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self._backend_factory = lambda socket_path=None: fake_backend
+
+        def load(self):
+            return SimpleNamespace(
+                ui_attachable=True,
+                tmux_socket_path=str(layout.ccbd_tmux_socket_path),
+                tmux_session_name=layout.ccbd_tmux_session_name,
+                workspace_window_id='@2',
+            )
+
+        def root_pane_id(self, namespace=None) -> str:
+            del namespace
+            return '%8'
+
+    monkeypatch.setattr('ccbd.supervision.cmd_slot.ProjectNamespaceController', _NamespaceController)
+    monkeypatch.setattr('ccbd.supervision.cmd_slot.build_backend', lambda backend_factory, socket_path=None: fake_backend)
+    monkeypatch.setattr(
+        'ccbd.supervision.cmd_slot.inspect_project_namespace_pane',
+        lambda backend, pane_id: (
+            ProjectNamespacePaneRecord(
+                pane_id=pane_id,
+                session_name=layout.ccbd_tmux_session_name,
+                window_id='@2',
+                role='cmd',
+                slot_key='cmd',
+                project_id=ctx.project_id,
+                managed_by='ccbd',
+                alive=True,
+            )
+            if pane_id == '%cmd'
+            else ProjectNamespacePaneRecord(
+                pane_id=pane_id,
+                session_name=layout.ccbd_tmux_session_name,
+                window_id='@2',
+                role='agent',
+                slot_key='codex',
+                project_id=ctx.project_id,
+                managed_by='ccbd',
+                alive=True,
+            )
+        ),
+    )
+
+    loop = RuntimeSupervisionLoop(
+        project_id=ctx.project_id,
+        layout=layout,
+        config=config,
+        registry=registry,
+        runtime_service=runtime_service,
+        remount_project_fn=lambda reason: remount_calls.append(reason),
+        clock=lambda: '2026-03-18T00:00:10Z',
+        generation_getter=lambda: 47,
+    )
+
+    statuses = loop.reconcile_once()
+
+    assert statuses == {'codex': 'healthy'}
+    assert remount_calls == []
+    assert fake_backend.tmux_calls == [[
+        'split-pane',
+        '-P',
+        '-F',
+        '#{pane_id}',
+        '-t',
+        '%8',
+        '-h',
+        '-b',
+        '-p',
+        '50',
+        '-c',
+        str(layout.project_root),
+        'sh',
+        '-lc',
+        'while :; do sleep 3600; done',
+    ]]
+    assert fake_backend.respawn_calls == [{
+        'pane_id': '%cmd',
+        'cmd': 'if [ -n "${SHELL:-}" ]; then exec "$SHELL" -l; fi; if command -v bash >/dev/null 2>&1; then exec bash -l; fi; exec sh',
+        'cwd': str(layout.project_root),
+        'stderr_log_path': None,
+        'remain_on_exit': False,
+    }]
+    assert fake_backend.pane_titles['%cmd'] == 'cmd'
+    assert fake_backend.pane_options['%cmd']['@ccb_slot'] == 'cmd'
+    assert fake_backend.pane_options['%cmd']['@ccb_role'] == 'cmd'
+
+
+def test_runtime_supervision_loop_restores_cmd_slot_locally_while_other_agent_busy(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-supervision-cmd-busy'
+    project_root.mkdir()
+    ctx = bootstrap_project(project_root)
+    layout = PathLayout(project_root)
+    config = replace(_provider_config('codex', 'claude'), cmd_enabled=True, layout_spec='cmd; codex, claude')
+    registry = AgentRegistry(layout, config)
+    runtime_service = RuntimeService(layout, registry, ctx.project_id, clock=lambda: '2026-03-18T00:00:00Z')
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101, health='healthy'))
+    busy = _runtime('claude', project_id=ctx.project_id, layout=layout, pid=202, health='healthy')
+    busy.state = AgentState.BUSY
+    registry.upsert(busy)
+    remount_calls: list[str] = []
+    fake_backend = _FakeCmdReplacementBackend()
+
+    class _NamespaceController:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self._backend_factory = lambda socket_path=None: fake_backend
+
+        def load(self):
+            return SimpleNamespace(
+                ui_attachable=True,
+                tmux_socket_path=str(layout.ccbd_tmux_socket_path),
+                tmux_session_name=layout.ccbd_tmux_session_name,
+                workspace_window_id='@2',
+            )
+
+        def root_pane_id(self, namespace=None) -> str:
+            del namespace
+            return '%8'
+
+    monkeypatch.setattr('ccbd.supervision.cmd_slot.ProjectNamespaceController', _NamespaceController)
+    monkeypatch.setattr('ccbd.supervision.cmd_slot.build_backend', lambda backend_factory, socket_path=None: fake_backend)
+    monkeypatch.setattr(
+        'ccbd.supervision.cmd_slot.inspect_project_namespace_pane',
+        lambda backend, pane_id: (
+            ProjectNamespacePaneRecord(
+                pane_id=pane_id,
+                session_name=layout.ccbd_tmux_session_name,
+                window_id='@2',
+                role='cmd',
+                slot_key='cmd',
+                project_id=ctx.project_id,
+                managed_by='ccbd',
+                alive=True,
+            )
+            if pane_id == '%cmd'
+            else ProjectNamespacePaneRecord(
+                pane_id=pane_id,
+                session_name=layout.ccbd_tmux_session_name,
+                window_id='@2',
+                role='agent',
+                slot_key='codex',
+                project_id=ctx.project_id,
+                managed_by='ccbd',
+                alive=True,
+            )
+        ),
+    )
+
+    loop = RuntimeSupervisionLoop(
+        project_id=ctx.project_id,
+        layout=layout,
+        config=config,
+        registry=registry,
+        runtime_service=runtime_service,
+        remount_project_fn=lambda reason: remount_calls.append(reason),
+        clock=lambda: '2026-03-18T00:00:10Z',
+        generation_getter=lambda: 48,
+    )
+
+    statuses = loop.reconcile_once()
+
+    assert statuses == {'codex': 'healthy', 'claude': 'healthy'}
+    assert remount_calls == []
+    assert fake_backend.respawn_calls[0]['pane_id'] == '%cmd'
+
+
+def test_runtime_supervision_loop_reflows_cmd_when_local_replacement_is_unavailable(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-supervision-cmd-reflow'
+    project_root.mkdir()
+    ctx = bootstrap_project(project_root)
+    layout = PathLayout(project_root)
+    config = replace(_provider_config('codex'), cmd_enabled=True, layout_spec='cmd; codex')
+    registry = AgentRegistry(layout, config)
+    runtime_service = RuntimeService(layout, registry, ctx.project_id, clock=lambda: '2026-03-18T00:00:00Z')
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101, health='healthy'))
+    remount_calls: list[str] = []
+
+    class _NamespaceController:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self._backend_factory = lambda socket_path=None: object()
+
+        def load(self):
+            return SimpleNamespace(
+                ui_attachable=True,
+                tmux_socket_path=str(layout.ccbd_tmux_socket_path),
+                tmux_session_name=layout.ccbd_tmux_session_name,
+                workspace_window_id='@2',
+            )
+
+        def root_pane_id(self, namespace=None) -> str:
+            del namespace
+            raise RuntimeError('workspace root unavailable')
+
+    monkeypatch.setattr('ccbd.supervision.cmd_slot.ProjectNamespaceController', _NamespaceController)
+    monkeypatch.setattr('ccbd.supervision.cmd_slot.build_backend', lambda backend_factory, socket_path=None: object())
+
+    loop = RuntimeSupervisionLoop(
+        project_id=ctx.project_id,
+        layout=layout,
+        config=config,
+        registry=registry,
+        runtime_service=runtime_service,
+        remount_project_fn=lambda reason: remount_calls.append(reason),
+        clock=lambda: '2026-03-18T00:00:10Z',
+        generation_getter=lambda: 49,
+    )
+
+    statuses = loop.reconcile_once()
+
+    assert statuses == {'codex': 'healthy'}
+    assert remount_calls == ['pane_recovery:cmd']
 
 
 def test_runtime_supervision_loop_skips_healthy_runtime(tmp_path: Path, monkeypatch) -> None:

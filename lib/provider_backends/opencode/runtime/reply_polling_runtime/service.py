@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-import time
 from typing import Any
 
 from opencode_runtime.replies import find_new_assistant_reply_with_state
@@ -17,15 +15,12 @@ def find_new_assistant_reply_with_reader_state(
     state: dict[str, Any],
 ) -> tuple[str | None, dict[str, Any] | None]:
     messages = read_messages(reader, session_id)
-    completion_marker = _completion_marker()
     reply, reply_state = find_new_assistant_reply_with_state(
         messages,
         state,
         read_parts=lambda message_id: read_parts(reader, message_id),
-        completion_marker=completion_marker,
+        extract_req_id_from_text=getattr(reader, '_extract_req_id_from_text', None),
     )
-    if reply_state and reply_state.get('last_assistant_completed') == 0:
-        reply_state['last_assistant_completed'] = int(time.time() * 1000)
     return reply, reply_state
 
 
@@ -42,11 +37,4 @@ def read_since(reader, state: dict[str, Any], timeout: float, block: bool) -> tu
         reset_state_for_session_fn=reset_state_for_session,
         session_updated_fn=session_updated,
     )
-
-
-def _completion_marker() -> str:
-    marker = (os.environ.get('CCB_EXECUTION_COMPLETE_MARKER') or '[EXECUTION_COMPLETE]').strip()
-    return marker or '[EXECUTION_COMPLETE]'
-
-
 __all__ = ['find_new_assistant_reply_with_reader_state', 'read_since']

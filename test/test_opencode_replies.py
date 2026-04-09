@@ -19,39 +19,55 @@ def test_extract_text_falls_back_to_reasoning_only_when_requested() -> None:
     assert extract_text(parts, allow_reasoning_fallback=False) == ''
 
 
-def test_find_new_assistant_reply_with_state_accepts_completion_marker_without_completed_time() -> None:
-    messages = [{'id': 'msg_1', 'role': 'assistant', 'time': {}}]
+def test_find_new_assistant_reply_with_state_tracks_parent_req_binding_without_done_marker() -> None:
+    messages = [
+        {'id': 'msg_user', 'role': 'user'},
+        {'id': 'msg_1', 'role': 'assistant', 'parentID': 'msg_user', 'time': {}},
+    ]
+    req_id_re = re.compile(r'CCB_REQ_ID:\s*([A-Za-z0-9_]+)')
 
     reply, state = find_new_assistant_reply_with_state(
         messages,
         {},
-        read_parts=lambda message_id: [{'type': 'text', 'text': f'{message_id} CCB_DONE: finished'}],
-        completion_marker='CCB_DONE:',
+        read_parts=lambda message_id: [{'type': 'text', 'text': 'CCB_REQ_ID: job_demo'}]
+        if message_id == 'msg_user'
+        else [{'type': 'text', 'text': 'working'}],
+        extract_req_id_from_text=lambda text: extract_req_id_from_text(text, req_id_re),
     )
 
-    assert reply == 'msg_1 CCB_DONE: finished'
-    assert state == {
-        'assistant_count': 1,
-        'last_assistant_id': 'msg_1',
-        'last_assistant_completed': 0,
-        'last_assistant_has_done': True,
-    }
+    assert reply == 'working'
+    assert state is not None
+    assert state['assistant_count'] == 1
+    assert state['last_assistant_id'] == 'msg_1'
+    assert state['last_assistant_parent_id'] == 'msg_user'
+    assert state['last_assistant_completed'] is None
+    assert state['last_assistant_req_id'] == 'job_demo'
+    assert state['last_assistant_text_hash']
+    assert state['last_assistant_aborted'] is False
 
 
 def test_find_new_assistant_reply_with_state_suppresses_duplicate_state() -> None:
-    messages = [{'id': 'msg_1', 'role': 'assistant', 'time': {'completed': 1}}]
-    state = {
-        'assistant_count': 1,
-        'last_assistant_id': 'msg_1',
-        'last_assistant_completed': 1,
-        'last_assistant_has_done': False,
-    }
+    messages = [
+        {'id': 'msg_user', 'role': 'user'},
+        {'id': 'msg_1', 'role': 'assistant', 'parentID': 'msg_user', 'time': {'completed': 1}},
+    ]
+    req_id_re = re.compile(r'CCB_REQ_ID:\s*([A-Za-z0-9_]+)')
+    _, state = find_new_assistant_reply_with_state(
+        messages,
+        {},
+        read_parts=lambda message_id: [{'type': 'text', 'text': 'CCB_REQ_ID: job_demo'}]
+        if message_id == 'msg_user'
+        else [{'type': 'text', 'text': 'done'}],
+        extract_req_id_from_text=lambda text: extract_req_id_from_text(text, req_id_re),
+    )
 
     reply, next_state = find_new_assistant_reply_with_state(
         messages,
-        state,
-        read_parts=lambda message_id: [{'type': 'text', 'text': message_id}],
-        completion_marker='CCB_DONE:',
+        state or {},
+        read_parts=lambda message_id: [{'type': 'text', 'text': 'CCB_REQ_ID: job_demo'}]
+        if message_id == 'msg_user'
+        else [{'type': 'text', 'text': 'done'}],
+        extract_req_id_from_text=lambda text: extract_req_id_from_text(text, req_id_re),
     )
 
     assert reply is None

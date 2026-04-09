@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple
 
+from provider_backends.pane_log_support.session import session_tmux_identity_lookup
 from terminal_runtime import get_backend_for_session
 
 from .normalization import normalize_session_data
@@ -51,14 +52,7 @@ class ClaudeProjectSession:
         return str(self.data.get("start_cmd") or "").strip()
 
     def user_option_lookup(self) -> dict[str, str]:
-        lookup: dict[str, str] = {}
-        agent_name = str(self.data.get("agent_name") or "").strip()
-        if agent_name:
-            lookup["@ccb_agent"] = agent_name
-        project_id = str(self.data.get("ccb_project_id") or "").strip()
-        if project_id:
-            lookup["@ccb_project_id"] = project_id
-        return lookup
+        return session_tmux_identity_lookup(self.data)
 
     def backend(self):
         return get_backend_for_session(self.data)

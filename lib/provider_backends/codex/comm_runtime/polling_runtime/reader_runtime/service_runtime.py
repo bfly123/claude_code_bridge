@@ -67,6 +67,10 @@ def read_matching_since(
             return no_match_state(log_path, cursor)
 
 
+def no_match_state(log_path, cursor) -> tuple[None, dict[str, Any]]:
+    return None, state_payload(log_path, cursor.offset, last_rescan=cursor.last_rescan)
+
+
 def ensured_log_path(
     reader,
     *,

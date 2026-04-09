@@ -56,6 +56,7 @@ def test_set_preferred_session_accepts_current_project_session(tmp_path: Path, m
     reader.set_preferred_session(own_session)
 
     assert reader._preferred_session == own_session
+    assert reader._preferred_session_locked is True
     assert reader.current_session_path() == own_session
 
 

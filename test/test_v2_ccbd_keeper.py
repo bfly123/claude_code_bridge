@@ -119,7 +119,10 @@ def test_project_keeper_spawns_missing_daemon(tmp_path: Path) -> None:
     assert next_state.last_failure_reason is None
 
 
-def test_project_keeper_restarts_degraded_unreachable_daemon(tmp_path: Path, monkeypatch) -> None:
+def test_project_keeper_does_not_restart_degraded_unreachable_daemon_with_fresh_heartbeat(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     project_root = tmp_path / 'repo-crash'
     ctx = _context(project_root, 'agent1:codex\n')
     spawn_calls: list[dict] = []
@@ -148,6 +151,47 @@ def test_project_keeper_restarts_degraded_unreachable_daemon(tmp_path: Path, mon
     state = KeeperState(
         project_id=ctx.project.project_id,
         keeper_pid=888,
+        started_at='2026-04-02T00:00:00Z',
+        last_check_at='2026-04-02T00:00:00Z',
+        state='running',
+    )
+
+    next_state = keeper._reconcile_once(state=state, start_timeout_s=0.1)
+
+    assert next_state == state
+    assert terminated == []
+    assert spawn_calls == []
+
+
+def test_project_keeper_restarts_stale_unreachable_daemon(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-stale'
+    ctx = _context(project_root, 'agent1:codex\n')
+    spawn_calls: list[dict] = []
+    terminated: list[int] = []
+    keeper = ProjectKeeper(
+        project_root,
+        pid=889,
+        process_exists_fn=lambda pid: pid == 321,
+        spawn_ccbd_process_fn=lambda **kwargs: spawn_calls.append(dict(kwargs)),
+    )
+    keeper._ownership_guard = SimpleNamespace(
+        inspect=lambda: _inspection(
+            ctx,
+            health=LeaseHealth.STALE,
+            socket_connectable=False,
+            pid_alive=True,
+            heartbeat_fresh=False,
+            reason='heartbeat_stale,socket_unreachable',
+        )
+    )
+    monkeypatch.setattr(
+        keeper_module,
+        'terminate_pid_tree',
+        lambda pid, timeout_s, is_pid_alive_fn: terminated.append(pid) or True,
+    )
+    state = KeeperState(
+        project_id=ctx.project.project_id,
+        keeper_pid=889,
         started_at='2026-04-02T00:00:00Z',
         last_check_at='2026-04-02T00:00:00Z',
         state='running',

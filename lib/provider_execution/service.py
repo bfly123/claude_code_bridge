@@ -7,6 +7,7 @@ from fault_injection import FaultInjectionService
 from .base import ProviderRuntimeContext, ProviderSubmission
 from .registry import ProviderExecutionRegistry
 from .state_store import ExecutionStateStore
+from .service_state import ExecutionServiceRuntimeState, ExecutionServiceStateMixin
 from .service_runtime import (
     ExecutionRestoreResult,
     ExecutionUpdate,
@@ -18,7 +19,7 @@ from .service_runtime import (
 )
 
 
-class ExecutionService:
+class ExecutionService(ExecutionServiceStateMixin):
     def __init__(
         self,
         registry: ProviderExecutionRegistry,
@@ -27,15 +28,17 @@ class ExecutionService:
         state_store: ExecutionStateStore | None = None,
         fault_injection: FaultInjectionService | None = None,
     ) -> None:
-        self._registry = registry
-        self._clock = clock
-        self._state_store = state_store
-        self._fault_injection = fault_injection
-        self._active: dict[str, ProviderSubmission] = {}
-        self._runtime_contexts: dict[str, ProviderRuntimeContext | None] = {}
-        self._pending_replays: dict[str, tuple[tuple, CompletionDecision | None]] = {}
+        self._runtime_state = ExecutionServiceRuntimeState(
+            registry=registry,
+            clock=clock,
+            state_store=state_store,
+            fault_injection=fault_injection,
+            active={},
+            runtime_contexts={},
+            pending_replays={},
+        )
 
-    def start(self, job: JobRecord, *, runtime_context: ProviderRuntimeContext | None = None) -> None:
+    def start(self, job: JobRecord, *, runtime_context: ProviderRuntimeContext | None = None) -> ProviderSubmission | None:
         now = self._clock()
         if self._fault_injection is not None:
             injected = self._fault_injection.consume_for_job(job, now=now)
@@ -43,14 +46,15 @@ class ExecutionService:
                 items, decision = self._fault_injection.build_terminal_replay(job, injected)
                 self._runtime_contexts[job.job_id] = runtime_context
                 self._pending_replays[job.job_id] = (items, decision)
-                return
+                return None
         adapter = self._registry.get(job.provider)
         if adapter is None:
-            return
+            return None
         submission = adapter.start(job, context=runtime_context, now=now)
         self._active[job.job_id] = submission
         self._runtime_contexts[job.job_id] = runtime_context
         self._persist(job.job_id)
+        return submission
 
     def cancel(self, job_id: str) -> None:
         self._active.pop(job_id, None)

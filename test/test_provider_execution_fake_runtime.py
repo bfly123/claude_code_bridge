@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from completion.models import (
     CompletionConfidence,
     CompletionCursor,
@@ -9,6 +11,7 @@ from completion.models import (
 )
 from provider_execution.base import ProviderSubmission
 from provider_execution.fake_runtime import FakeDirective, build_terminal_decision, default_script, materialize_payload
+from provider_execution.fake_runtime.parsing import parse_directive
 
 
 def _submission() -> ProviderSubmission:
@@ -86,3 +89,31 @@ def test_default_script_protocol_turn_cancelled_uses_aborted_terminal_event() ->
     ]
     assert events[-1]["reason"] == "cancelled_by_test"
     assert events[-1]["status"] == CompletionStatus.CANCELLED.value
+
+
+def test_parse_directive_defaults_to_completed_for_plain_task_id() -> None:
+    directive = parse_directive('task-1', default_latency_seconds=0.3)
+
+    assert directive.status is CompletionStatus.COMPLETED
+    assert directive.reason == 'result_message'
+    assert directive.confidence is CompletionConfidence.EXACT
+    assert directive.latency_seconds == 0.3
+    assert directive.script == ()
+
+
+def test_parse_directive_reads_latency_reason_and_script() -> None:
+    directive = parse_directive(
+        'fake;status=failed;confidence=observed;latency_ms=1200;script=[{"type":"result"}]',
+        default_latency_seconds=0.1,
+    )
+
+    assert directive.status is CompletionStatus.FAILED
+    assert directive.reason == 'api_error'
+    assert directive.confidence is CompletionConfidence.OBSERVED
+    assert directive.latency_seconds == 1.2
+    assert directive.script == ({'type': 'result'},)
+
+
+def test_parse_directive_rejects_invalid_segments() -> None:
+    with pytest.raises(ValueError, match='invalid fake task_id directive segment'):
+        parse_directive('fake;bad-segment', default_latency_seconds=0.1)

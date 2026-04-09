@@ -334,7 +334,11 @@ def test_execution_service_claude_adapter_respects_no_wrap_provider_option(
     service = ExecutionService(build_default_execution_registry(), clock=lambda: '2026-03-18T00:00:00Z')
     service.start(job, runtime_context=_runtime_context(tmp_path))
 
+    assert sent == []
+    assert service.poll() == ()
     assert sent == [('%2', 'raw claude prompt')]
+    assert service._active[job.job_id].runtime_state['anchor_seen'] is True
+    assert service._active[job.job_id].runtime_state['no_wrap'] is True
 
 
 def test_execution_service_claude_adapter_completes_on_turn_duration_without_done_marker(
@@ -1155,6 +1159,92 @@ def test_execution_service_claude_adapter_can_resume_after_restart(monkeypatch: 
     assert update.decision is None
 
 
+def test_execution_service_claude_persists_before_ready_wait_and_resumes_prompt_dispatch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from provider_execution import claude as claude_adapter_module
+
+    fixed_req_id = '20260318-000000-000-3-ready'
+    sent: list[tuple[str, str]] = []
+    pane_reads: list[tuple[str, int]] = []
+    pane_text = {'value': 'Starting Claude...'}
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            sent.append((pane_id, text))
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%2'
+
+        def get_pane_content(self, pane_id: str, lines: int = 120) -> str:
+            pane_reads.append((pane_id, lines))
+            return pane_text['value']
+
+    class FakeSession:
+        data = {}
+        claude_session_path = str(tmp_path / 'claude-session.jsonl')
+        work_dir = str(tmp_path)
+
+        def ensure_pane(self):
+            return True, '%2'
+
+    class EmptyReader:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+
+        def set_preferred_session(self, session_path) -> None:
+            del session_path
+
+        def capture_state(self):
+            return {'session_path': tmp_path / 'claude-session.jsonl', 'offset': 0, 'carry': b''}
+
+        def try_get_entries(self, state):
+            return [], state
+
+    backend = FakeBackend()
+    monkeypatch.setattr(claude_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(claude_adapter_module, 'get_backend_for_session', lambda data: backend)
+    monkeypatch.setattr(claude_adapter_module, 'ClaudeLogReader', EmptyReader)
+
+    layout = PathLayout(tmp_path / 'claude-ready-resume')
+    state_store = ExecutionStateStore(layout)
+    service = ExecutionService(build_default_execution_registry(), clock=lambda: '2026-03-18T00:00:00Z', state_store=state_store)
+    job = _anchored_job_for_provider('claude', fixed_req_id, body='resume after ready wait')
+    service.start(job, runtime_context=_runtime_context(tmp_path))
+
+    persisted = state_store.load(job.job_id)
+    assert persisted is not None
+    assert persisted.resume_capable is True
+    assert persisted.submission.runtime_state['prompt_sent'] is False
+    assert sent == []
+    assert pane_reads == []
+
+    restarted = ExecutionService(build_default_execution_registry(), clock=lambda: '2026-03-18T00:00:01Z', state_store=state_store)
+    restored = restarted.restore(job, runtime_context=_runtime_context(tmp_path))
+    assert restored.restored is True
+
+    assert restarted.poll() == ()
+    assert sent == []
+    assert pane_reads == [('%2', 120)]
+
+    pane_text['value'] = """
+───────────────────────────────────────────
+❯
+───────────────────────────────────────────
+  ? for shortcuts
+"""
+    update = restarted.poll()[0]
+    assert [item.kind for item in update.items] == [CompletionItemKind.ANCHOR_SEEN]
+    assert len(sent) == 1
+    assert sent[0][0] == '%2'
+    assert fixed_req_id in sent[0][1]
+    assert pane_reads[-1] == ('%2', 120)
+
+    persisted_after_send = state_store.load(job.job_id)
+    assert persisted_after_send is not None
+    assert persisted_after_send.submission.runtime_state['prompt_sent'] is True
+
+
 def test_execution_service_codex_adapter_fails_without_session(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from provider_execution import codex as codex_adapter_module
 
@@ -1264,6 +1354,80 @@ def test_execution_service_codex_adapter_emits_protocol_items_from_log(monkeypat
     assert update.items[2].payload['phase'] == 'final_answer'
     assert update.items[-1].payload['last_agent_message'] == 'partial\nfinal without done'
     assert update.items[-1].payload['turn_id'] == 'turn-codex-1'
+    assert update.decision is None
+
+
+def test_execution_service_codex_adapter_respects_no_wrap_provider_option(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from provider_execution import codex as codex_adapter_module
+
+    fixed_req_id = '20260318-000000-000-1-nowrap'
+    sent: list[tuple[str, str]] = []
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            sent.append((pane_id, text))
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%1'
+
+    class FakeSession:
+        data = {}
+        codex_session_path = ''
+        codex_session_id = ''
+        work_dir = str(tmp_path)
+
+        def ensure_pane(self):
+            return True, '%1'
+
+    class FakeReader:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+            self._events = [
+                {
+                    'role': 'assistant',
+                    'text': 'reply body',
+                    'entry_type': 'event_msg',
+                    'payload_type': 'agent_message',
+                    'timestamp': '2026-03-18T00:00:01Z',
+                },
+                {
+                    'role': 'system',
+                    'text': 'reply body',
+                    'entry_type': 'event_msg',
+                    'payload_type': 'task_complete',
+                    'turn_id': 'turn-codex-nowrap',
+                    'last_agent_message': 'reply body',
+                    'timestamp': '2026-03-18T00:00:02Z',
+                },
+            ]
+
+        def capture_state(self):
+            return {'index': 0}
+
+        def try_get_entries(self, state):
+            index = int(state.get('index', 0))
+            if index >= len(self._events):
+                return [], state
+            return [self._events[index]], {'index': index + 1}
+
+    monkeypatch.setattr(codex_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(codex_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(codex_adapter_module, 'CodexLogReader', FakeReader)
+
+    job = _anchored_job_for_provider('codex', fixed_req_id, body='raw codex prompt')
+    job.provider_options = {'no_wrap': True}
+    service = ExecutionService(build_default_execution_registry(), clock=lambda: '2026-03-18T00:00:00Z')
+    service.start(job, runtime_context=_runtime_context(tmp_path))
+    update = service.poll()[0]
+
+    assert sent == [('%1', 'raw codex prompt')]
+    assert [item.kind for item in update.items] == [
+        CompletionItemKind.ASSISTANT_CHUNK,
+        CompletionItemKind.TURN_BOUNDARY,
+    ]
+    assert update.items[-1].payload['last_agent_message'] == 'reply body'
     assert update.decision is None
 
 
@@ -2016,6 +2180,67 @@ def test_execution_service_gemini_adapter_emits_session_snapshot_items(monkeypat
     assert update.decision is None
 
 
+def test_execution_service_gemini_adapter_respects_no_wrap_provider_option(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from provider_execution import gemini as gemini_adapter_module
+
+    fixed_req_id = '20260318-000000-000-5-nowrap'
+    sent: list[tuple[str, str]] = []
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            sent.append((pane_id, text))
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%3'
+
+    class FakeSession:
+        data = {}
+        gemini_session_path = str(tmp_path / 'gemini-session.json')
+        gemini_session_id = 'gemini-session-id'
+        work_dir = str(tmp_path)
+
+        def ensure_pane(self):
+            return True, '%3'
+
+    class FakeReader:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+
+        def set_preferred_session(self, session_path) -> None:
+            del session_path
+
+        def capture_state(self):
+            return {'session_path': str(tmp_path / 'gemini-session.json'), 'msg_count': 0}
+
+        def try_get_message(self, state):
+            return (
+                'stable reply',
+                {
+                    **state,
+                    'msg_count': 2,
+                    'last_gemini_id': 'msg-2',
+                    'mtime_ns': 123456789,
+                },
+            )
+
+    monkeypatch.setattr(gemini_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(gemini_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(gemini_adapter_module, 'GeminiLogReader', FakeReader)
+
+    job = _anchored_job_for_provider('gemini', fixed_req_id, body='raw gemini prompt')
+    job.provider_options = {'no_wrap': True}
+    service = ExecutionService(build_default_execution_registry(), clock=lambda: '2026-03-18T00:00:00Z')
+    service.start(job, runtime_context=_runtime_context(tmp_path))
+    update = service.poll()[0]
+
+    assert sent == [('%3', 'raw gemini prompt')]
+    assert [item.kind for item in update.items] == [CompletionItemKind.SESSION_SNAPSHOT]
+    assert update.items[0].payload['reply'] == 'stable reply'
+    assert update.decision is None
+
+
 def test_execution_service_gemini_adapter_reanchors_after_session_rotate(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -2417,7 +2642,112 @@ def test_execution_service_gemini_adapter_can_resume_after_restart(monkeypatch: 
     assert update.decision is None
 
 
-def test_execution_service_opencode_adapter_emits_legacy_final_item(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_execution_service_gemini_adapter_defers_prompt_until_ready_and_persists_wait_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from provider_execution import gemini as gemini_adapter_module
+
+    fixed_req_id = '20260318-000000-000-2-gemini-ready'
+    sent: list[tuple[str, str]] = []
+    pane_reads: list[tuple[str, int]] = []
+    pane_text = {'value': 'Gemini is starting'}
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            sent.append((pane_id, text))
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%2'
+
+        def get_pane_content(self, pane_id: str, *, lines: int = 120) -> str:
+            pane_reads.append((pane_id, lines))
+            return pane_text['value']
+
+    class FakeSession:
+        data = {}
+        gemini_session_path = str(tmp_path / 'gemini-session.json')
+        work_dir = str(tmp_path)
+
+        def ensure_pane(self):
+            return True, '%2'
+
+    class EmptyReader:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+
+        def set_preferred_session(self, session_path) -> None:
+            del session_path
+
+        def capture_state(self):
+            return {'session_path': tmp_path / 'gemini-session.json', 'msg_count': 0}
+
+        def try_get_message(self, state):
+            return None, state
+
+    backend = FakeBackend()
+    monkeypatch.setattr(gemini_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(gemini_adapter_module, 'get_backend_for_session', lambda data: backend)
+    monkeypatch.setattr(gemini_adapter_module, 'GeminiLogReader', EmptyReader)
+
+    layout = PathLayout(tmp_path / 'gemini-ready-resume')
+    state_store = ExecutionStateStore(layout)
+    service = ExecutionService(build_default_execution_registry(), clock=lambda: '2026-03-18T00:00:00Z', state_store=state_store)
+    job = _anchored_job_for_provider('gemini', fixed_req_id, body='resume after ready wait')
+    service.start(job, runtime_context=_runtime_context(tmp_path))
+
+    persisted = state_store.load(job.job_id)
+    assert persisted is not None
+    assert persisted.resume_capable is True
+    assert persisted.submission.runtime_state['prompt_sent'] is False
+    assert sent == []
+    assert pane_reads == []
+
+    restarted_clock = iter(
+        [
+            '2026-03-18T00:00:01Z',
+            '2026-03-18T00:00:01Z',
+            '2026-03-18T00:00:01Z',
+            '2026-03-18T00:00:02Z',
+            '2026-03-18T00:00:02Z',
+            '2026-03-18T00:00:04Z',
+            '2026-03-18T00:00:04Z',
+        ]
+    )
+    restarted = ExecutionService(
+        build_default_execution_registry(),
+        clock=lambda: next(restarted_clock),
+        state_store=state_store,
+    )
+    restored = restarted.restore(job, runtime_context=_runtime_context(tmp_path))
+    assert restored.restored is True
+
+    assert restarted.poll() == ()
+    assert sent == []
+    assert pane_reads == [('%2', 120)]
+
+    pane_text['value'] = 'Type your message'
+    assert restarted.poll() == ()
+    assert sent == []
+    persisted_ready = state_store.load(job.job_id)
+    assert persisted_ready is not None
+    assert persisted_ready.submission.runtime_state['prompt_sent'] is False
+    assert persisted_ready.submission.runtime_state['ready_prompt_fingerprint'] == 'Type your message'
+    assert persisted_ready.submission.runtime_state['ready_prompt_seen_at'] == '2026-03-18T00:00:02Z'
+
+    update = restarted.poll()[0]
+    assert [item.kind for item in update.items] == [CompletionItemKind.ANCHOR_SEEN]
+    assert len(sent) == 1
+    assert sent[0][0] == '%2'
+    assert fixed_req_id in sent[0][1]
+
+    persisted_after_send = state_store.load(job.job_id)
+    assert persisted_after_send is not None
+    assert persisted_after_send.submission.runtime_state['prompt_sent'] is True
+    assert persisted_after_send.submission.runtime_state['prompt_sent_at'] == '2026-03-18T00:00:04Z'
+
+
+def test_execution_service_opencode_adapter_emits_boundary_for_completed_reply(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from provider_execution import opencode as opencode_adapter_module
 
     fixed_req_id = '20260318-000000-000-6-1'
@@ -2447,7 +2777,16 @@ def test_execution_service_opencode_adapter_emits_legacy_final_item(monkeypatch:
             return {'session_path': str(tmp_path / 'opencode-session.json'), 'session_id': 'ses-demo'}
 
         def try_get_message(self, state):
-            return f'final answer\nCCB_DONE: {fixed_req_id}', state
+            return (
+                'final answer',
+                {
+                    **state,
+                    'last_assistant_id': 'msg-final',
+                    'last_assistant_parent_id': 'msg-user',
+                    'last_assistant_req_id': fixed_req_id,
+                    'last_assistant_completed': 1234,
+                },
+            )
 
     monkeypatch.setattr(opencode_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
     monkeypatch.setattr(opencode_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
@@ -2462,9 +2801,67 @@ def test_execution_service_opencode_adapter_emits_legacy_final_item(monkeypatch:
     assert [item.kind for item in update.items] == [
         CompletionItemKind.ANCHOR_SEEN,
         CompletionItemKind.ASSISTANT_FINAL,
+        CompletionItemKind.TURN_BOUNDARY,
     ]
-    assert update.items[-1].payload['reply'] == 'final answer'
-    assert update.items[-1].payload['done_marker'] is True
+    assert update.items[1].payload['reply'] == 'final answer'
+    assert update.items[2].payload['reason'] == 'assistant_completed'
+
+
+def test_execution_service_opencode_adapter_respects_no_wrap_provider_option(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from provider_execution import opencode as opencode_adapter_module
+
+    fixed_req_id = '20260318-000000-000-6-nowrap'
+    sent: list[tuple[str, str]] = []
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            sent.append((pane_id, text))
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%4'
+
+    class FakeSession:
+        data = {}
+        opencode_session_id_filter = 'ses-demo'
+        opencode_project_id = 'proj-demo'
+        work_dir = str(tmp_path)
+
+        def ensure_pane(self):
+            return True, '%4'
+
+    class FakeReader:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+
+        def capture_state(self):
+            return {'session_path': str(tmp_path / 'opencode-session.json'), 'session_id': 'ses-demo'}
+
+        def try_get_message(self, state):
+            return (
+                'final answer',
+                {
+                    **state,
+                    'last_assistant_id': 'msg-final',
+                    'last_assistant_parent_id': 'msg-user',
+                    'last_assistant_completed': None,
+                },
+            )
+
+    monkeypatch.setattr(opencode_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(opencode_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(opencode_adapter_module, 'OpenCodeLogReader', FakeReader)
+
+    job = _anchored_job_for_provider('opencode', fixed_req_id, body='raw opencode prompt')
+    job.provider_options = {'no_wrap': True}
+    service = ExecutionService(build_default_execution_registry(), clock=lambda: '2026-03-18T00:00:00Z')
+    service.start(job, runtime_context=_runtime_context(tmp_path))
+    update = service.poll()[0]
+
+    assert sent == [('%4', 'raw opencode prompt')]
+    assert [item.kind for item in update.items] == [CompletionItemKind.ASSISTANT_FINAL]
+    assert update.items[0].payload['reply'] == 'final answer'
 
 
 def test_execution_service_opencode_adapter_reanchors_after_session_rotate(
@@ -2503,8 +2900,16 @@ def test_execution_service_opencode_adapter_reanchors_after_session_rotate(
             if self._calls == 1:
                 return None, state
             return (
-                f'new final\nCCB_DONE: {fixed_req_id}',
-                {**state, 'session_path': str(tmp_path / 'opencode-new.json'), 'session_id': 'ses-new'},
+                'new final',
+                {
+                    **state,
+                    'session_path': str(tmp_path / 'opencode-new.json'),
+                    'session_id': 'ses-new',
+                    'last_assistant_id': 'msg-new',
+                    'last_assistant_parent_id': 'msg-user-new',
+                    'last_assistant_req_id': fixed_req_id,
+                    'last_assistant_completed': 2222,
+                },
             )
 
     monkeypatch.setattr(opencode_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
@@ -2522,6 +2927,7 @@ def test_execution_service_opencode_adapter_reanchors_after_session_rotate(
         CompletionItemKind.SESSION_ROTATE,
         CompletionItemKind.ANCHOR_SEEN,
         CompletionItemKind.ASSISTANT_FINAL,
+        CompletionItemKind.TURN_BOUNDARY,
     ]
     assert second.items[0].payload['provider_session_id'] == 'ses-new'
 
@@ -2589,6 +2995,67 @@ def test_execution_service_droid_adapter_emits_legacy_items_from_events(monkeypa
     ]
     assert update.items[-1].payload['reply'] == 'partial\nfinal'
     assert update.items[-1].payload['done_marker'] is True
+
+
+def test_execution_service_droid_adapter_respects_no_wrap_provider_option(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from provider_execution import droid as droid_adapter_module
+
+    fixed_req_id = '20260318-000000-000-7-nowrap'
+    sent: list[tuple[str, str]] = []
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            sent.append((pane_id, text))
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%5'
+
+    class FakeSession:
+        data = {}
+        droid_session_path = str(tmp_path / 'droid-session.jsonl')
+        droid_session_id = 'droid-session-id'
+        work_dir = str(tmp_path)
+
+        def ensure_pane(self):
+            return True, '%5'
+
+    class FakeReader:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+            self._events = [
+                ('assistant', f'reply body\nCCB_DONE: {fixed_req_id}'),
+            ]
+
+        def set_preferred_session(self, session_path) -> None:
+            del session_path
+
+        def set_session_id_hint(self, session_id) -> None:
+            del session_id
+
+        def capture_state(self):
+            return {'session_path': str(tmp_path / 'droid-session.jsonl'), 'offset': 0}
+
+        def try_get_events(self, state):
+            index = int(state.get('index', 0))
+            if index >= len(self._events):
+                return [], state
+            return [self._events[index]], {**state, 'index': index + 1}
+
+    monkeypatch.setattr(droid_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(droid_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(droid_adapter_module, 'DroidLogReader', FakeReader)
+
+    job = _anchored_job_for_provider('droid', fixed_req_id, body='raw droid prompt')
+    job.provider_options = {'no_wrap': True}
+    service = ExecutionService(build_default_execution_registry(), clock=lambda: '2026-03-18T00:00:00Z')
+    service.start(job, runtime_context=_runtime_context(tmp_path))
+    update = service.poll()[0]
+
+    assert sent == [('%5', 'raw droid prompt')]
+    assert [item.kind for item in update.items] == [CompletionItemKind.ASSISTANT_FINAL]
+    assert update.items[0].payload['reply'] == 'reply body'
 
 
 def test_execution_service_droid_adapter_reanchors_after_session_rotate(

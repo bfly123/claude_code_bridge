@@ -15,6 +15,9 @@ def restore_attachment_kwargs(*, layout, spec, runtime) -> dict[str, object]:
         "pid": runtime.pid if runtime is not None else None,
         "runtime_ref": runtime.runtime_ref if runtime is not None else None,
         "session_ref": runtime.session_ref if runtime is not None else None,
+        "slot_key": runtime.slot_key if runtime is not None else spec.name,
+        "window_id": runtime.window_id if runtime is not None else None,
+        "workspace_epoch": runtime.workspace_epoch if runtime is not None else None,
         "binding_source": (
             runtime.binding_source if runtime is not None else RuntimeBindingSource.PROVIDER_SESSION
         ),

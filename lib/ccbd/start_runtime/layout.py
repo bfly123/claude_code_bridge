@@ -35,12 +35,20 @@ def inside_tmux() -> bool:
     return bool((os.environ.get('TMUX') or os.environ.get('TMUX_PANE') or '').strip())
 
 
-def session_root_pane(backend, session_name: str | None) -> str | None:
+def session_root_pane(
+    backend,
+    session_name: str | None,
+    *,
+    workspace_window_name: str | None = None,
+) -> str | None:
     if backend is None or not session_name:
         return None
+    target = str(session_name)
+    if str(workspace_window_name or '').strip():
+        target = f'{session_name}:{str(workspace_window_name).strip()}'
     try:
         result = backend._tmux_run(  # type: ignore[attr-defined]
-            ['list-panes', '-t', session_name, '-F', '#{pane_id}'],
+            ['list-panes', '-t', target, '-F', '#{pane_id}'],
             capture=True,
             check=True,
         )

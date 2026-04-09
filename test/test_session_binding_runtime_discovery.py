@@ -45,6 +45,40 @@ def test_find_bound_session_file_uses_workspace_binding_named_agent(tmp_path: Pa
     assert resolved == session_file
 
 
+def test_find_bound_session_file_allows_provider_named_agent_to_fallback_to_base_session(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    workspace = tmp_path / "workspace-claude"
+    workspace.mkdir()
+    (workspace / ".ccb-workspace.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "record_type": "workspace_binding",
+                "target_project": str(project_root),
+                "project_id": "demo-project",
+                "agent_name": "claude",
+                "workspace_mode": "linked",
+                "workspace_path": str(workspace),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    session_file = project_root / ".ccb" / ".claude-session"
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    session_file.write_text("{}", encoding="utf-8")
+
+    resolved = find_bound_session_file(
+        provider="claude",
+        base_filename=".claude-session",
+        work_dir=workspace,
+    )
+
+    assert resolved == session_file
+
+
 def test_find_bound_session_file_returns_none_when_project_root_is_ambiguous(tmp_path: Path) -> None:
     project_root = tmp_path / "project"
     ccb_dir = project_root / ".ccb"

@@ -8,17 +8,25 @@ from ..project_hash import project_root_marker
 from .project_scope import adopt_project_hash_from_session, session_belongs_to_current_project
 
 
+def _sorted_session_files(paths) -> list[Path]:
+    return sorted(_iter_session_files(paths), key=lambda path: path.stat().st_mtime)
+
+
 def scan_latest_session_any_project(reader) -> Path | None:
     if not reader.root.exists():
         return None
     try:
-        sessions = sorted(
-            _iter_session_files(reader.root.glob("*/chats/session-*.json")),
-            key=lambda path: path.stat().st_mtime,
-        )
+        sessions = _sorted_session_files(reader.root.glob("*/chats/session-*.json"))
     except OSError:
         return None
     return sessions[-1] if sessions else None
+
+
+def _maybe_adopt_project_hash(reader, project_hash: str) -> None:
+    if project_hash == reader._project_hash:
+        return
+    reader._project_hash = project_hash
+    debug_log_reader(f"Adopted project hash: {project_hash}")
 
 
 def scan_latest_session(reader) -> Path | None:
@@ -37,23 +45,19 @@ def scan_latest_session(reader) -> Path | None:
 
     if best is None:
         return None
-    if winning_hash != reader._project_hash:
-        reader._project_hash = winning_hash
-        debug_log_reader(f"Adopted project hash: {winning_hash}")
+    _maybe_adopt_project_hash(reader, winning_hash)
     return best
 
 
-def latest_session(reader) -> Path | None:
+def _valid_preferred_session(reader) -> Path | None:
     preferred = reader._preferred_session
     if preferred and not session_belongs_to_current_project(reader, preferred):
         reader._preferred_session = None
-        preferred = None
+        return None
+    return preferred
 
-    scanned = scan_latest_session(reader)
-    preferred_or_scanned = _select_preferred_session(reader, preferred=preferred, scanned=scanned)
-    if preferred_or_scanned is not None:
-        return preferred_or_scanned
 
+def _fallback_any_project_session(reader) -> Path | None:
     if os.environ.get("GEMINI_ALLOW_ANY_PROJECT_SCAN") not in ("1", "true", "yes"):
         return None
     any_latest = scan_latest_session_any_project(reader)
@@ -65,6 +69,15 @@ def latest_session(reader) -> Path | None:
     return any_latest
 
 
+def latest_session(reader) -> Path | None:
+    preferred = _valid_preferred_session(reader)
+    scanned = scan_latest_session(reader)
+    preferred_or_scanned = _select_preferred_session(reader, preferred=preferred, scanned=scanned)
+    if preferred_or_scanned is not None:
+        return preferred_or_scanned
+    return _fallback_any_project_session(reader)
+
+
 def set_preferred_session(reader, session_path: Path | None) -> None:
     if not session_path or not session_belongs_to_current_project(reader, session_path):
         return
@@ -74,17 +87,12 @@ def set_preferred_session(reader, session_path: Path | None) -> None:
 
 def _select_preferred_session(reader, *, preferred: Path | None, scanned: Path | None) -> Path | None:
     if preferred and preferred.exists():
-        if scanned and scanned.exists():
-            try:
-                pref_mtime = preferred.stat().st_mtime
-                scan_mtime = scanned.stat().st_mtime
-            except OSError:
-                pref_mtime = 0.0
-                scan_mtime = 0.0
-            if scan_mtime > pref_mtime:
-                debug_log_reader(f"Scanned session newer: {scanned} ({scan_mtime}) > {preferred} ({pref_mtime})")
-                reader._preferred_session = scanned
-                return scanned
+        newer_scanned = _newer_scanned_session(preferred=preferred, scanned=scanned)
+        if newer_scanned is not None:
+            scan_path, scan_mtime, pref_mtime = newer_scanned
+            debug_log_reader(f"Scanned session newer: {scan_path} ({scan_mtime}) > {preferred} ({pref_mtime})")
+            reader._preferred_session = scan_path
+            return scan_path
         debug_log_reader(f"Using preferred session: {preferred}")
         return preferred
 
@@ -92,6 +100,20 @@ def _select_preferred_session(reader, *, preferred: Path | None, scanned: Path |
         reader._preferred_session = scanned
         debug_log_reader(f"Scan found: {scanned}")
         return scanned
+    return None
+
+
+def _newer_scanned_session(*, preferred: Path, scanned: Path | None) -> tuple[Path, float, float] | None:
+    if not (scanned and scanned.exists()):
+        return None
+    try:
+        pref_mtime = preferred.stat().st_mtime
+        scan_mtime = scanned.stat().st_mtime
+    except OSError:
+        pref_mtime = 0.0
+        scan_mtime = 0.0
+    if scan_mtime > pref_mtime:
+        return scanned, scan_mtime, pref_mtime
     return None
 
 
@@ -110,11 +132,10 @@ def _project_scan_order(reader) -> list[str]:
 
 
 def _latest_project_session(reader, project_hash: str) -> tuple[Path, float] | None:
-    chats = reader.root / project_hash / "chats"
-    if not chats.is_dir():
+    chats = _project_chats_dir(reader, project_hash)
+    if chats is None:
         return None
-    marker = project_root_marker(chats.parent)
-    if marker and marker != reader._work_dir_norm:
+    if not _project_scope_matches(reader, chats):
         return None
     best: tuple[Path, float] | None = None
     try:
@@ -128,6 +149,16 @@ def _latest_project_session(reader, project_hash: str) -> tuple[Path, float] | N
     except OSError:
         return None
     return best
+
+
+def _project_chats_dir(reader, project_hash: str) -> Path | None:
+    chats = reader.root / project_hash / "chats"
+    return chats if chats.is_dir() else None
+
+
+def _project_scope_matches(reader, chats: Path) -> bool:
+    marker = project_root_marker(chats.parent)
+    return not marker or marker == reader._work_dir_norm
 
 
 def _iter_session_files(paths) -> list[Path]:

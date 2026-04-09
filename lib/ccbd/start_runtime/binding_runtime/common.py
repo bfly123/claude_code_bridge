@@ -20,6 +20,7 @@ def matching_project_namespace_record(
     binding,
     tmux_socket_path: str,
     tmux_session_name: str | None,
+    workspace_window_id: str | None,
     agent_name: str,
     project_id: str,
     tmux_backend_factory,
@@ -41,6 +42,7 @@ def matching_project_namespace_record(
         role='agent',
         slot_key=agent_name,
         managed_by='ccbd',
+        window_id=workspace_window_id,
     ):
         return None
     return record

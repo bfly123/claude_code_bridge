@@ -53,10 +53,16 @@ def watch_target(
         try:
             payload = handle.client.watch(command.target, cursor=cursor)
         except reconnect_error_classes:
-            if _deadline_exceeded(deadline, time_fn=time_fn):
-                raise RuntimeError(f"watch timed out for target {command.target}")
-            handle = connect_mounted_daemon_fn(context, allow_restart_stale=True)
-            assert handle.client is not None
+            handle = None
+            while handle is None:
+                if _deadline_exceeded(deadline, time_fn=time_fn):
+                    raise RuntimeError(f"watch timed out for target {command.target}")
+                try:
+                    handle = connect_mounted_daemon_fn(context, allow_restart_stale=True)
+                except reconnect_error_classes:
+                    sleep_fn(poll_interval)
+                    continue
+                assert handle.client is not None
             sleep_fn(poll_interval)
             continue
 

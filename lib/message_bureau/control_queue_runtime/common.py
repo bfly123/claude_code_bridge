@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mailbox_runtime.targets import COMMAND_MAILBOX_ACTOR, normalize_mailbox_target
+from mailbox_runtime.targets import normalize_mailbox_target
 from mailbox_kernel import MailboxState
 
 
@@ -20,10 +20,7 @@ def require_mailbox_target(service, agent_name: str) -> str:
 
 
 def summary_targets(service) -> tuple[str, ...]:
-    targets = set(getattr(service._config, 'agents', {}).keys())
-    if mailbox_has_activity(service, COMMAND_MAILBOX_ACTOR):
-        targets.add(COMMAND_MAILBOX_ACTOR)
-    return tuple(sorted(targets))
+    return tuple(sorted(getattr(service._config, 'agents', {}).keys()))
 
 
 def mailbox_has_activity(service, agent_name: str) -> bool:

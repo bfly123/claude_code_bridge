@@ -33,11 +33,17 @@ def watch_ask_job(
         try:
             payload = client.watch(job_id, cursor=cursor)
         except reconnect_error_classes:
-            if _deadline_exceeded(deadline, monotonic_fn=monotonic_fn):
-                raise RuntimeError(f'wait timed out for {job_id}')
-            handle = connect_mounted_daemon_fn(context, allow_restart_stale=True)
-            assert handle.client is not None
-            client = handle.client
+            client = None
+            while client is None:
+                if _deadline_exceeded(deadline, monotonic_fn=monotonic_fn):
+                    raise RuntimeError(f'wait timed out for {job_id}')
+                try:
+                    handle = connect_mounted_daemon_fn(context, allow_restart_stale=True)
+                except reconnect_error_classes:
+                    sleep_fn(poll_interval)
+                    continue
+                assert handle.client is not None
+                client = handle.client
             sleep_fn(poll_interval)
             continue
 

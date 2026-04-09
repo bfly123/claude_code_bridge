@@ -4,6 +4,7 @@ from ccbd.system import process_exists, utc_now
 from provider_core.registry import build_default_session_binding_map
 
 from .health_runtime import assess_provider_pane
+from .health_runtime_state import HealthMonitorRuntimeState, HealthMonitorRuntimeStateMixin
 from .health_monitor_runtime import (
     check_all as check_all_impl,
     collect_orphans as collect_orphans_impl,
@@ -17,7 +18,7 @@ from .health_monitor_runtime import (
 )
 
 
-class HealthMonitor:
+class HealthMonitor(HealthMonitorRuntimeStateMixin):
     def __init__(
         self,
         registry,
@@ -28,13 +29,15 @@ class HealthMonitor:
         session_bindings=None,
         namespace_state_store=None,
     ) -> None:
-        self._registry = registry
-        self._ownership_guard = ownership_guard
-        self._clock = clock
-        self._pid_exists = pid_exists
-        self._session_bindings = session_bindings or build_default_session_binding_map(include_optional=True)
-        self._namespace_state_store = namespace_state_store
-        self._assess_provider_pane = assess_provider_pane
+        self._runtime_state = HealthMonitorRuntimeState(
+            registry=registry,
+            ownership_guard=ownership_guard,
+            clock=clock,
+            pid_exists=pid_exists,
+            session_bindings=session_bindings or build_default_session_binding_map(include_optional=True),
+            namespace_state_store=namespace_state_store,
+            assess_provider_pane=assess_provider_pane,
+        )
 
     def daemon_health(self):
         return daemon_health_impl(self)

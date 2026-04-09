@@ -71,7 +71,7 @@ def test_install_claude_hooks_preserves_existing_entries_without_duplication(tmp
     assert 'StopFailure' not in data['hooks']
 
 
-def test_install_claude_hooks_syncs_user_settings_and_trusts_workspace(tmp_path: Path, monkeypatch) -> None:
+def test_install_claude_hooks_trusts_workspace_without_copying_user_settings(tmp_path: Path, monkeypatch) -> None:
     home = tmp_path / 'home'
     workspace = tmp_path / 'workspace'
     command = '/usr/bin/python3 /tmp/ccb-provider-finish-hook --provider claude'
@@ -100,15 +100,95 @@ def test_install_claude_hooks_syncs_user_settings_and_trusts_workspace(tmp_path:
         command=command,
     )
 
-    settings_path = workspace / '.claude' / 'settings.json'
-    settings = json.loads(settings_path.read_text(encoding='utf-8'))
-    assert settings['env']['ANTHROPIC_AUTH_TOKEN'] == 'token-1'
-    assert settings['env']['ANTHROPIC_BASE_URL'] == 'https://example.invalid/claude'
-    assert settings['theme'] == 'system'
+    assert not (workspace / '.claude' / 'settings.json').exists()
 
     trust_path = home / '.claude.json'
     trust_data = json.loads(trust_path.read_text(encoding='utf-8'))
     assert trust_data[str(workspace.resolve())]['hasTrustDialogAccepted'] is True
+
+
+def test_install_claude_hooks_removes_stale_workspace_settings(tmp_path: Path) -> None:
+    workspace = tmp_path / 'workspace'
+    command = '/usr/bin/python3 /tmp/ccb-provider-finish-hook --provider claude'
+
+    workspace_settings_path = workspace / '.claude' / 'settings.json'
+    workspace_settings_path.parent.mkdir(parents=True, exist_ok=True)
+    workspace_settings_path.write_text(
+        json.dumps(
+            {
+                'env': {
+                    'ANTHROPIC_AUTH_TOKEN': 'token-stale',
+                    'ANTHROPIC_BASE_URL': 'https://api.stale.invalid',
+                },
+                'model': 'opus',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    install_workspace_completion_hooks(
+        provider='claude',
+        workspace_path=workspace,
+        command=command,
+    )
+
+    assert not workspace_settings_path.exists()
+
+
+def test_install_claude_hooks_keeps_workspace_settings_absent_when_profile_exists(tmp_path: Path, monkeypatch) -> None:
+    home = tmp_path / 'home'
+    workspace = tmp_path / 'workspace'
+    profile_root = tmp_path / 'profiles' / 'agent3' / 'claude'
+    command = '/usr/bin/python3 /tmp/ccb-provider-finish-hook --provider claude'
+    monkeypatch.setenv('HOME', str(home))
+
+    user_settings_path = home / '.claude' / 'settings.json'
+    user_settings_path.parent.mkdir(parents=True, exist_ok=True)
+    user_settings_path.write_text(
+        json.dumps(
+            {
+                'env': {
+                    'ANTHROPIC_AUTH_TOKEN': 'token-system',
+                    'ANTHROPIC_BASE_URL': 'https://api.system.invalid',
+                },
+                'model': 'sonnet',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    profile_root.mkdir(parents=True, exist_ok=True)
+    (profile_root / 'settings.json').write_text(
+        json.dumps(
+            {
+                'env': {
+                    'ANTHROPIC_AUTH_TOKEN': 'token-agent',
+                },
+                'model': 'opus',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    install_workspace_completion_hooks(
+        provider='claude',
+        workspace_path=workspace,
+        command=command,
+        resolved_profile=ResolvedProviderProfile(
+            provider='claude',
+            agent_name='agent3',
+            mode='inherit',
+            profile_root=str(profile_root),
+        ),
+    )
+
+    assert not (workspace / '.claude' / 'settings.json').exists()
 
 
 def test_install_gemini_hooks_writes_settings_json(tmp_path: Path) -> None:
@@ -142,52 +222,3 @@ def test_install_gemini_hooks_trusts_workspace(tmp_path: Path, monkeypatch) -> N
     trust_path = home / '.gemini' / 'trustedFolders.json'
     data = json.loads(trust_path.read_text(encoding='utf-8'))
     assert data[str(workspace.resolve())] == 'TRUST_FOLDER'
-
-
-
-def test_install_claude_hooks_strips_system_api_env_for_isolated_profile(tmp_path: Path, monkeypatch) -> None:
-    home = tmp_path / 'home'
-    workspace = tmp_path / 'workspace'
-    command = '/usr/bin/python3 /tmp/ccb-provider-finish-hook --provider claude'
-    monkeypatch.setenv('HOME', str(home))
-
-    user_settings_path = home / '.claude' / 'settings.json'
-    user_settings_path.parent.mkdir(parents=True, exist_ok=True)
-    user_settings_path.write_text(
-        json.dumps(
-            {
-                'env': {
-                    'ANTHROPIC_AUTH_TOKEN': 'token-1',
-                    'ANTHROPIC_BASE_URL': 'https://example.invalid/claude',
-                    'FOO': 'bar',
-                },
-                'theme': 'system',
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding='utf-8',
-    )
-
-    install_workspace_completion_hooks(
-        provider='claude',
-        workspace_path=workspace,
-        command=command,
-        resolved_profile=ResolvedProviderProfile(
-            provider='claude',
-            agent_name='agent1',
-            mode='isolated',
-            profile_root=str(tmp_path / 'profile'),
-            runtime_home=None,
-            env={'ANTHROPIC_API_KEY': 'api-2'},
-            inherit_api=False,
-        ),
-    )
-
-    settings_path = workspace / '.claude' / 'settings.json'
-    settings = json.loads(settings_path.read_text(encoding='utf-8'))
-    assert settings['env']['ANTHROPIC_API_KEY'] == 'api-2'
-    assert settings['env']['FOO'] == 'bar'
-    assert 'ANTHROPIC_AUTH_TOKEN' not in settings['env']
-    assert 'ANTHROPIC_BASE_URL' not in settings['env']
-    assert settings['theme'] == 'system'

@@ -4,30 +4,55 @@ from ccbd.services.project_namespace_pane import backend_socket_matches, inspect
 
 
 def pane_outside_project_namespace(*, runtime, namespace_state_store, backend, pane_id: str) -> bool:
-    pane_text = str(pane_id or '').strip()
-    if backend is None or not pane_text.startswith('%'):
+    pane_text = _normalized_tmux_pane_id(pane_id)
+    if pane_text is None or backend is None or namespace_state_store is None:
         return False
-    if namespace_state_store is None:
-        return False
-    try:
-        namespace_state = namespace_state_store.load()
-    except Exception:
-        namespace_state = None
+    namespace_state = _load_namespace_state(namespace_state_store)
     if namespace_state is None:
         return False
-    if not backend_socket_matches(backend, namespace_state.tmux_socket_path):
-        runtime_socket = str(getattr(runtime, 'tmux_socket_path', None) or '').strip()
-        return bool(runtime_socket) and same_tmux_socket_path(runtime_socket, namespace_state.tmux_socket_path)
+    if not _backend_matches_namespace_socket(backend, namespace_state.tmux_socket_path):
+        return _runtime_socket_matches_namespace(runtime, namespace_state.tmux_socket_path)
     record = inspect_project_namespace_pane(backend, pane_text)
+    return _record_outside_namespace(runtime, namespace_state, record)
+
+
+def _normalized_tmux_pane_id(pane_id: str) -> str | None:
+    pane_text = str(pane_id or '').strip()
+    return pane_text if pane_text.startswith('%') else None
+
+
+def _load_namespace_state(namespace_state_store):
+    try:
+        return namespace_state_store.load()
+    except Exception:
+        return None
+
+
+def _backend_matches_namespace_socket(backend, tmux_socket_path: str | None) -> bool:
+    return backend_socket_matches(backend, tmux_socket_path)
+
+
+def _runtime_socket_matches_namespace(runtime, tmux_socket_path: str | None) -> bool:
+    runtime_socket = str(getattr(runtime, 'tmux_socket_path', None) or '').strip()
+    return bool(runtime_socket) and same_tmux_socket_path(runtime_socket, tmux_socket_path)
+
+
+def _record_outside_namespace(runtime, namespace_state, record) -> bool:
     if record is None:
         return True
-    return not record.matches(
+    slot_key = str(getattr(runtime, 'slot_key', None) or getattr(runtime, 'agent_name', None) or '').strip() or None
+    if not record.matches(
         tmux_session_name=namespace_state.tmux_session_name,
         project_id=runtime.project_id,
         role='agent',
-        slot_key=runtime.agent_name,
+        slot_key=slot_key,
         managed_by='ccbd',
-    )
+    ):
+        return True
+    workspace_window_id = str(getattr(namespace_state, 'workspace_window_id', None) or '').strip()
+    if workspace_window_id and str(getattr(record, 'window_id', None) or '').strip():
+        return str(record.window_id).strip() != workspace_window_id
+    return False
 
 
 __all__ = ['pane_outside_project_namespace']

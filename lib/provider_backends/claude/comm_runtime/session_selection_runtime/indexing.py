@@ -18,7 +18,7 @@ def parse_sessions_index(reader) -> Path | None:
         return None
     return select_best_session_path(
         entries,
-        candidates=candidate_paths_for_work_dir(reader.work_dir),
+        candidates=candidate_paths_for_work_dir(reader.work_dir, include_env_pwd=False),
         project_dir=location.project_dir,
         session_filter=lambda session_path: session_belongs_to_current_project(reader, session_path),
     )

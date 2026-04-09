@@ -19,7 +19,6 @@ def post_launch(backend: object, pane_id: str, runtime_dir: Path, launch_session
 
 
 def spawn_codex_bridge(*, runtime_dir: Path, pane_id: str) -> None:
-    bridge_script = Path(__file__).resolve().parents[1] / 'bridge.py'
     env = os.environ.copy()
     env['CODEX_TERMINAL'] = 'tmux'
     env['CODEX_TMUX_SESSION'] = pane_id
@@ -29,13 +28,15 @@ def spawn_codex_bridge(*, runtime_dir: Path, pane_id: str) -> None:
     env['CODEX_TMUX_LOG'] = str(runtime_dir / 'bridge_output.log')
     env.update(bridge_runtime_env(runtime_dir))
     existing_pythonpath = env.get('PYTHONPATH', '')
-    lib_root = str(Path(__file__).resolve().parents[3].parent)
+    lib_root = str(Path(__file__).resolve().parents[3])
     env['PYTHONPATH'] = lib_root if not existing_pythonpath else lib_root + os.pathsep + existing_pythonpath
+    stdout_log = open(runtime_dir / 'bridge.stdout.log', 'ab')
+    stderr_log = open(runtime_dir / 'bridge.stderr.log', 'ab')
     proc = subprocess.Popen(
-        [sys.executable, str(bridge_script), '--runtime-dir', str(runtime_dir)],
+        [sys.executable, '-m', 'provider_backends.codex.bridge', '--runtime-dir', str(runtime_dir)],
         env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=stdout_log,
+        stderr=stderr_log,
         start_new_session=True,
     )
     (runtime_dir / 'bridge.pid').write_text(f'{proc.pid}\n', encoding='utf-8')

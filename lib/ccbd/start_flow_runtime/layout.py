@@ -27,8 +27,18 @@ def prepare_start_layout(
     )
 
 
-def session_root_pane(deps, backend, session_name: str | None) -> str | None:
-    return deps.session_root_pane_impl(backend, session_name)
+def session_root_pane(
+    deps,
+    backend,
+    session_name: str | None,
+    *,
+    workspace_window_name: str | None = None,
+) -> str | None:
+    return deps.session_root_pane_impl(
+        backend,
+        session_name,
+        workspace_window_name=workspace_window_name,
+    )
 
 
 def cleanup_start_tmux_orphans(

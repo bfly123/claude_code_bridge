@@ -28,60 +28,48 @@ def strip_ansi(text: str) -> str:
 
 
 def extract_assistant_blocks(text: str) -> List[str]:
-    blocks: List[str] = []
-    req_positions = [(match.end(), match.group(1)) for match in _CCB_REQ_ID_RE.finditer(text)]
-    done_positions = [match.start() for match in _CCB_DONE_RE.finditer(text)]
-
-    if not req_positions and not done_positions:
+    if not _has_protocol_markers(text):
         stripped = text.strip()
-        if stripped:
-            blocks.append(stripped)
-        return blocks
+        return [stripped] if stripped else []
 
-    for req_end, _req_id in req_positions:
-        next_done = None
-        for done_pos in done_positions:
-            if done_pos > req_end:
-                next_done = done_pos
-                break
-        if next_done is not None:
-            segment = text[req_end:next_done].strip()
-            if segment:
-                blocks.append(segment)
-        else:
-            segment = text[req_end:].strip()
-            if segment:
-                blocks.append(segment)
-
-    return blocks
+    return [assistant for _user, assistant in _conversation_segments(text) if assistant]
 
 
 def extract_conversation_pairs(text: str) -> List[Tuple[str, str]]:
-    pairs: List[Tuple[str, str]] = []
-    req_matches = list(_CCB_REQ_ID_RE.finditer(text))
+    return list(_conversation_segments(text))
+
+
+def _has_protocol_markers(text: str) -> bool:
+    return bool(_CCB_REQ_ID_RE.search(text) or _CCB_DONE_RE.search(text))
+
+
+def _conversation_segments(text: str) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
     done_positions = [match.start() for match in _CCB_DONE_RE.finditer(text)]
-
     prev_end = 0
-    for req_match in req_matches:
+    for req_match in _CCB_REQ_ID_RE.finditer(text):
         user_text = text[prev_end:req_match.start()].strip()
-        req_end = req_match.end()
-
-        next_done = None
-        for done_pos in done_positions:
-            if done_pos > req_end:
-                next_done = done_pos
-                break
-
-        if next_done is not None:
-            assistant_text = text[req_end:next_done].strip()
-            prev_end = next_done
-        else:
-            assistant_text = text[req_end:].strip()
-            prev_end = len(text)
-
+        assistant_text, prev_end = _assistant_segment(text, req_match.end(), done_positions)
         pairs.append((user_text, assistant_text))
-
     return pairs
+
+
+def _assistant_segment(
+    text: str,
+    req_end: int,
+    done_positions: list[int],
+) -> tuple[str, int]:
+    next_done = _next_done_position(done_positions, req_end)
+    if next_done is None:
+        return text[req_end:].strip(), len(text)
+    return text[req_end:next_done].strip(), next_done
+
+
+def _next_done_position(done_positions: list[int], req_end: int) -> int | None:
+    for done_pos in done_positions:
+        if done_pos > req_end:
+            return done_pos
+    return None
 
 
 __all__ = ['extract_assistant_blocks', 'extract_conversation_pairs', 'strip_ansi']

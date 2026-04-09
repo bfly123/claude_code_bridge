@@ -1,6 +1,6 @@
 ---
 name: ask
-description: Submit a request via `ccb ask` to a named CCB agent. Default async; use wait only when the user explicitly asks for the reply in the same turn.
+description: Submit a request via `ccb ask` to a named CCB agent. Default async; on async receipt end the turn immediately. Use wait only when the user explicitly asks for the reply in the same turn.
 metadata:
   short-description: Ask agent
 ---
@@ -14,8 +14,8 @@ Send the user's request to another CCB agent via the canonical `ccb ask` command
 - `ccb` is the project control plane. This skill assumes the current working directory is inside a CCB-managed project with a `.ccb/ccb.config`.
 - `ccb ask` uses the current CCB workspace to infer sender identity. Do not manually reimplement sender resolution in the skill.
 - If the current cwd is an agent workspace such as `.ccb/workspaces/agent1`, sender is inferred as `agent1`.
-- If the current cwd is not an agent workspace, sender falls back to `cmd`.
-- `ccb ask all` is broadcast. When sender is an agent, broadcast excludes that sender agent itself. When sender is `cmd` or `user`, broadcast goes to all alive agents.
+- If the current cwd is not an agent workspace, sender falls back to `user`.
+- `ccb ask all` is broadcast. When sender is an agent, broadcast excludes that sender agent itself. When sender is `user`, broadcast goes to all alive agents.
 - Bare `ask` is only a compatibility alias for `ccb ask`.
 - `--silence` only hides successful completion body in the caller mailbox. Failed, incomplete, or cancelled outcomes still return their normal reply body.
 
@@ -53,6 +53,13 @@ EOF
 This returns only an acceptance receipt in the current turn.
 The reply is not echoed into the same command stdout.
 To fetch the same-turn reply, use the explicit wait form below.
+Successful async submit also prints a protocol marker like:
+
+```text
+[CCB_ASYNC_SUBMITTED ...]
+```
+
+That marker means the async handoff is complete for this turn.
 
 Silent-on-success submit, only if the user explicitly asks for silent success mail:
 
@@ -81,9 +88,11 @@ EOF
 ## Rules
 
 - Execute exactly one snippet above, then stop, unless the user explicitly asked to wait.
+- If async output contains `[CCB_ASYNC_SUBMITTED ...]`, end the turn immediately. Do not inspect, summarize follow-up state, or poll for replies in the same turn.
+- After async submit, do not add narrative like "waiting for replies", do not summarize recipient lists, and do not claim you will monitor progress unless the user explicitly asks.
 - Do not add extra filler like "processing...". The command output is the result.
 - Do not run `pend`, `ping`, retries, or other follow-up commands unless the user explicitly asks.
-- Do not rewrite target names. `cmd` is reserved and must not be used as an agent target.
+- Do not rewrite target names. `cmd` is reserved as the control pane name and must not be used as an agent target or mailbox target.
 - Do not reinterpret any part of `MESSAGE` as sender override syntax. This skill does not accept a sender argument.
 - Use canonical `ccb ask`. Do not use bare `ask` here unless the user is explicitly testing alias compatibility.
 - Keep stdin/heredoc form; do not pass the raw message as CLI arguments.
@@ -107,3 +116,4 @@ EOF
 
 - If submit fails, report the command failure output and stop. Only diagnose in a later turn if the user asks.
 - Successful `--silence` replies look like `CCB_COMPLETE ... result=hidden`.
+- Successful async submit is complete as soon as `[CCB_ASYNC_SUBMITTED ...]` appears.

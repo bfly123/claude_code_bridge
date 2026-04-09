@@ -41,11 +41,19 @@ class ClaudeProviderAdapter:
             'request_anchor': request_anchor_from_runtime_state(submission.runtime_state, fallback=submission.job_id),
             'next_seq': submission.runtime_state.get('next_seq'),
             'anchor_seen': submission.runtime_state.get('anchor_seen'),
+            'no_wrap': submission.runtime_state.get('no_wrap'),
             'reply_buffer': submission.runtime_state.get('reply_buffer'),
             'raw_buffer': submission.runtime_state.get('raw_buffer'),
             'session_path': submission.runtime_state.get('session_path'),
             'last_assistant_uuid': submission.runtime_state.get('last_assistant_uuid'),
             'completion_dir': submission.runtime_state.get('completion_dir'),
+            'prompt_text': submission.runtime_state.get('prompt_text'),
+            'prompt_sent': submission.runtime_state.get('prompt_sent'),
+            'prompt_sent_at': submission.runtime_state.get('prompt_sent_at'),
+            'reply_delivery_complete_on_dispatch': submission.runtime_state.get('reply_delivery_complete_on_dispatch'),
+            'reply_delivery_require_ready': submission.runtime_state.get('reply_delivery_require_ready'),
+            'ready_wait_started_at': submission.runtime_state.get('ready_wait_started_at'),
+            'ready_timeout_s': submission.runtime_state.get('ready_timeout_s'),
         }
 
     def resume(

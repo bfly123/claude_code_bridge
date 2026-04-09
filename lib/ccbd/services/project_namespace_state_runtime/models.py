@@ -22,6 +22,11 @@ class ProjectNamespaceState:
     tmux_session_name: str
     layout_version: int = 1
     layout_signature: str | None = None
+    control_window_name: str | None = None
+    control_window_id: str | None = None
+    workspace_window_name: str | None = None
+    workspace_window_id: str | None = None
+    workspace_epoch: int = 1
     ui_attachable: bool = True
     last_started_at: str | None = None
     last_destroyed_at: str | None = None
@@ -35,6 +40,15 @@ class ProjectNamespaceState:
         require_positive_int(self.layout_version, field_name='layout_version')
         if self.layout_signature is not None:
             require_non_empty_text(self.layout_signature, field_name='layout_signature')
+        if self.control_window_name is not None:
+            require_non_empty_text(self.control_window_name, field_name='control_window_name')
+        if self.control_window_id is not None:
+            require_non_empty_text(self.control_window_id, field_name='control_window_id')
+        if self.workspace_window_name is not None:
+            require_non_empty_text(self.workspace_window_name, field_name='workspace_window_name')
+        if self.workspace_window_id is not None:
+            require_non_empty_text(self.workspace_window_id, field_name='workspace_window_id')
+        require_positive_int(self.workspace_epoch, field_name='workspace_epoch')
 
     def with_started(self, *, occurred_at: str, ui_attachable: bool = True) -> ProjectNamespaceState:
         return replace(
@@ -61,6 +75,11 @@ class ProjectNamespaceState:
             'tmux_session_name': self.tmux_session_name,
             'layout_version': self.layout_version,
             'layout_signature': self.layout_signature,
+            'control_window_name': self.control_window_name,
+            'control_window_id': self.control_window_id,
+            'workspace_window_name': self.workspace_window_name,
+            'workspace_window_id': self.workspace_window_id,
+            'workspace_epoch': self.workspace_epoch,
             'ui_attachable': self.ui_attachable,
             'last_started_at': self.last_started_at,
             'last_destroyed_at': self.last_destroyed_at,
@@ -78,6 +97,11 @@ class ProjectNamespaceState:
             tmux_session_name=str(payload['tmux_session_name']),
             layout_version=int(payload.get('layout_version', 1)),
             layout_signature=clean_text(payload.get('layout_signature')),
+            control_window_name=clean_text(payload.get('control_window_name')),
+            control_window_id=clean_text(payload.get('control_window_id')),
+            workspace_window_name=clean_text(payload.get('workspace_window_name')),
+            workspace_window_id=clean_text(payload.get('workspace_window_id')),
+            workspace_epoch=int(payload.get('workspace_epoch', 1)),
             ui_attachable=bool(payload.get('ui_attachable', True)),
             last_started_at=clean_text(payload.get('last_started_at')),
             last_destroyed_at=clean_text(payload.get('last_destroyed_at')),
@@ -90,6 +114,11 @@ class ProjectNamespaceState:
             'namespace_tmux_socket_path': self.tmux_socket_path,
             'namespace_tmux_session_name': self.tmux_session_name,
             'namespace_layout_version': self.layout_version,
+            'namespace_control_window_name': self.control_window_name,
+            'namespace_control_window_id': self.control_window_id,
+            'namespace_workspace_window_name': self.workspace_window_name,
+            'namespace_workspace_window_id': self.workspace_window_id,
+            'namespace_workspace_epoch': self.workspace_epoch,
             'namespace_ui_attachable': self.ui_attachable,
             'namespace_last_started_at': self.last_started_at,
             'namespace_last_destroyed_at': self.last_destroyed_at,

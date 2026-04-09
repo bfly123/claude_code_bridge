@@ -17,6 +17,11 @@ def build_active_state(
     tmux_session_name: str,
     layout_version: int,
     layout_signature: str | None,
+    control_window_name: str | None,
+    control_window_id: str | None,
+    workspace_window_name: str | None,
+    workspace_window_id: str | None,
+    workspace_epoch: int,
     ui_attachable: bool,
     last_started_at: str | None,
 ):
@@ -27,6 +32,11 @@ def build_active_state(
         tmux_session_name=tmux_session_name,
         layout_version=layout_version,
         layout_signature=layout_signature,
+        control_window_name=control_window_name,
+        control_window_id=control_window_id,
+        workspace_window_name=workspace_window_name,
+        workspace_window_id=workspace_window_id,
+        workspace_epoch=workspace_epoch,
         ui_attachable=ui_attachable,
         last_started_at=last_started_at,
         last_destroyed_at=current.last_destroyed_at if current is not None else None,
@@ -64,6 +74,8 @@ def build_destroyed_state(
     tmux_socket_path: str,
     tmux_session_name: str,
     layout_version: int,
+    control_window_name: str | None,
+    workspace_window_name: str | None,
 ):
     if current is not None:
         return current.with_destroyed(occurred_at=occurred_at, reason=reason)
@@ -73,6 +85,8 @@ def build_destroyed_state(
         tmux_socket_path=tmux_socket_path,
         tmux_session_name=tmux_session_name,
         layout_version=layout_version,
+        control_window_name=control_window_name,
+        workspace_window_name=workspace_window_name,
         ui_attachable=False,
         last_started_at=None,
         last_destroyed_at=occurred_at,

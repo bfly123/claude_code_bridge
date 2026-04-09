@@ -1,31 +1,33 @@
 from __future__ import annotations
 
-from pathlib import Path
 from types import SimpleNamespace
 
 from provider_backends.opencode.runtime.reply_polling import find_new_assistant_reply_with_reader_state, read_since
 
 
-def test_opencode_find_new_assistant_reply_updates_completed_timestamp(monkeypatch) -> None:
-    reader = SimpleNamespace(_extract_text=lambda parts, allow_reasoning_fallback=True: 'done CCB_DONE: job_1')
+def test_opencode_find_new_assistant_reply_reads_completed_binding_from_storage(monkeypatch) -> None:
+    reader = SimpleNamespace(_extract_req_id_from_text=lambda text: 'job_1')
     monkeypatch.setattr(
         'provider_backends.opencode.runtime.reply_polling_runtime.service.read_messages',
-        lambda reader, session_id: [{'id': 'msg_1', 'role': 'assistant', 'time': {}}],
+        lambda reader, session_id: [
+            {'id': 'msg_user', 'role': 'user'},
+            {'id': 'msg_1', 'role': 'assistant', 'parentID': 'msg_user', 'time': {'completed': 1234}},
+        ],
     )
     monkeypatch.setattr(
         'provider_backends.opencode.runtime.reply_polling_runtime.service.read_parts',
-        lambda reader, message_id: [{'type': 'text', 'text': 'done CCB_DONE: job_1'}],
-    )
-    monkeypatch.setattr(
-        'provider_backends.opencode.runtime.reply_polling_runtime.service.time.time',
-        lambda: 1234.5,
+        lambda reader, message_id: [{'type': 'text', 'text': 'CCB_REQ_ID: job_1'}]
+        if message_id == 'msg_user'
+        else [{'type': 'text', 'text': 'done'}],
     )
 
     reply, state = find_new_assistant_reply_with_reader_state(reader, 'ses_1', {})
 
-    assert reply == 'done CCB_DONE: job_1'
+    assert reply == 'done'
     assert state is not None
-    assert state['last_assistant_completed'] == 1234500
+    assert state['last_assistant_completed'] == 1234
+    assert state['last_assistant_req_id'] == 'job_1'
+    assert state['last_assistant_parent_id'] == 'msg_user'
 
 
 def test_opencode_read_since_returns_reply_when_session_updates(monkeypatch) -> None:

@@ -52,7 +52,7 @@ def apply_session_rotation(submission: ProviderSubmission, poll: ClaudePollState
     )
     poll.next_seq += 1
     poll.session_path = new_session_path
-    poll.anchor_seen = False
+    poll.anchor_seen = bool(submission.runtime_state.get("no_wrap", False))
     poll.reply_buffer = ""
     poll.raw_buffer = ""
     poll.last_assistant_uuid = ""

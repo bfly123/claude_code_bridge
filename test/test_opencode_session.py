@@ -59,6 +59,31 @@ def test_opencode_session_update_binding_persists_storage_ids(tmp_path: Path, mo
     assert session2.opencode_session_id_filter == "ses_abc"
 
 
+def test_opencode_session_filter_accepts_hyphenated_storage_id(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    session_file = tmp_path / ".opencode-session"
+    _write_session(
+        session_file,
+        {
+            "ccb_session_id": "ai-123",
+            "runtime_dir": str(tmp_path / "run"),
+            "terminal": "tmux",
+            "pane_id": "%1",
+            "work_dir": str(tmp_path),
+            "active": True,
+        },
+    )
+
+    session = load_project_session(tmp_path)
+    assert session is not None
+    session.update_opencode_binding(session_id="ses-demo", project_id="proj1")
+
+    session2 = load_project_session(tmp_path)
+    assert session2 is not None
+    assert session2.opencode_session_id == "ses-demo"
+    assert session2.opencode_session_id_filter == "ses-demo"
+
+
 def test_opencode_session_does_not_alias_ccb_session_id_to_storage_id(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     session_file = tmp_path / ".opencode-session"

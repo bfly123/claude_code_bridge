@@ -77,8 +77,12 @@ def run_start_flow(
     interactive_tmux_layout: bool = True,
     tmux_socket_path: str | None = None,
     tmux_session_name: str | None = None,
+    tmux_workspace_window_name: str | None = None,
     namespace_epoch: int | None = None,
+    workspace_window_id: str | None = None,
+    workspace_epoch: int | None = None,
     fresh_namespace: bool = False,
+    fresh_workspace: bool = False,
     clock=utc_now,
 ) -> StartFlowSummary:
     return run_start_flow_impl(
@@ -94,8 +98,12 @@ def run_start_flow(
         interactive_tmux_layout=interactive_tmux_layout,
         tmux_socket_path=tmux_socket_path,
         tmux_session_name=tmux_session_name,
+        tmux_workspace_window_name=tmux_workspace_window_name,
         namespace_epoch=namespace_epoch,
+        workspace_window_id=workspace_window_id,
+        workspace_epoch=workspace_epoch,
         fresh_namespace=fresh_namespace,
+        fresh_workspace=fresh_workspace,
         clock=clock,
         deps=_deps(),
     )

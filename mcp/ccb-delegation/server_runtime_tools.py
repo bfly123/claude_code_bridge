@@ -35,9 +35,76 @@ def build_context_for(work_dir: str | None):
     return CliContextBuilder().build(command, cwd=cwd, bootstrap_if_missing=True)
 
 
+def _required_text(args: dict[str, Any], field: str) -> str | None:
+    value = str(args.get(field) or "").strip()
+    return value or None
+
+
+def _optional_text(args: dict[str, Any], field: str) -> str | None:
+    value = str(args.get(field) or "").strip()
+    return value or None
+
+
+def _submit_response(payload, *, agent_name: str) -> dict[str, Any]:
+    if not payload.jobs:
+        raise RuntimeError('ask submission returned no jobs')
+    first_job = payload.jobs[0]
+    return {
+        "project_id": payload.project_id,
+        "submission_id": payload.submission_id,
+        "job_id": first_job["job_id"],
+        "agent_name": first_job.get("agent_name") or agent_name,
+        "target_kind": first_job.get("target_kind"),
+        "target_name": first_job.get("target_name") or agent_name,
+        "status": first_job.get("status"),
+    }
+
+
+def _terminal_submit_response(context, job_id: str, *, timeout_s: float, response: dict[str, Any]) -> dict[str, Any]:
+    terminal = watch_ask_job(
+        context,
+        job_id,
+        StringIO(),
+        timeout=timeout_s,
+        emit_output=False,
+    )
+    response.update(
+        {
+            "terminal": True,
+            "status": terminal.status,
+            "reply": terminal.reply or "",
+        }
+    )
+    return response
+
+
+def _async_submit_response(job_id: str, response: dict[str, Any]) -> dict[str, Any]:
+    response.update(
+        {
+            "terminal": False,
+            "reply_mode": "async",
+            "wait_hint": f"ccb ask wait {job_id}",
+        }
+    )
+    return response
+
+
+def _pend_response(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "job_id": payload.get("job_id"),
+        "agent_name": payload.get("agent_name"),
+        "target_kind": payload.get("target_kind"),
+        "target_name": payload.get("target_name"),
+        "status": payload.get("status"),
+        "terminal": bool(payload.get("terminal")),
+        "reply": payload.get("reply") or "",
+        "cursor": payload.get("cursor"),
+    }
+
+
 def submit_task(args: dict[str, Any], *, caller: str) -> dict[str, Any]:
-    agent_name = str(args.get("agent_name") or "").strip().lower()
-    message = str(args.get("message") or "").strip()
+    agent_name = (_required_text(args, "agent_name") or "").lower()
+    message = _required_text(args, "message") or ""
     if not agent_name:
         return tool_error("agent_name is required")
     if not message:
@@ -45,9 +112,9 @@ def submit_task(args: dict[str, Any], *, caller: str) -> dict[str, Any]:
 
     wait = parse_bool(args.get("wait"), default=False)
     timeout_s = parse_timeout(args.get("timeout_s"), default=120.0)
-    work_dir = str(args.get("work_dir") or "").strip() or None
-    task_id = str(args.get("task_id") or "").strip() or None
-    reply_to = str(args.get("reply_to") or "").strip() or None
+    work_dir = _optional_text(args, "work_dir")
+    task_id = _optional_text(args, "task_id")
+    reply_to = _optional_text(args, "reply_to")
 
     try:
         context = build_context_for(work_dir)
@@ -62,74 +129,39 @@ def submit_task(args: dict[str, Any], *, caller: str) -> dict[str, Any]:
                 reply_to=reply_to,
             ),
         )
-        if not payload.jobs:
-            raise RuntimeError('ask submission returned no jobs')
-        first_job = payload.jobs[0]
-        response = {
-            "project_id": payload.project_id,
-            "submission_id": payload.submission_id,
-            "job_id": first_job["job_id"],
-            "agent_name": first_job.get("agent_name") or agent_name,
-            "target_kind": first_job.get("target_kind"),
-            "target_name": first_job.get("target_name") or agent_name,
-            "status": first_job.get("status"),
-        }
+        response = _submit_response(payload, agent_name=agent_name)
+        job_id = response["job_id"]
         if wait:
-            terminal = watch_ask_job(
+            response = _terminal_submit_response(
                 context,
-                first_job["job_id"],
-                StringIO(),
-                timeout=timeout_s,
-                emit_output=False,
-            )
-            response.update(
-                {
-                    "terminal": True,
-                    "status": terminal.status,
-                    "reply": terminal.reply or "",
-                }
+                job_id,
+                timeout_s=timeout_s,
+                response=response,
             )
         else:
-            response.update(
-                {
-                    "terminal": False,
-                    "reply_mode": "async",
-                    "wait_hint": f"ccb ask wait {first_job['job_id']}",
-                }
-            )
+            response = _async_submit_response(job_id, response)
         return tool_ok(response)
     except Exception as exc:
         return tool_error(str(exc))
 
 
 def pend_task(args: dict[str, Any]) -> dict[str, Any]:
-    target = str(args.get("target") or "").strip().lower()
+    target = (_required_text(args, "target") or "").lower()
     if not target:
         return tool_error("target is required")
 
-    work_dir = str(args.get("work_dir") or "").strip() or None
+    work_dir = _optional_text(args, "work_dir")
     try:
         context = build_context_for(work_dir)
         payload = pend_target(context, ParsedPendCommand(project=None, target=target))
-        return tool_ok(
-            {
-                "job_id": payload.get("job_id"),
-                "agent_name": payload.get("agent_name"),
-                "target_kind": payload.get("target_kind"),
-                "target_name": payload.get("target_name"),
-                "status": payload.get("status"),
-                "terminal": bool(payload.get("terminal")),
-                "reply": payload.get("reply") or "",
-                "cursor": payload.get("cursor"),
-            }
-        )
+        return tool_ok(_pend_response(payload))
     except Exception as exc:
         return tool_error(str(exc))
 
 
 def ping_agent(args: dict[str, Any]) -> dict[str, Any]:
-    target = str(args.get("target") or "ccbd").strip().lower() or "ccbd"
-    work_dir = str(args.get("work_dir") or "").strip() or None
+    target = (_optional_text(args, "target") or "ccbd").lower()
+    work_dir = _optional_text(args, "work_dir")
     try:
         context = build_context_for(work_dir)
         payload = ping_target(context, ParsedPingCommand(project=None, target=target))
@@ -138,14 +170,18 @@ def ping_agent(args: dict[str, Any]) -> dict[str, Any]:
         return tool_error(str(exc))
 
 
+_TOOL_HANDLERS = {
+    "ccb_ask_agent": lambda args, caller: submit_task(args, caller=caller),
+    "ccb_pend_agent": lambda args, caller: pend_task(args),
+    "ccb_ping_agent": lambda args, caller: ping_agent(args),
+}
+
+
 def handle_tool_call(name: str, args: dict[str, Any], *, caller: str) -> dict[str, Any]:
-    if name == "ccb_ask_agent":
-        return submit_task(args, caller=caller)
-    if name == "ccb_pend_agent":
-        return pend_task(args)
-    if name == "ccb_ping_agent":
-        return ping_agent(args)
-    return tool_error(f"unknown tool: {name}")
+    handler = _TOOL_HANDLERS.get(name)
+    if handler is None:
+        return tool_error(f"unknown tool: {name}")
+    return handler(args, caller)
 
 
 __all__ = ['handle_tool_call']

@@ -5,8 +5,7 @@ from pathlib import Path
 
 from agents.policy import resolve_agent_launch_policy
 from agents.store import AgentRestoreStore, AgentSpecStore
-from cli.services.provider_hooks import prepare_workspace_provider_hooks
-from provider_profiles import materialize_provider_profile
+from cli.services.provider_hooks import prepare_provider_workspace
 from workspace.binding import WorkspaceBindingStore
 from workspace.materializer import WorkspaceMaterializer
 from workspace.planner import WorkspacePlanner
@@ -33,6 +32,7 @@ def prepare_start_agents(
     project_id: str,
     tmux_socket_path: str | None,
     tmux_session_name: str | None,
+    workspace_window_id: str | None,
     resolve_agent_binding_fn,
     project_binding_filter_fn,
     restore_state_builder,
@@ -57,16 +57,13 @@ def prepare_start_agents(
         materializer.materialize(plan)
         if plan.binding_path is not None:
             binding_store.save(plan)
-        prepare_workspace_provider_hooks(
-            provider=spec.provider,
+        prepare_provider_workspace(
+            layout=paths,
+            spec=spec,
             workspace_path=plan.workspace_path,
             completion_dir=paths.agent_provider_runtime_dir(agent_name, spec.provider) / 'completion',
             agent_name=agent_name,
-            resolved_profile=materialize_provider_profile(
-                layout=paths,
-                spec=spec,
-                workspace_path=plan.workspace_path,
-            ),
+            refresh_profile=True,
         )
         result = validator.validate(plan)
         if not result.ok:
@@ -85,6 +82,7 @@ def prepare_start_agents(
                 cmd_enabled=bool(getattr(config, 'cmd_enabled', False)),
                 tmux_socket_path=tmux_socket_path,
                 tmux_session_name=tmux_session_name,
+                workspace_window_id=workspace_window_id,
                 agent_name=agent_name,
                 project_id=project_id,
             )
