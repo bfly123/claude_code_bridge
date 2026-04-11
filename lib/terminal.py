@@ -766,9 +766,9 @@ class TmuxBackend(TerminalBackend):
             shell_name = Path(shell).name.lower()
             # Avoid assuming bash-style combined flags on shells like fish.
             if shell_name in {"bash", "zsh", "ksh"}:
-                flags = ["-l", "-i", "-c"]
+                flags = ["-l", "-c"]
             elif shell_name == "fish":
-                flags = ["-l", "-i", "-c"]
+                flags = ["-l", "-c"]
             elif shell_name in {"sh", "dash"}:
                 flags = ["-c"]
             else:
