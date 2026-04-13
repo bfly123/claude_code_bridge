@@ -8,7 +8,7 @@ from cli.auxiliary import cmd_droid_subcommand
 from cli.management import cmd_reinstall, cmd_uninstall, cmd_update, cmd_version
 from cli.phase2 import maybe_handle_phase2
 from cli.parser_runtime.constants import SUBCOMMANDS
-from cli.router import dispatch_auxiliary_command, dispatch_management_command, print_kill_help, print_start_help
+from cli.router import dispatch_auxiliary_command, dispatch_management_command, print_command_help, print_kill_help, print_start_help
 
 
 def _should_print_version(tokens: list[str]) -> bool:
@@ -16,14 +16,17 @@ def _should_print_version(tokens: list[str]) -> bool:
 
 
 def _is_ask_help(tokens: list[str]) -> bool:
-    return len(tokens) >= 2 and tokens[0] == "ask" and tokens[1] in {"-h", "--help", "help"}
+    visible = _strip_global_project_tokens(tokens)
+    return len(visible) >= 2 and visible[0] == "ask" and visible[1] in {"-h", "--help", "help"}
 
 
 def _is_kill_help(tokens: list[str]) -> bool:
-    return len(tokens) >= 2 and tokens[0] == "kill" and tokens[1] in {"-h", "--help", "help"}
+    visible = _strip_global_project_tokens(tokens)
+    return len(visible) >= 2 and visible[0] == "kill" and visible[1] in {"-h", "--help", "help"}
 
 
 def _is_start_help(tokens: list[str]) -> bool:
+    tokens = _strip_global_project_tokens(tokens)
     if not tokens:
         return False
     if tokens[0] in {"-h", "--help", "help"}:
@@ -31,6 +34,20 @@ def _is_start_help(tokens: list[str]) -> bool:
     if tokens[0] in SUBCOMMANDS or tokens[0] in {"version", "update", "uninstall", "reinstall", "droid", "mail", "provider", "up"}:
         return False
     return any(token in {"-h", "--help", "help"} for token in tokens)
+
+
+def _command_help_name(tokens: list[str]) -> str | None:
+    visible = _strip_global_project_tokens(tokens)
+    if len(visible) == 2 and visible[1] in {"-h", "--help"}:
+        return visible[0]
+    return None
+
+
+def _strip_global_project_tokens(tokens: list[str]) -> list[str]:
+    remaining = list(tokens)
+    while remaining[:1] == ["--project"] and len(remaining) >= 2:
+        remaining = remaining[2:]
+    return remaining
 
 
 def _rewrite_version_alias(tokens: list[str]) -> list[str]:
@@ -51,6 +68,9 @@ def _handle_help(tokens: list[str], *, stdout: TextIO) -> int | None:
         return 0
     if _is_kill_help(tokens):
         print_kill_help(file=stdout)
+        return 0
+    command_name = _command_help_name(tokens)
+    if command_name is not None and print_command_help(command_name, file=stdout):
         return 0
     if _is_start_help(tokens):
         print_start_help(file=stdout)
@@ -86,7 +106,6 @@ def _dispatch_management(tokens: list[str], *, script_root: Path) -> int | None:
 
     return dispatch_management_command(
         tokens,
-        kill_handler=_unsupported_kill_handler,
         update_handler=lambda args: cmd_update(args, script_root=script_root),
         version_handler=lambda args: cmd_version(args, script_root=script_root),
         uninstall_handler=lambda args: cmd_uninstall(args, script_root=script_root),
@@ -127,10 +146,4 @@ def run_cli_entrypoint(
         return management_result
 
     return maybe_handle_phase2(tokens, cwd=cwd, stdout=stdout, stderr=stderr)
-
-
-def _unsupported_kill_handler(_args) -> int:
-    return 2
-
-
 __all__ = ["run_cli_entrypoint"]

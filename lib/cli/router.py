@@ -8,7 +8,7 @@ from textwrap import dedent
 AuxiliaryHandler = Callable[[Sequence[str]], int]
 ManagementHandler = Callable[[argparse.Namespace], int]
 
-_MANAGEMENT_COMMANDS = {"kill", "update", "version", "uninstall", "reinstall"}
+_MANAGEMENT_COMMANDS = {"update", "version", "uninstall", "reinstall"}
 
 
 def dispatch_auxiliary_command(
@@ -25,7 +25,6 @@ def dispatch_auxiliary_command(
 def dispatch_management_command(
     argv: Sequence[str],
     *,
-    kill_handler: ManagementHandler,
     update_handler: ManagementHandler,
     version_handler: ManagementHandler,
     uninstall_handler: ManagementHandler,
@@ -37,8 +36,6 @@ def dispatch_management_command(
 
     parser = _build_management_parser()
     args = parser.parse_args(tokens)
-    if args.command == "kill":
-        return kill_handler(args)
     if args.command == "update":
         return update_handler(args)
     if args.command == "version":
@@ -107,14 +104,83 @@ def print_kill_help(*, file=None) -> None:
     )
 
 
+def print_command_help(command_name: str, *, file=None) -> bool:
+    text = _COMMAND_HELP.get(command_name)
+    if text is None:
+        return False
+    print(dedent(text).strip(), file=file)
+    return True
+
+
+_COMMAND_HELP = {
+    "ping": """
+        usage: ccb ping <agent|all|ccbd>
+
+        Control-plane health:
+          ccb ping <agent>   Show runtime health for one named agent.
+          ccb ping all       Show mounted-agent health across the project.
+          ccb ping ccbd      Show project daemon health.
+    """,
+    "pend": """
+        usage: ccb pend <agent|job_id> [N]
+
+        Reply inspection:
+          ccb pend <agent>      Show the latest reply for one agent mailbox.
+          ccb pend <job_id>     Show the latest reply for one submitted job.
+          ccb pend <target> N   Show the latest N replies.
+    """,
+    "watch": """
+        usage: ccb watch <agent|job_id>
+
+        Live reply stream:
+          ccb watch <agent>   Stream the current mailbox/reply state for one agent.
+          ccb watch <job_id>  Stream job events until terminal completion or timeout.
+    """,
+    "logs": """
+        usage: ccb logs <agent>
+
+        Runtime diagnostics:
+          ccb logs <agent>   Tail the current runtime/session log for one agent.
+    """,
+    "open": """
+        usage: ccb open
+
+        UI attach:
+          ccb open   Reattach to the current project's tmux namespace/UI.
+    """,
+    "ps": """
+        usage: ccb ps [--alive]
+
+        Runtime inventory:
+          ccb ps          Show known runtime/session/workspace bindings.
+          ccb ps --alive  Limit output to currently alive runtimes.
+    """,
+    "doctor": """
+        usage: ccb doctor [--bundle] [--output PATH]
+
+        Diagnostics bundle:
+          ccb doctor                  Print project diagnostic summary.
+          ccb doctor --bundle         Export a support bundle to the default path.
+          ccb doctor --output PATH    Export a support bundle to PATH.
+    """,
+    "cancel": """
+        usage: ccb cancel <job_id>
+
+        Job control:
+          ccb cancel <job_id>   Request cancellation for a submitted job.
+    """,
+    "config": """
+        usage: ccb config validate
+
+        Config validation:
+          ccb config validate   Validate `.ccb/ccb.config` for the current project.
+    """,
+}
+
+
 def _build_management_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ccb", description="Claude AI unified launcher", add_help=True)
     subparsers = parser.add_subparsers(dest="command", help="Subcommands")
-
-    kill_parser = subparsers.add_parser("kill", help="Terminate session or clean up zombies")
-    kill_parser.add_argument("providers", nargs="*", default=[], help="Backends to terminate (codex/gemini/opencode/claude/droid)")
-    kill_parser.add_argument("-f", "--force", action="store_true", help="Clean up all zombie tmux sessions globally")
-    kill_parser.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompt (with -f)")
 
     update_parser = subparsers.add_parser("update", help="Update to latest or specified version")
     update_parser.add_argument("target", nargs="?", help="version like '4', '4.1', '4.1.3'")

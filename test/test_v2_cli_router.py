@@ -40,8 +40,7 @@ def test_dispatch_management_command_parses_and_routes() -> None:
         return _handler
 
     result = dispatch_management_command(
-        ["kill", "codex", "claude", "--force", "--yes"],
-        kill_handler=make_handler("kill"),
+        ["update", "5.3.0"],
         update_handler=make_handler("update"),
         version_handler=make_handler("version"),
         uninstall_handler=make_handler("uninstall"),
@@ -51,11 +50,9 @@ def test_dispatch_management_command_parses_and_routes() -> None:
     assert result == 1
     assert len(calls) == 1
     name, args = calls[0]
-    assert name == "kill"
-    assert args.command == "kill"
-    assert args.providers == ["codex", "claude"]
-    assert args.force is True
-    assert args.yes is True
+    assert name == "update"
+    assert args.command == "update"
+    assert args.target == "5.3.0"
 
 
 def test_dispatch_management_command_returns_none_for_non_management() -> None:
@@ -64,7 +61,6 @@ def test_dispatch_management_command_returns_none_for_non_management() -> None:
 
     assert dispatch_management_command(
         ["codex", "claude"],
-        kill_handler=fail,
         update_handler=fail,
         version_handler=fail,
         uninstall_handler=fail,
@@ -137,6 +133,44 @@ def test_run_cli_entrypoint_prints_start_help_for_start_flags() -> None:
     assert result == 0
     assert "usage: ccb [-s] [-n] [agent ...]" in stdout.getvalue()
     assert "Primary workflow:" in stdout.getvalue()
+    assert stderr.getvalue() == ""
+
+
+def test_run_cli_entrypoint_prints_ping_help() -> None:
+    stdout = StringIO()
+    stderr = StringIO()
+
+    result = run_cli_entrypoint(
+        ["ping", "--help"],
+        version="5.2.8",
+        script_root=Path("/tmp/ccb"),
+        cwd=Path("/tmp/project"),
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert result == 0
+    assert "usage: ccb ping <agent|all|ccbd>" in stdout.getvalue()
+    assert "Control-plane health:" in stdout.getvalue()
+    assert stderr.getvalue() == ""
+
+
+def test_run_cli_entrypoint_prints_watch_help_with_project_prefix() -> None:
+    stdout = StringIO()
+    stderr = StringIO()
+
+    result = run_cli_entrypoint(
+        ["--project", "/tmp/demo", "watch", "--help"],
+        version="5.2.8",
+        script_root=Path("/tmp/ccb"),
+        cwd=Path("/tmp/project"),
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert result == 0
+    assert "usage: ccb watch <agent|job_id>" in stdout.getvalue()
+    assert "Live reply stream:" in stdout.getvalue()
     assert stderr.getvalue() == ""
 
 
