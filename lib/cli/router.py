@@ -97,6 +97,7 @@ def print_kill_help(*, file=None) -> None:
 
             Notes:
               - `kill` is project-scoped. It does not bootstrap a missing `.ccb`.
+              - `kill` still works when `.ccb` exists but `ccb.config` is missing or stale.
               - Use `ccb -n` after `ccb kill` when you want to rebuild `.ccb` but keep `ccb.config`.
             """
         ).strip(),

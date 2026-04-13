@@ -185,6 +185,18 @@ def test_phase2_missing_config_with_persisted_state_reports_reset_guidance(tmp_p
     assert 'interactive terminal' in stderr
 
 
+def test_ccb_kill_succeeds_with_persisted_state_without_config(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-kill-missing-config'
+    _write(project_root / '.ccb' / 'agents' / 'demo' / 'runtime.json', '{"agent_name":"demo"}\n')
+
+    result = _run_ccb(['kill'], cwd=project_root)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ''
+    assert 'kill_status: ok' in result.stdout
+    assert 'state: unmounted' in result.stdout
+
+
 def test_phase2_interactive_start_auto_opens_namespace(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-auto-open'
     project_root.mkdir()
@@ -318,6 +330,63 @@ def test_phase2_start_with_new_context_rebuilds_stale_anchor_before_bootstrap(mo
     assert seen['config_text'] == 'cmd, agent1:codex; agent2:codex, agent3:claude\n'
     assert seen['restore'] is False
     assert 'start_status: ok' in stdout.getvalue()
+
+
+def test_phase2_start_with_new_context_rebuilds_after_kill_when_config_missing(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-reset-after-kill'
+    _write(project_root / '.ccb' / 'agents' / 'demo' / 'runtime.json', '{"agent_name":"demo"}\n')
+
+    kill = _run_ccb(['kill'], cwd=project_root)
+    assert kill.returncode == 0, kill.stderr
+    assert 'kill_status: ok' in kill.stdout
+
+    seen: dict[str, object] = {}
+
+    def _fake_start(context, command):
+        seen['config_text'] = (context.project.project_root / '.ccb' / 'ccb.config').read_text(encoding='utf-8')
+        seen['demo_exists'] = (context.project.project_root / '.ccb' / 'agents' / 'demo').exists()
+        seen['restore'] = command.restore
+        return SimpleNamespace(
+            project_root=str(context.project.project_root),
+            project_id=context.project.project_id,
+            started=('agent1', 'agent2', 'agent3'),
+            daemon_started=False,
+            socket_path=str(context.paths.ccbd_socket_path),
+        )
+
+    monkeypatch.setattr(phase2_module, 'start_agents', _fake_start)
+    monkeypatch.setattr(sys, 'stdin', _TtyInput('y\n'))
+
+    stdout = StringIO()
+    stderr = StringIO()
+    code = maybe_handle_phase2(['-n'], cwd=project_root, stdout=stdout, stderr=stderr)
+
+    assert code == 0, stderr.getvalue()
+    assert seen['restore'] is False
+    assert seen['demo_exists'] is False
+    assert seen['config_text'] == 'cmd, agent1:codex; agent2:codex, agent3:claude\n'
+    assert 'start_status: ok' in stdout.getvalue()
+
+
+def test_phase2_start_with_new_context_reports_cleanup_guidance_on_stop_failure(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-reset-stop-failure'
+    _write(project_root / '.ccb' / 'ccb.config', _config_text())
+    monkeypatch.setattr(sys, 'stdin', _TtyInput('y\n'))
+
+    def _fail_reset(project_root_arg: Path, *, context=None):
+        del project_root_arg, context
+        raise RuntimeError('failed to stop project runtime before rebuilding `.ccb`; run `ccb kill -f` and retry')
+
+    monkeypatch.setattr(phase2_module, 'reset_project_state', _fail_reset)
+
+    stdout = StringIO()
+    stderr = StringIO()
+    code = maybe_handle_phase2(['-n'], cwd=project_root, stdout=stdout, stderr=stderr)
+
+    assert code == 1
+    assert 'Refresh project memory/context under' in stdout.getvalue()
+    assert 'command_status: failed' in stderr.getvalue()
+    assert 'ccb kill -f' in stderr.getvalue()
 
 
 def test_phase2_start_blocks_nested_directory_under_parent_anchor(tmp_path: Path) -> None:

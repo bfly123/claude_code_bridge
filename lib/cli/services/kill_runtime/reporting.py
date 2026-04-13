@@ -52,12 +52,12 @@ def record_kill_report(
     runtime_store = AgentRuntimeStore(context.paths)
     manager = MountManager(context.paths)
     guard = OwnershipGuard(context.paths, manager)
-    config = load_project_config(context.project.project_root).config
+    configured_agent_names = _configured_agent_names(context)
     snapshots = tuple(
         snapshot
         for snapshot in (
             snapshot_for_runtime(runtime_store.load_best_effort(agent_name))
-            for agent_name in (*tuple(sorted(config.agents)), *extra_agent_dir_names_fn(context, tuple(config.agents)))
+            for agent_name in (*tuple(sorted(configured_agent_names)), *extra_agent_dir_names_fn(context, configured_agent_names))
         )
         if snapshot is not None
     )
@@ -72,7 +72,7 @@ def record_kill_report(
             trigger=trigger,
             status="ok",
             forced=forced,
-            stopped_agents=tuple(sorted(config.agents)),
+            stopped_agents=tuple(sorted(configured_agent_names)),
             daemon_generation=inspection.generation,
             reason="kill",
             inspection_after=inspection.to_record(),
@@ -94,6 +94,13 @@ def snapshot_for_runtime(runtime) -> CcbdRuntimeSnapshot | None:
         return CcbdRuntimeSnapshot.from_runtime(runtime)
     except Exception:
         return None
+
+
+def _configured_agent_names(context) -> tuple[str, ...]:
+    try:
+        return tuple(load_project_config(context.project.project_root).config.agents)
+    except Exception:
+        return ()
 
 
 __all__ = [

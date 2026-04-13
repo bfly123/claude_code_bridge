@@ -19,10 +19,9 @@ class KillPreparation:
 
 
 def prepare_local_shutdown(context, *, force: bool, collect_agent_pid_candidates_fn) -> KillPreparation:
-    config = load_project_config(context.project.project_root).config
     store = AgentRuntimeStore(context.paths)
     tmux_sockets = collect_candidate_tmux_sockets()
-    configured_agent_names = tuple(config.agents)
+    configured_agent_names = _configured_agent_names(context)
     extra_agent_names = extra_agent_dir_names(context, configured_agent_names)
     pid_candidates: dict[int, list[Path]] = {}
     for agent_name in (*configured_agent_names, *extra_agent_names):
@@ -34,7 +33,7 @@ def prepare_local_shutdown(context, *, force: bool, collect_agent_pid_candidates
             fallback_to_agent_dir=force,
         ).items():
             pid_candidates.setdefault(pid, []).extend(sources)
-        if runtime is None or agent_name not in config.agents:
+        if runtime is None:
             continue
         store.save(_stopped_runtime(runtime))
     return KillPreparation(
@@ -68,6 +67,13 @@ def extra_agent_dir_names(context, configured_agent_names: tuple[str, ...]) -> t
                 continue
             names.append(child.name)
     return tuple(names)
+
+
+def _configured_agent_names(context) -> tuple[str, ...]:
+    try:
+        return tuple(load_project_config(context.project.project_root).config.agents)
+    except Exception:
+        return ()
 
 
 def _capture_runtime_tmux_socket(tmux_sockets: set[str | None], runtime) -> None:

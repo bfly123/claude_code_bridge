@@ -218,6 +218,8 @@ def test_kill_project_remote_stop_all_still_runs_local_cleanup(tmp_path: Path, m
             ),
         ),
     )
+    monkeypatch.delenv('TMUX', raising=False)
+    monkeypatch.delenv('CCB_TMUX_SOCKET', raising=False)
     monkeypatch.setattr('cli.services.kill.set_tmux_ui_active', lambda active: None)
     monkeypatch.setattr('cli.services.kill.ProjectNamespaceController', _namespace_controller(destroyed=True))
 
