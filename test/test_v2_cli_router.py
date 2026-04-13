@@ -69,8 +69,7 @@ def test_dispatch_management_command_returns_none_for_non_management() -> None:
 
 
 def test_parse_start_args_defaults_resume_and_auto_and_supports_new_context() -> None:
-    args = parse_start_args(["codex", "claude", "-n", "-s"])
-    assert args.providers == ["codex", "claude"]
+    args = parse_start_args(["-n", "-s"])
     assert args.resume is True
     assert args.auto is True
     assert args.new_context is True
@@ -91,9 +90,9 @@ def test_run_cli_entrypoint_prints_start_help_without_phase2() -> None:
     )
 
     assert result == 0
-    assert "usage: ccb [-s] [-n] [agent ...]" in stdout.getvalue()
+    assert "usage: ccb [-s] [-n]" in stdout.getvalue()
     assert "Primary workflow:" in stdout.getvalue()
-    assert "ccb -s [agent ...]" in stdout.getvalue()
+    assert "ccb -s" in stdout.getvalue()
     assert "Model control plane:" in stdout.getvalue()
     assert stderr.getvalue() == ""
 
@@ -131,7 +130,7 @@ def test_run_cli_entrypoint_prints_start_help_for_start_flags() -> None:
     )
 
     assert result == 0
-    assert "usage: ccb [-s] [-n] [agent ...]" in stdout.getvalue()
+    assert "usage: ccb [-s] [-n]" in stdout.getvalue()
     assert "Primary workflow:" in stdout.getvalue()
     assert stderr.getvalue() == ""
 

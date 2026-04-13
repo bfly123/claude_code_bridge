@@ -70,9 +70,9 @@ def connect_mounted_daemon(
     ):
         return ensure_daemon_started_fn(context)
     if inspection.health is LeaseHealth.UNMOUNTED:
-        raise CcbdServiceError('project ccbd is unmounted; run `ccb [agents...]` first')
+        raise CcbdServiceError('project ccbd is unmounted; run `ccb` first')
     if inspection.health is LeaseHealth.MISSING:
-        raise CcbdServiceError('project ccbd is not mounted; run `ccb [agents...]` first')
+        raise CcbdServiceError('project ccbd is not mounted; run `ccb` first')
     if inspection.socket_connectable:
         handle = connect_compatible_daemon_fn(context, inspection, restart_on_mismatch=False)
         if handle is not None:

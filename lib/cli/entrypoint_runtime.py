@@ -81,7 +81,7 @@ def _handle_help(tokens: list[str], *, stdout: TextIO) -> int | None:
 def _handle_removed_commands(tokens: list[str], *, stderr: TextIO) -> int | None:
     if tokens and tokens[0] == "up":
         print("❌ `ccb up` is no longer supported.", file=stderr)
-        print("💡 Use: ccb [agents...]  (configured by .ccb/ccb.config)", file=stderr)
+        print("💡 Use: ccb  (agents are configured by .ccb/ccb.config)", file=stderr)
         return 2
 
     if tokens and tokens[0] in {"mail", "provider"}:

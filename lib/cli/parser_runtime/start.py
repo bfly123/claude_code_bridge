@@ -20,17 +20,24 @@ def parse_global_options(tokens: list[str], *, error_type) -> tuple[str | None, 
 
 def parse_start(tokens: list[str], *, project: str | None, error_type) -> ParsedStartCommand:
     parser = argparse.ArgumentParser(prog='ccb', add_help=False)
-    parser.add_argument('agent_names', nargs='*')
     parser.add_argument('-r', '--restore', action='store_true')
     parser.add_argument('-a', '--auto', action='store_true')
     parser.add_argument('-s', '--safe', action='store_true')
     parser.add_argument('-n', '--new-context', dest='reset_context', action='store_true')
-    namespace = parse_args(parser, tokens, error_message='invalid start command', error_type=error_type)
+    try:
+        namespace, extra = parser.parse_known_args(tokens)
+    except SystemExit as exc:
+        raise error_type('invalid start command') from exc
+    if extra:
+        raise error_type(
+            'start does not accept agent names or extra arguments; '
+            'configure startup agents in `.ccb/ccb.config` and run `ccb`'
+        )
     if namespace.auto and namespace.safe:
         raise error_type('cannot combine -a/--auto with -s/--safe')
     return ParsedStartCommand(
         project=project,
-        agent_names=tuple(namespace.agent_names),
+        agent_names=(),
         restore=not bool(namespace.reset_context),
         auto_permission=not bool(namespace.safe),
         reset_context=bool(namespace.reset_context),

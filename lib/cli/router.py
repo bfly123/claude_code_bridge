@@ -56,12 +56,12 @@ def print_start_help(*, file=None) -> None:
     print(
         dedent(
             """
-            usage: ccb [-s] [-n] [agent ...]
+            usage: ccb [-s] [-n]
 
             Primary workflow:
-              ccb [agent ...]      Start project agents with restore + auto permissions.
-              ccb -s [agent ...]   Safe start. Disable CLI auto-permission override.
-              ccb -n [agent ...]   Rebuild .ccb except ccb.config, then start fresh.
+              ccb                  Start project agents from `.ccb/ccb.config`.
+              ccb -s               Safe start. Disable CLI auto-permission override.
+              ccb -n               Rebuild .ccb except ccb.config, then start fresh.
               ccb kill             Stop the current project's background runtime.
               ccb kill -f          Force cleanup project-owned runtime residue.
 
@@ -197,12 +197,6 @@ def build_start_parser() -> argparse.ArgumentParser:
         prog="ccb",
         description="Claude AI unified launcher",
         add_help=False,
-    )
-    start_parser.add_argument(
-        "providers",
-        nargs="*",
-        metavar="agent",
-        help=argparse.SUPPRESS,
     )
     start_parser.add_argument("-r", "--resume", "--restore", action="store_true", default=True, help=argparse.SUPPRESS)
     start_parser.add_argument("-a", "--auto", action="store_true", default=True, help=argparse.SUPPRESS)

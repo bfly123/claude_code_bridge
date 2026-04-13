@@ -104,8 +104,8 @@ agent1:codex, agent2:claude, reviewer:gemini, agent4:codex, cmd
 
 ```bash
 ccb
-ccb agent1 agent2
-ccb agent1 -r -a
+ccb -s
+ccb -n
 ccb ask agent1 from agent2 "请继续实现剩余部分"
 ccb ask all from user "准备进入统一测试"
 ccb ping agent1
@@ -271,10 +271,10 @@ ccb kill
 
 ### 4.2 启动层
 
-- `ccb agent1 agent2` 能按名字启动或附着
+- `ccb` 能按 `.ccb/ccb.config` 启动或附着目标 agent
 - 同时启动多个同类 provider 不冲突
 - tmux / WezTerm pane 标题按 `name` 展示
-- `-r` / `-a` 是针对目标 agent 集合生效，而不是针对 provider 类型
+- `ccb` 默认包含 restore + auto-permission，`ccb -s` 关闭 CLI auto-permission override
 
 ### 4.3 通信层
 
@@ -525,11 +525,8 @@ ccb kill
 ### 8.2 启动与附着测试
 
 - `ccb`
-- `ccb agent1`
-- `ccb agent1 agent2`
-- `ccb agent1 -r`
-- `ccb agent1 -a`
-- `ccb agent1 agent2 -r -a`
+- `ccb -s`
+- `ccb -n`
 
 ### 8.3 通信测试
 

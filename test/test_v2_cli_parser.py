@@ -41,11 +41,11 @@ def test_parse_start_defaults(parser: CliParser) -> None:
     assert parsed == ParsedStartCommand(project=None, agent_names=(), restore=True, auto_permission=True)
 
 
-def test_parse_start_with_agents_flags_and_project(parser: CliParser) -> None:
-    parsed = parser.parse(['--project', '/tmp/demo', 'agent1', 'agent2', '-r', '-a'])
+def test_parse_start_with_project_and_flags(parser: CliParser) -> None:
+    parsed = parser.parse(['--project', '/tmp/demo', '-r', '-a'])
     assert parsed == ParsedStartCommand(
         project='/tmp/demo',
-        agent_names=('agent1', 'agent2'),
+        agent_names=(),
         restore=True,
         auto_permission=True,
     )
@@ -57,20 +57,20 @@ def test_parse_start_with_flags_only(parser: CliParser) -> None:
 
 
 def test_parse_start_with_safe_flag(parser: CliParser) -> None:
-    parsed = parser.parse(['-s', 'agent1'])
+    parsed = parser.parse(['-s'])
     assert parsed == ParsedStartCommand(
         project=None,
-        agent_names=('agent1',),
+        agent_names=(),
         restore=True,
         auto_permission=False,
     )
 
 
 def test_parse_start_with_new_context_flag(parser: CliParser) -> None:
-    parsed = parser.parse(['agent1', '-n'])
+    parsed = parser.parse(['-n'])
     assert parsed == ParsedStartCommand(
         project=None,
-        agent_names=('agent1',),
+        agent_names=(),
         restore=False,
         auto_permission=True,
         reset_context=True,
@@ -78,10 +78,10 @@ def test_parse_start_with_new_context_flag(parser: CliParser) -> None:
 
 
 def test_parse_start_with_new_context_and_safe_flag(parser: CliParser) -> None:
-    parsed = parser.parse(['agent1', '-n', '-s'])
+    parsed = parser.parse(['-n', '-s'])
     assert parsed == ParsedStartCommand(
         project=None,
-        agent_names=('agent1',),
+        agent_names=(),
         restore=False,
         auto_permission=False,
         reset_context=True,
@@ -91,6 +91,11 @@ def test_parse_start_with_new_context_and_safe_flag(parser: CliParser) -> None:
 def test_parse_start_rejects_auto_and_safe_together(parser: CliParser) -> None:
     with pytest.raises(CliUsageError):
         parser.parse(['-a', '-s'])
+
+
+def test_parse_start_rejects_manual_agent_selection(parser: CliParser) -> None:
+    with pytest.raises(CliUsageError, match='configure startup agents in `.ccb/ccb.config`'):
+        parser.parse(['agent1'])
 
 
 def test_parse_ask_simple(parser: CliParser) -> None:
