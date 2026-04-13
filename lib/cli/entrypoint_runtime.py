@@ -7,7 +7,8 @@ from cli.ask_usage import write_ask_usage
 from cli.auxiliary import cmd_droid_subcommand
 from cli.management import cmd_reinstall, cmd_uninstall, cmd_update, cmd_version
 from cli.phase2 import maybe_handle_phase2
-from cli.router import dispatch_auxiliary_command, dispatch_management_command, print_start_help
+from cli.parser_runtime.constants import SUBCOMMANDS
+from cli.router import dispatch_auxiliary_command, dispatch_management_command, print_kill_help, print_start_help
 
 
 def _should_print_version(tokens: list[str]) -> bool:
@@ -18,8 +19,18 @@ def _is_ask_help(tokens: list[str]) -> bool:
     return len(tokens) >= 2 and tokens[0] == "ask" and tokens[1] in {"-h", "--help", "help"}
 
 
-def _is_help(tokens: list[str]) -> bool:
-    return bool(tokens and tokens[0] in {"-h", "--help", "help"})
+def _is_kill_help(tokens: list[str]) -> bool:
+    return len(tokens) >= 2 and tokens[0] == "kill" and tokens[1] in {"-h", "--help", "help"}
+
+
+def _is_start_help(tokens: list[str]) -> bool:
+    if not tokens:
+        return False
+    if tokens[0] in {"-h", "--help", "help"}:
+        return True
+    if tokens[0] in SUBCOMMANDS or tokens[0] in {"version", "update", "uninstall", "reinstall", "droid", "mail", "provider", "up"}:
+        return False
+    return any(token in {"-h", "--help", "help"} for token in tokens)
 
 
 def _rewrite_version_alias(tokens: list[str]) -> list[str]:
@@ -38,7 +49,10 @@ def _handle_help(tokens: list[str], *, stdout: TextIO) -> int | None:
     if _is_ask_help(tokens):
         write_ask_usage(stdout, command_name="ccb ask")
         return 0
-    if _is_help(tokens):
+    if _is_kill_help(tokens):
+        print_kill_help(file=stdout)
+        return 0
+    if _is_start_help(tokens):
         print_start_help(file=stdout)
         return 0
     return None

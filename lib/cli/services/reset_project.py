@@ -72,6 +72,7 @@ def _build_reset_context(project_root: Path) -> CliContext:
 
 
 def _stop_project_runtime(context: CliContext) -> None:
+    cleanup_errors: list[str] = []
     try:
         kill_project(
             context,
@@ -80,24 +81,36 @@ def _stop_project_runtime(context: CliContext) -> None:
                 force=True,
             ),
         )
+        set_tmux_ui_active(False)
         return
-    except Exception:
-        pass
+    except Exception as exc:
+        cleanup_errors.append(f'kill_project: {exc}')
 
+    daemon_stopped = False
     try:
         shutdown_daemon(context, force=True)
-    except Exception:
-        pass
+        daemon_stopped = True
+    except Exception as exc:
+        cleanup_errors.append(f'shutdown_daemon: {exc}')
 
+    namespace_destroyed = False
     try:
         ProjectNamespaceController(context.paths, context.project.project_id).destroy(
             reason='reset',
             force=True,
         )
-    except Exception:
-        pass
+        namespace_destroyed = True
+    except Exception as exc:
+        cleanup_errors.append(f'namespace_destroy: {exc}')
 
     set_tmux_ui_active(False)
+    if daemon_stopped or namespace_destroyed:
+        return
+    details = '; '.join(cleanup_errors) if cleanup_errors else 'unknown cleanup failure'
+    raise RuntimeError(
+        'failed to stop project runtime before rebuilding `.ccb`; '
+        f'{details}. Run `ccb kill -f` from the project root and retry `ccb -n`.'
+    )
 
 
 def _clear_anchor(ccb_dir: Path) -> None:

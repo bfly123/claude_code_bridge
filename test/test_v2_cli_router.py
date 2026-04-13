@@ -73,11 +73,12 @@ def test_dispatch_management_command_returns_none_for_non_management() -> None:
 
 
 def test_parse_start_args_defaults_resume_and_auto_and_supports_new_context() -> None:
-    args = parse_start_args(["codex", "claude", "-n"])
+    args = parse_start_args(["codex", "claude", "-n", "-s"])
     assert args.providers == ["codex", "claude"]
     assert args.resume is True
     assert args.auto is True
     assert args.new_context is True
+    assert args.safe is True
 
 
 def test_run_cli_entrypoint_prints_start_help_without_phase2() -> None:
@@ -94,8 +95,48 @@ def test_run_cli_entrypoint_prints_start_help_without_phase2() -> None:
     )
 
     assert result == 0
-    assert "usage: ccb" in stdout.getvalue()
-    assert "Other commands:" in stdout.getvalue()
+    assert "usage: ccb [-s] [-n] [agent ...]" in stdout.getvalue()
+    assert "Primary workflow:" in stdout.getvalue()
+    assert "ccb -s [agent ...]" in stdout.getvalue()
+    assert "Model control plane:" in stdout.getvalue()
+    assert stderr.getvalue() == ""
+
+
+def test_run_cli_entrypoint_prints_kill_help() -> None:
+    stdout = StringIO()
+    stderr = StringIO()
+
+    result = run_cli_entrypoint(
+        ["kill", "--help"],
+        version="5.2.8",
+        script_root=Path("/tmp/ccb"),
+        cwd=Path("/tmp/project"),
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert result == 0
+    assert "usage: ccb kill [-f]" in stdout.getvalue()
+    assert "Project runtime cleanup:" in stdout.getvalue()
+    assert stderr.getvalue() == ""
+
+
+def test_run_cli_entrypoint_prints_start_help_for_start_flags() -> None:
+    stdout = StringIO()
+    stderr = StringIO()
+
+    result = run_cli_entrypoint(
+        ["-s", "--help"],
+        version="5.2.8",
+        script_root=Path("/tmp/ccb"),
+        cwd=Path("/tmp/project"),
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert result == 0
+    assert "usage: ccb [-s] [-n] [agent ...]" in stdout.getvalue()
+    assert "Primary workflow:" in stdout.getvalue()
     assert stderr.getvalue() == ""
 
 

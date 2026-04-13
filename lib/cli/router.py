@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Sequence
+from textwrap import dedent
 
 
 AuxiliaryHandler = Callable[[Sequence[str]], int]
@@ -55,7 +56,55 @@ def parse_start_args(argv: Sequence[str]) -> argparse.Namespace:
 
 
 def print_start_help(*, file=None) -> None:
-    build_start_parser().print_help(file=file)
+    print(
+        dedent(
+            """
+            usage: ccb [-s] [-n] [agent ...]
+
+            Primary workflow:
+              ccb [agent ...]      Start project agents with restore + auto permissions.
+              ccb -s [agent ...]   Safe start. Disable CLI auto-permission override.
+              ccb -n [agent ...]   Rebuild .ccb except ccb.config, then start fresh.
+              ccb kill             Stop the current project's background runtime.
+              ccb kill -f          Force cleanup project-owned runtime residue.
+
+            Model control plane:
+              ccb ask <agent> [from <sender>] <message>
+              ccb ping <agent|ccbd>
+              ccb pend <agent|job_id> [N]
+              ccb watch <agent|job_id>
+
+            Advanced diagnostics:
+              ccb open | ccb ps | ccb logs <agent> | ccb doctor
+              ccb version | ccb update | ccb uninstall | ccb reinstall
+
+            Notes:
+              - `ccb` already includes the old auto + restore path.
+              - `ccb -s` matches the old non-`-a` behavior.
+              - Legacy `-a` / `-r` are still accepted for compatibility but hidden from user help.
+            """
+        ).strip(),
+        file=file,
+    )
+
+
+def print_kill_help(*, file=None) -> None:
+    print(
+        dedent(
+            """
+            usage: ccb kill [-f]
+
+            Project runtime cleanup:
+              ccb kill     Stop the current project's ccbd, agents, and tmux namespace.
+              ccb kill -f  Force cleanup project-owned runtime residue before `ccb -n`.
+
+            Notes:
+              - `kill` is project-scoped. It does not bootstrap a missing `.ccb`.
+              - Use `ccb -n` after `ccb kill` when you want to rebuild `.ccb` but keep `ccb.config`.
+            """
+        ).strip(),
+        file=file,
+    )
 
 
 def _build_management_parser() -> argparse.ArgumentParser:
@@ -80,27 +129,22 @@ def build_start_parser() -> argparse.ArgumentParser:
     start_parser = argparse.ArgumentParser(
         prog="ccb",
         description="Claude AI unified launcher",
-        add_help=True,
-        epilog=(
-            "Interactive terminals auto-open the project UI after start. "
-            "Use `ccb open` to reattach later. "
-            "Other commands: ccb update | ccb version | ccb kill | ccb uninstall | "
-            "ccb reinstall | ccb droid setup-delegation | ccb ping | ccb pend"
-        ),
+        add_help=False,
     )
     start_parser.add_argument(
         "providers",
         nargs="*",
         metavar="agent",
-        help="Named agents to start (space separated), resolved from .ccb/ccb.config",
+        help=argparse.SUPPRESS,
     )
-    start_parser.add_argument("-r", "--resume", "--restore", action="store_true", default=True, help="Resume context (default on)")
-    start_parser.add_argument("-a", "--auto", action="store_true", default=True, help="Full auto permission mode (default on)")
+    start_parser.add_argument("-r", "--resume", "--restore", action="store_true", default=True, help=argparse.SUPPRESS)
+    start_parser.add_argument("-a", "--auto", action="store_true", default=True, help=argparse.SUPPRESS)
+    start_parser.add_argument("-s", "--safe", action="store_true", default=False, help=argparse.SUPPRESS)
     start_parser.add_argument(
         "-n",
         "--new-context",
         dest="new_context",
         action="store_true",
-        help="Rebuild all project-owned .ccb state except ccb.config, then start fresh with confirmation",
+        help=argparse.SUPPRESS,
     )
     return start_parser
