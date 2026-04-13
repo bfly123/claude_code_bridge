@@ -33,7 +33,9 @@ def ensure_bootstrap_project_config(project_root: Path) -> Path:
         sample = ', '.join(str(item) for item in blockers[:3])
         raise ConfigValidationError(
             f'{config_path}: missing config for existing .ccb anchor with persisted state '
-            f'({sample}); restore .ccb/{CONFIG_FILENAME} or remove stale .ccb contents before reinitializing'
+            f'({sample}); restore .ccb/{CONFIG_FILENAME} to keep the previous layout, '
+            'or run `ccb -n` from the project root in an interactive terminal '
+            'to discard stale project state and rebuild .ccb'
         )
     return ensure_default_project_config(project_root)
 

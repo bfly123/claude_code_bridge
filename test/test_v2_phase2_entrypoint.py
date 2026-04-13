@@ -157,6 +157,34 @@ def test_phase2_start_bootstraps_missing_project_and_default_config(monkeypatch,
     assert 'agents: codex, claude' in stdout
 
 
+def test_ccb_kill_without_anchor_is_noop_and_does_not_bootstrap(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-kill-no-anchor'
+    project_root.mkdir()
+
+    result = _run_ccb(['kill', '-f'], cwd=project_root)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ''
+    assert 'kill_status: ok' in result.stdout
+    assert 'state: unmounted' in result.stdout
+    assert 'forced: true' in result.stdout
+    assert not (project_root / '.ccb').exists()
+
+
+def test_phase2_missing_config_with_persisted_state_reports_reset_guidance(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-missing-config-guidance'
+    _write(project_root / '.ccb' / 'agents' / 'demo' / 'runtime.json', '{"agent_name":"demo"}\n')
+
+    code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+
+    assert code == 1
+    assert stdout == ''
+    assert 'missing config for existing .ccb anchor with persisted state' in stderr
+    assert 'restore .ccb/ccb.config' in stderr
+    assert 'ccb -n' in stderr
+    assert 'interactive terminal' in stderr
+
+
 def test_phase2_interactive_start_auto_opens_namespace(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-auto-open'
     project_root.mkdir()

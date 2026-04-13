@@ -12,6 +12,7 @@ from cli.phase2_runtime import (
     confirm_project_reset as _confirm_project_reset_impl,
     dispatch as _dispatch_impl,
     looks_like_config_validate as _looks_like_config_validate_impl,
+    resolve_requested_project_root as _resolve_requested_project_root_impl,
     should_auto_open_after_start as _should_auto_open_after_start_impl,
     stream_is_tty as _stream_is_tty_impl,
 )
@@ -24,6 +25,7 @@ from cli.services.doctor import doctor_summary
 from cli.services.diagnostics import export_diagnostic_bundle
 from cli.services.fault import arm_fault_rule, clear_fault_rule, list_fault_rules
 from cli.services.inbox import inbox_target
+from cli.services.daemon import KillSummary
 from cli.services.kill import kill_project
 from cli.services.logs import agent_logs
 from cli.services.open import open_project
@@ -39,6 +41,8 @@ from cli.services.trace import trace_target
 from cli.services.wait import wait_for_replies
 from cli.services.watch import watch_target
 from project.discovery import ProjectDiscoveryError
+from project.ids import compute_project_id
+from storage.paths import PathLayout
 
 
 def maybe_handle_phase2(
@@ -56,12 +60,43 @@ def maybe_handle_phase2(
         return 2
 
     try:
-        context = _build_context(command, cwd=cwd, out=out)
-        if command.kind != 'config-validate':
+        try:
+            context = _build_context(command, cwd=cwd, out=out)
+        except ProjectDiscoveryError:
+            if command.kind == 'kill':
+                return _render_kill_without_anchor(command, cwd=cwd, out=out)
+            raise
+        if _command_requires_bootstrap_config(command):
             ensure_bootstrap_project_config(context.project.project_root)
         return _dispatch(context, command, out)
     except Exception as exc:
         return handle_phase2_exception(err, command_kind=command.kind, exc=exc)
+
+
+def _command_requires_bootstrap_config(command) -> bool:
+    kind = getattr(command, 'kind', None)
+    return kind not in {'config-validate', 'kill'}
+
+
+def _render_kill_without_anchor(command, *, cwd: Path | None, out: TextIO) -> int:
+    current = Path(cwd or Path.cwd()).expanduser()
+    try:
+        current = current.resolve()
+    except Exception:
+        current = current.absolute()
+    project_root = _resolve_requested_project_root_impl(
+        command,
+        cwd=current,
+        project_discovery_error_cls=ProjectDiscoveryError,
+    )
+    summary = KillSummary(
+        project_id=compute_project_id(project_root),
+        state='unmounted',
+        socket_path=str(PathLayout(project_root).ccbd_socket_path),
+        forced=bool(getattr(command, 'force', False)),
+    )
+    write_lines(out, render_kill(summary))
+    return 0
 
 
 def _build_context(command, *, cwd: Path | None, out: TextIO):

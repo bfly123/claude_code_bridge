@@ -17,7 +17,7 @@ def build_context(command, *, cwd: Path | None, out, builder_cls, reset_project_
     return builder_cls().build(
         command,
         cwd=cwd,
-        bootstrap_if_missing=command.kind != 'config-validate',
+        bootstrap_if_missing=should_bootstrap_if_missing(command),
     )
 
 
@@ -83,6 +83,11 @@ def resolve_requested_project_root(command, *, cwd: Path, project_discovery_erro
     return root
 
 
+def should_bootstrap_if_missing(command) -> bool:
+    kind = getattr(command, 'kind', None)
+    return kind not in {'config-validate', 'kill'}
+
+
 def confirm_project_reset(project_root: Path, *, out, stdin, stream_is_tty_fn) -> None:
     if not stream_is_tty_fn(stdin):
         raise RuntimeError('ccb -n requires interactive confirmation on stdin')
@@ -103,4 +108,5 @@ __all__ = [
     'confirm_project_reset',
     'resolve_existing_context',
     'resolve_requested_project_root',
+    'should_bootstrap_if_missing',
 ]
