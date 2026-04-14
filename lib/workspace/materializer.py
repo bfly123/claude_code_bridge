@@ -6,6 +6,7 @@ import shutil
 import subprocess
 
 from agents.models import WorkspaceMode
+from workspace.git_worktree import can_use_git_worktree, has_missing_registered_worktree, prune_missing_worktrees_under
 from workspace.models import WorkspacePlan
 
 _COPY_IGNORE_PATTERNS = shutil.ignore_patterns('.git', '.ccb', '__pycache__', '.pytest_cache')
@@ -41,7 +42,7 @@ class WorkspaceMaterializer:
     def _materialize_git_worktree(self, plan: WorkspacePlan) -> MaterializationResult:
         if plan.branch_name is None:
             raise ValueError('git-worktree workspace requires branch_name')
-        if not self._can_use_git_worktree(plan.project_root):
+        if not can_use_git_worktree(plan.project_root):
             return self._materialize_copy(plan)
 
         if self._is_existing_git_workspace(plan.workspace_path):
@@ -55,19 +56,34 @@ class WorkspaceMaterializer:
 
         self._prune_stale_worktree_registration(plan)
         plan.workspace_path.parent.mkdir(parents=True, exist_ok=True)
+        if has_missing_registered_worktree(plan.project_root, plan.workspace_path):
+            prune_missing_worktrees_under(plan.project_root, plan.workspace_path.parent)
+
+        try:
+            self._run(self._git_worktree_add_args(plan), error=f'failed to materialize git worktree for {plan.agent_name}')
+        except RuntimeError:
+            self._prune_stale_worktree_registration(plan)
+            if not has_missing_registered_worktree(plan.project_root, plan.workspace_path):
+                raise
+            prune_missing_worktrees_under(plan.project_root, plan.workspace_path.parent)
+            self._run(
+                self._git_worktree_add_args(plan, force=True),
+                error=f'failed to materialize git worktree for {plan.agent_name}',
+            )
+        self._validate_existing_git_workspace(plan)
+        return MaterializationResult(workspace_path=plan.workspace_path, created=True, mode=plan.workspace_mode.value)
+
+    def _git_worktree_add_args(self, plan: WorkspacePlan, *, force: bool = False) -> list[str]:
+        assert plan.branch_name is not None
         branch_exists = self._branch_exists(plan.project_root, plan.branch_name)
         args = ['git', '-C', str(plan.project_root), 'worktree', 'add']
+        if force:
+            args.append('-f')
         if branch_exists:
             args.extend([str(plan.workspace_path), plan.branch_name])
         else:
             args.extend(['-b', plan.branch_name, str(plan.workspace_path), 'HEAD'])
-        try:
-            self._run(args, error=f'failed to materialize git worktree for {plan.agent_name}')
-        except RuntimeError:
-            self._prune_stale_worktree_registration(plan)
-            self._run(args, error=f'failed to materialize git worktree for {plan.agent_name}')
-        self._validate_existing_git_workspace(plan)
-        return MaterializationResult(workspace_path=plan.workspace_path, created=True, mode=plan.workspace_mode.value)
+        return args
 
     def _prune_stale_worktree_registration(self, plan: WorkspacePlan) -> None:
         if plan.workspace_path.exists():
@@ -151,16 +167,6 @@ class WorkspaceMaterializer:
     def _branch_exists(self, repo_root: Path, branch_name: str) -> bool:
         result = subprocess.run(
             ['git', '-C', str(repo_root), 'show-ref', '--verify', '--quiet', f'refs/heads/{branch_name}'],
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        return result.returncode == 0
-
-    def _can_use_git_worktree(self, repo_root: Path) -> bool:
-        result = subprocess.run(
-            ['git', '-C', str(repo_root), 'rev-parse', '--show-toplevel'],
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

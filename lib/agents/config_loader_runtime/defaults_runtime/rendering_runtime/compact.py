@@ -23,7 +23,7 @@ def is_compact_agent_compatible(spec) -> bool:
 def core_agent_defaults_match(spec) -> bool:
     return (
         spec.target == '.'
-        and spec.workspace_mode is WorkspaceMode.GIT_WORKTREE
+        and spec.workspace_mode in {WorkspaceMode.INPLACE, WorkspaceMode.GIT_WORKTREE}
         and spec.workspace_root is None
         and spec.runtime_mode is RuntimeMode.PANE_BACKED
         and spec.restore_default is RestoreMode.AUTO

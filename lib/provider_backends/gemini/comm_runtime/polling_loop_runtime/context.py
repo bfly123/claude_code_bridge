@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..polling_detection import hash_content
-from ..session_content import extract_last_gemini
+from ..session_content import last_gemini_details
 from ..state import state_payload
 
 
@@ -20,6 +20,8 @@ class GeminiPollingCursor:
     prev_session: str | None
     prev_last_gemini_id: str | None
     prev_last_gemini_hash: str | None
+    prev_last_tool_call_count: int
+    prev_last_thought_count: int
     rescan_interval: float
     last_rescan: float
     last_forced_read: float
@@ -43,6 +45,8 @@ def build_cursor(state: dict[str, object], *, timeout: float) -> GeminiPollingCu
         prev_session=state.get("session_path"),
         prev_last_gemini_id=state.get("last_gemini_id"),
         prev_last_gemini_hash=state.get("last_gemini_hash"),
+        prev_last_tool_call_count=int(state.get("last_tool_call_count", 0) or 0),
+        prev_last_thought_count=int(state.get("last_thought_count", 0) or 0),
         rescan_interval=min(2.0, max(0.2, timeout / 2.0)),
         last_rescan=now,
         last_forced_read=now,
@@ -58,6 +62,8 @@ def reset_for_session_switch(cursor: GeminiPollingCursor, *, session: Path) -> N
     cursor.prev_size = 0
     cursor.prev_last_gemini_id = None
     cursor.prev_last_gemini_hash = None
+    cursor.prev_last_tool_call_count = 0
+    cursor.prev_last_thought_count = 0
     cursor.prev_session = str(session)
 
 
@@ -78,10 +84,13 @@ def update_from_values(
 
 
 def update_last_gemini(cursor: GeminiPollingCursor, data: dict[str, object]) -> None:
-    last = extract_last_gemini(data)
-    if not last:
+    details = last_gemini_details(data)
+    if not details:
         return
-    cursor.prev_last_gemini_id, content = last
+    cursor.prev_last_gemini_id = details["id"]
+    cursor.prev_last_tool_call_count = int(details["tool_call_count"] or 0)
+    cursor.prev_last_thought_count = int(details["thought_count"] or 0)
+    content = str(details["content"] or "")
     if content:
         cursor.prev_last_gemini_hash = hash_content(content)
 
@@ -95,6 +104,8 @@ def current_state_payload(cursor: GeminiPollingCursor, *, session: Path | None) 
         size=cursor.prev_size,
         last_gemini_id=cursor.prev_last_gemini_id,
         last_gemini_hash=cursor.prev_last_gemini_hash,
+        last_tool_call_count=cursor.prev_last_tool_call_count,
+        last_thought_count=cursor.prev_last_thought_count,
     )
 
 

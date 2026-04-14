@@ -32,6 +32,12 @@ class AnchoredSessionStabilityDetector(BaseCompletionDetector):
             return
 
         if item.kind in {CompletionItemKind.SESSION_SNAPSHOT, CompletionItemKind.SESSION_MUTATION}:
+            raw_tool_calls = item.payload.get('tool_call_count')
+            if raw_tool_calls is not None:
+                try:
+                    self._state.tool_active = int(raw_tool_calls) > 0
+                except Exception:
+                    self._state.tool_active = bool(raw_tool_calls)
             reply = first_non_empty(item.payload, 'reply', 'content', 'text')
             if reply:
                 fingerprint = fingerprint_text(
@@ -71,6 +77,9 @@ class AnchoredSessionStabilityDetector(BaseCompletionDetector):
         if self._decision.terminal:
             return
         if not self._state.reply_started or self._state.stable_since is None:
+            return
+        if self._state.tool_active:
+            self._set_pending()
             return
         if seconds_between(self._state.stable_since, now) >= self._settle_window_s:
             self._state.reply_stable = True

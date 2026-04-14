@@ -13,6 +13,8 @@ from ccbd.services.project_namespace import ProjectNamespaceController
 from project.ids import compute_project_id
 from project.resolver import ProjectContext
 from storage.paths import PathLayout
+from workspace.git_worktree import unregister_worktrees_under
+from workspace.reconcile import format_workspace_blockers, prepare_reset_workspaces
 
 
 @dataclass(frozen=True)
@@ -32,7 +34,12 @@ def reset_project_state(project_root: Path, *, context: CliContext | None = None
 
     if layout.ccb_dir.exists():
         reset_performed = True
+        preflight = prepare_reset_workspaces(root, apply=False)
+        if preflight.blockers:
+            raise RuntimeError(format_workspace_blockers('ccb -n', preflight.blockers))
         _stop_project_runtime(context or _build_reset_context(root))
+        prepare_reset_workspaces(root, apply=True)
+        _unregister_project_worktrees(root, layout)
         _clear_anchor(layout.ccb_dir)
         if preserved_config_text is not None:
             layout.ccb_dir.mkdir(parents=True, exist_ok=True)
@@ -119,6 +126,10 @@ def _clear_anchor(ccb_dir: Path) -> None:
         return
     if ccb_dir.is_dir():
         shutil.rmtree(ccb_dir)
+
+
+def _unregister_project_worktrees(project_root: Path, layout: PathLayout) -> None:
+    unregister_worktrees_under(project_root, layout.workspaces_dir)
 
 
 def _read_optional_text(path: Path) -> str | None:

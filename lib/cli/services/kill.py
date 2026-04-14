@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from ccbd.services.project_namespace import ProjectNamespaceController
 from ccbd.services.start_policy import CcbdStartPolicyStore
 from ccbd.system import utc_now
@@ -39,6 +40,8 @@ from .daemon import CcbdServiceError, KillSummary, connect_mounted_daemon, inspe
 from .tmux_cleanup_history import TmuxCleanupEvent, TmuxCleanupHistoryStore
 from .tmux_project_cleanup import ProjectTmuxCleanupSummary, cleanup_project_tmux_orphans_by_socket
 from .tmux_ui import set_tmux_ui_active
+from workspace.git_worktree import prune_missing_worktrees_under
+from workspace.reconcile import inspect_kill_worktrees
 
 _STOP_ALL_TIMEOUT_S = 12.0
 
@@ -48,13 +51,22 @@ def kill_project(context: CliContext, command: ParsedKillCommand):
     preparation = _prepare_local_shutdown(context, force=command.force)
     _destroy_project_namespace(context, force=command.force)
     summary = _resolve_shutdown_summary(context, remote_summary=remote_summary, force=command.force)
-    return _finalize_kill(
+    final_summary = _finalize_kill(
         context,
         force=command.force,
         preparation=preparation,
         remote_summary=remote_summary,
         summary=summary,
     )
+    if command.force:
+        try:
+            prune_missing_worktrees_under(context.project.project_root, context.paths.workspaces_dir)
+        except Exception:
+            pass
+    guard_summary = inspect_kill_worktrees(context.project.project_root)
+    if not guard_summary.warnings:
+        return final_summary
+    return replace(final_summary, worktree_warnings=tuple(guard_summary.warnings))
 
 
 def _request_remote_stop(context: CliContext, *, force: bool) -> KillSummary | None:

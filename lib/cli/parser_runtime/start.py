@@ -6,6 +6,8 @@ from cli.models import ParsedStartCommand
 
 from .common import parse_args
 
+_REMOVED_START_FLAGS = {'-a', '--auto', '-r', '--resume', '--restore'}
+
 
 def parse_global_options(tokens: list[str], *, error_type) -> tuple[str | None, list[str]]:
     remaining = list(tokens)
@@ -20,8 +22,6 @@ def parse_global_options(tokens: list[str], *, error_type) -> tuple[str | None, 
 
 def parse_start(tokens: list[str], *, project: str | None, error_type) -> ParsedStartCommand:
     parser = argparse.ArgumentParser(prog='ccb', add_help=False)
-    parser.add_argument('-r', '--restore', action='store_true')
-    parser.add_argument('-a', '--auto', action='store_true')
     parser.add_argument('-s', '--safe', action='store_true')
     parser.add_argument('-n', '--new-context', dest='reset_context', action='store_true')
     try:
@@ -29,12 +29,14 @@ def parse_start(tokens: list[str], *, project: str | None, error_type) -> Parsed
     except SystemExit as exc:
         raise error_type('invalid start command') from exc
     if extra:
+        if any(token in _REMOVED_START_FLAGS for token in extra):
+            raise error_type('`-a` and `-r` are no longer supported; use `ccb`, `ccb -s`, or `ccb -n`')
+        if any(str(token).startswith('-') for token in extra):
+            raise error_type('invalid start command')
         raise error_type(
             'start does not accept agent names or extra arguments; '
             'configure startup agents in `.ccb/ccb.config` and run `ccb`'
         )
-    if namespace.auto and namespace.safe:
-        raise error_type('cannot combine -a/--auto with -s/--safe')
     return ParsedStartCommand(
         project=project,
         agent_names=(),

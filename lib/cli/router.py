@@ -74,11 +74,6 @@ def print_start_help(*, file=None) -> None:
             Advanced diagnostics:
               ccb open | ccb ps | ccb logs <agent> | ccb doctor
               ccb version | ccb update | ccb uninstall | ccb reinstall
-
-            Notes:
-              - `ccb` already includes the old auto + restore path.
-              - `ccb -s` matches the old non-`-a` behavior.
-              - Legacy `-a` / `-r` are still accepted for compatibility but hidden from user help.
             """
         ).strip(),
         file=file,
@@ -150,19 +145,18 @@ _COMMAND_HELP = {
           ccb open   Reattach to the current project's tmux namespace/UI.
     """,
     "ps": """
-        usage: ccb ps [--alive]
+        usage: ccb ps
 
         Runtime inventory:
-          ccb ps          Show known runtime/session/workspace bindings.
-          ccb ps --alive  Limit output to currently alive runtimes.
+          ccb ps   Show known runtime/session/workspace bindings.
     """,
     "doctor": """
-        usage: ccb doctor [--bundle] [--output PATH]
+        usage: ccb doctor [--output [PATH]]
 
         Diagnostics bundle:
-          ccb doctor                  Print project diagnostic summary.
-          ccb doctor --bundle         Export a support bundle to the default path.
-          ccb doctor --output PATH    Export a support bundle to PATH.
+          ccb doctor               Print project diagnostic summary.
+          ccb doctor --output      Export a support bundle to the default path.
+          ccb doctor --output PATH Export a support bundle to PATH.
     """,
     "cancel": """
         usage: ccb cancel <job_id>
@@ -198,8 +192,6 @@ def build_start_parser() -> argparse.ArgumentParser:
         description="Claude AI unified launcher",
         add_help=False,
     )
-    start_parser.add_argument("-r", "--resume", "--restore", action="store_true", default=True, help=argparse.SUPPRESS)
-    start_parser.add_argument("-a", "--auto", action="store_true", default=True, help=argparse.SUPPRESS)
     start_parser.add_argument("-s", "--safe", action="store_true", default=False, help=argparse.SUPPRESS)
     start_parser.add_argument(
         "-n",

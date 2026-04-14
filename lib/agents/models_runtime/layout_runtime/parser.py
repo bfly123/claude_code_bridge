@@ -4,7 +4,12 @@ import re
 
 from .nodes import LayoutLeaf, LayoutNode
 
-_LEAF_TOKEN_RE = re.compile(r'(?P<name>[A-Za-z][A-Za-z0-9_-]{0,31})(?:\s*:\s*(?P<provider>[A-Za-z0-9_-]+))?$')
+_LEAF_TOKEN_RE = re.compile(
+    r'(?P<name>[A-Za-z][A-Za-z0-9_-]{0,31})'
+    r'(?:\s*:\s*(?P<provider>[A-Za-z0-9_-]+)'
+    r'(?:\s*\(\s*(?P<workspace_mode>worktree)\s*\))?'
+    r')?$'
+)
 
 
 class LayoutParseError(ValueError):
@@ -57,13 +62,14 @@ class _LayoutParser:
         match = _LEAF_TOKEN_RE.fullmatch(token)
         if match is None:
             raise LayoutParseError(
-                f"invalid layout token {token!r}; expected 'cmd', 'agent', or 'agent:provider'"
+                f"invalid layout token {token!r}; expected 'cmd', 'agent', 'agent:provider', or 'agent:provider(worktree)'"
             )
         return LayoutNode(
             kind='leaf',
             leaf=LayoutLeaf(
                 name=match.group('name').strip(),
                 provider=(match.group('provider') or None),
+                workspace_mode=(match.group('workspace_mode') or None),
             ),
         )
 
@@ -92,12 +98,22 @@ def tokenize(text: str) -> tuple[str, ...]:
     buf: list[str] = []
     for raw_line in str(text or '').splitlines():
         line = raw_line.split('#', 1)[0].split('//', 1)[0]
-        for char in line:
+        index = 0
+        while index < len(line):
+            char = line[index]
+            if char == '(' and ''.join(buf).strip():
+                close = line.find(')', index + 1)
+                if close != -1:
+                    buf.append(line[index : close + 1])
+                    index = close + 1
+                    continue
             if char in {'(', ')', ';', ','}:
                 append_leaf_token(tokens, buf)
                 tokens.append(char)
+                index += 1
                 continue
             buf.append(char)
+            index += 1
         append_leaf_token(tokens, buf)
     return tuple(token for token in tokens if token)
 

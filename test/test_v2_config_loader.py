@@ -30,7 +30,7 @@ def test_load_valid_project_config(tmp_path: Path) -> None:
     result = load_project_config(project_root)
     spec = result.config.agents['agent1']
     assert result.source_path == config_path
-    assert spec.workspace_mode is WorkspaceMode.GIT_WORKTREE
+    assert spec.workspace_mode is WorkspaceMode.INPLACE
     assert spec.runtime_mode is RuntimeMode.PANE_BACKED
     assert spec.restore_default is RestoreMode.AUTO
     assert spec.permission_default is PermissionMode.MANUAL
@@ -87,6 +87,7 @@ def test_build_and_ensure_default_project_config(tmp_path: Path) -> None:
     assert loaded.config.agents['agent1'].provider == 'codex'
     assert loaded.config.agents['agent2'].provider == 'codex'
     assert loaded.config.agents['agent3'].provider == 'claude'
+    assert loaded.config.agents['agent1'].workspace_mode is WorkspaceMode.INPLACE
     assert loaded.config.agents['agent1'].runtime_mode is RuntimeMode.PANE_BACKED
 
 
@@ -119,7 +120,7 @@ def test_ensure_bootstrap_project_config_recovers_from_agent_specs(tmp_path: Pat
                 name=name,
                 provider=provider,
                 target='.',
-                workspace_mode=WorkspaceMode.GIT_WORKTREE,
+                workspace_mode=WorkspaceMode.INPLACE,
                 workspace_root=None,
                 runtime_mode=RuntimeMode.PANE_BACKED,
                 restore_default=RestoreMode.AUTO,
@@ -132,6 +133,18 @@ def test_ensure_bootstrap_project_config_recovers_from_agent_specs(tmp_path: Pat
 
     assert written.exists()
     assert written.read_text(encoding='utf-8') == 'cmd, agent1:codex; agent2:codex, agent3:claude\n'
+
+
+def test_load_project_config_supports_explicit_worktree_suffix_in_compact_config(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-worktree-compact'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(config_path, 'cmd; agent1:codex(worktree), agent2:claude\n')
+
+    result = load_project_config(project_root)
+
+    assert result.config.agents['agent1'].workspace_mode is WorkspaceMode.GIT_WORKTREE
+    assert result.config.agents['agent2'].workspace_mode is WorkspaceMode.INPLACE
+    assert result.config.layout_spec == 'cmd; agent1:codex(worktree), agent2:claude'
 
 
 def test_ensure_bootstrap_project_config_ignores_session_residue_for_default_bootstrap(tmp_path: Path) -> None:

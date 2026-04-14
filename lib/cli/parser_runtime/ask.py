@@ -5,6 +5,13 @@ from cli.models import ParsedAskCommand, ParsedAskWaitCommand, ParsedCancelComma
 
 from .constants import ASK_FLAG_OPTIONS, ASK_JOB_ACTIONS, ASK_OPTIONS_WITH_VALUES
 
+_REMOVED_ASK_FLAGS = {
+    '--sync': 'use `--wait`',
+    '--async': 'omit the flag; async submit is already the default',
+    '-o': 'use `--output`',
+    '-t': 'use `--timeout`',
+}
+
 
 def _parse_job_action(tokens: list[str], *, project: str | None, error_type):
     if not tokens or tokens[0] not in ASK_JOB_ACTIONS:
@@ -30,10 +37,10 @@ def _default_options() -> dict[str, str | float | None]:
 
 
 def _set_option_value(options: dict[str, str | float | None], option: str, value: str, *, error_type) -> None:
-    if option in {'--output', '-o'}:
+    if option == '--output':
         options['output_path'] = value
         return
-    if option in {'--timeout', '-t'}:
+    if option == '--timeout':
         try:
             options['timeout_s'] = float(value)
         except ValueError as exc:
@@ -46,22 +53,16 @@ def _parse_route_options(remaining: list[str], *, error_type):
     options = _default_options()
     silence = False
     wait = False
-    async_mode = False
     while remaining and remaining[0].startswith('-'):
         option = remaining.pop(0)
+        if option in _REMOVED_ASK_FLAGS:
+            raise error_type(f'{option} is no longer supported; {_REMOVED_ASK_FLAGS[option]}')
         if option in ASK_FLAG_OPTIONS:
             if option == '--silence':
                 silence = True
                 continue
-            if option in {'--wait', '--sync'}:
-                if async_mode:
-                    raise error_type('--async conflicts with --wait')
+            if option == '--wait':
                 wait = True
-                continue
-            if option == '--async':
-                if wait:
-                    raise error_type('--async conflicts with --wait')
-                async_mode = True
                 continue
         if option not in ASK_OPTIONS_WITH_VALUES:
             raise error_type(f'unknown ask option: {option}')

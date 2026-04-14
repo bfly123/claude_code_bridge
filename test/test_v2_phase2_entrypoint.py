@@ -569,7 +569,7 @@ def test_phase2_doctor_bundle_renders_export_summary(monkeypatch, tmp_path: Path
         ),
     )
 
-    code, stdout, stderr = _run_phase2_local(['doctor', '--bundle'], cwd=project_root)
+    code, stdout, stderr = _run_phase2_local(['doctor', '--output'], cwd=project_root)
 
     assert code == 0, stderr
     assert 'doctor_bundle_status: ok' in stdout
@@ -849,7 +849,7 @@ def test_ccb_v2_project_lifecycle(tmp_path: Path) -> None:
     assert 'agent_name: codex' in ping.stdout
     assert 'provider: codex' in ping.stdout
 
-    ps = _run_ccb(['ps', '--alive'], cwd=project_root)
+    ps = _run_ccb(['ps'], cwd=project_root)
     assert ps.returncode == 0, ps.stderr
     assert 'ccbd_state: mounted' in ps.stdout
     assert 'agent: name=codex state=idle provider=codex queue=0' in ps.stdout
@@ -1672,7 +1672,7 @@ def test_ccb_start_restore_preserves_existing_restore_state(tmp_path: Path) -> N
         encoding='utf-8',
     )
 
-    proc = _run_ccb(['-r'], cwd=project_root)
+    proc = _run_ccb([], cwd=project_root)
     assert proc.returncode == 0, proc.stderr
     assert 'start_status: ok' in proc.stdout
 
@@ -1730,7 +1730,7 @@ def test_ccb_start_prefers_instance_scoped_codex_binding(tmp_path: Path) -> None
     runtime = json.loads(runtime_path.read_text(encoding='utf-8'))
     assert runtime['runtime_ref'] == 'tmux:%9'
     assert runtime['session_ref'] == 'demo-session-id'
-    assert runtime['workspace_path'] == str(project_root / '.ccb' / 'workspaces' / 'demo')
+    assert runtime['workspace_path'] == str(project_root)
 
     kill = _run_ccb(['kill'], cwd=project_root)
     assert kill.returncode == 0, kill.stderr
@@ -1740,7 +1740,7 @@ def test_ccb_start_loads_claude_binding_from_project_anchor(tmp_path: Path) -> N
     project_root = tmp_path / 'repo-claude-binding'
     _write(project_root / '.ccb' / 'ccb.config', _named_agent_config_text('claude', 'claude'))
     _write(
-        project_root / '.ccb' / '.claude-session',
+        project_root / '.ccb' / '.claude-claude-session',
         json.dumps(
             {
                 'terminal': 'tmux',
@@ -1763,7 +1763,7 @@ def test_ccb_start_loads_claude_binding_from_project_anchor(tmp_path: Path) -> N
     runtime = json.loads(runtime_path.read_text(encoding='utf-8'))
     assert runtime['runtime_ref'] == 'tmux:%2'
     assert runtime['session_ref'] == 'claude-session-id'
-    assert runtime['workspace_path'] == str(project_root / '.ccb' / 'workspaces' / 'claude')
+    assert runtime['workspace_path'] == str(project_root)
 
     kill = _run_ccb(['kill'], cwd=project_root)
     assert kill.returncode == 0, kill.stderr
@@ -1790,7 +1790,7 @@ def test_ccb_start_restore_keeps_bound_runtime_refs(tmp_path: Path) -> None:
     proc = _run_ccb([], cwd=project_root)
     assert proc.returncode == 0, proc.stderr
 
-    restore = _run_ccb(['-r'], cwd=project_root)
+    restore = _run_ccb([], cwd=project_root)
     assert restore.returncode == 0, restore.stderr
 
     runtime_path = project_root / '.ccb' / 'agents' / 'demo' / 'runtime.json'
@@ -1832,7 +1832,7 @@ def test_ccb_start_gemini_binding_does_not_fall_back_to_default_session(tmp_path
     runtime = json.loads(runtime_path.read_text(encoding='utf-8'))
     assert runtime['runtime_ref'] != 'tmux:%7'
     assert runtime['session_ref'] != 'gemini-default-id'
-    assert runtime['workspace_path'] == str(project_root / '.ccb' / 'workspaces' / 'demo')
+    assert runtime['workspace_path'] == str(project_root)
 
     kill = _run_ccb(['kill'], cwd=project_root)
     assert kill.returncode == 0, kill.stderr
@@ -2354,8 +2354,8 @@ def test_ccb_two_named_codex_agents_concurrent_ask_isolated(monkeypatch, tmp_pat
         runtime_agent2 = json.loads((project_root / '.ccb' / 'agents' / 'agent2' / 'runtime.json').read_text(encoding='utf-8'))
         assert runtime_agent1['session_ref'] == 'agent1-session-id'
         assert runtime_agent2['session_ref'] == 'agent2-session-id'
-        assert runtime_agent1['workspace_path'].endswith('/.ccb/workspaces/agent1')
-        assert runtime_agent2['workspace_path'].endswith('/.ccb/workspaces/agent2')
+        assert runtime_agent1['workspace_path'] == str(project_root)
+        assert runtime_agent2['workspace_path'] == str(project_root)
 
         code, stdout1, stderr = _run_phase2_local(['ask', 'agent1', 'from', 'user', 'hello agent1'], cwd=project_root)
         assert code == 0, stderr
@@ -2763,8 +2763,8 @@ def test_ccb_two_named_claude_agents_concurrent_ask_isolated(monkeypatch, tmp_pa
         assert runtime_agent1['agent_name'] == 'agent1'
         assert runtime_agent2['agent_name'] == 'agent2'
         assert runtime_agent1['runtime_ref'] != runtime_agent2['runtime_ref']
-        assert runtime_agent1['workspace_path'].endswith('/.ccb/workspaces/agent1')
-        assert runtime_agent2['workspace_path'].endswith('/.ccb/workspaces/agent2')
+        assert runtime_agent1['workspace_path'] == str(project_root)
+        assert runtime_agent2['workspace_path'] == str(project_root)
 
         code, stdout1, stderr = _run_phase2_local(['ask', 'agent1', 'from', 'user', 'hello claude agent1'], cwd=project_root)
         assert code == 0, stderr
@@ -2916,14 +2916,14 @@ def test_ccb_two_named_gemini_agents_concurrent_ask_isolated(monkeypatch, tmp_pa
                 pane_id='%41',
                 session_id='gemini-agent1-session-id',
                 session_path=tmp_path / 'gemini-agent1.json',
-                work_dir=work_dir,
+                work_dir=project_root / '.ccb' / 'workspaces' / 'agent1',
             )
         if instance == 'agent2':
             return FakeSession(
                 pane_id='%42',
                 session_id='gemini-agent2-session-id',
                 session_path=tmp_path / 'gemini-agent2.json',
-                work_dir=work_dir,
+                work_dir=project_root / '.ccb' / 'workspaces' / 'agent2',
             )
         raise AssertionError(f'unexpected instance: {instance}')
 
@@ -2946,8 +2946,8 @@ def test_ccb_two_named_gemini_agents_concurrent_ask_isolated(monkeypatch, tmp_pa
         assert runtime_agent1['agent_name'] == 'agent1'
         assert runtime_agent2['agent_name'] == 'agent2'
         assert runtime_agent1['runtime_ref'] != runtime_agent2['runtime_ref']
-        assert runtime_agent1['workspace_path'].endswith('/.ccb/workspaces/agent1')
-        assert runtime_agent2['workspace_path'].endswith('/.ccb/workspaces/agent2')
+        assert runtime_agent1['workspace_path'] == str(project_root)
+        assert runtime_agent2['workspace_path'] == str(project_root)
 
         code, stdout1, stderr = _run_phase2_local(['ask', 'agent1', 'from', 'user', 'hello gemini agent1'], cwd=project_root)
         assert code == 0, stderr

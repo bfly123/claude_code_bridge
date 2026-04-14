@@ -171,7 +171,7 @@ def test_workspace_materializer_clears_placeholder_binding_before_worktree_add(t
     assert not plan.binding_path.exists()
 
 
-def test_workspace_materializer_prunes_stale_registered_worktree_before_recreate(tmp_path: Path) -> None:
+def test_workspace_materializer_recovers_missing_registered_git_worktree(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo'
     project_root.mkdir()
     (project_root / 'README.md').write_text('hello\n', encoding='utf-8')
@@ -183,8 +183,9 @@ def test_workspace_materializer_prunes_stale_registered_worktree_before_recreate
 
     ctx = bootstrap_project(project_root)
     plan = WorkspacePlanner().plan(_spec(), ctx)
+    materializer = WorkspaceMaterializer()
 
-    WorkspaceMaterializer().materialize(plan)
+    materializer.materialize(plan)
     shutil.rmtree(plan.workspace_path)
 
     listing_before = subprocess.run(
@@ -197,7 +198,8 @@ def test_workspace_materializer_prunes_stale_registered_worktree_before_recreate
     assert str(plan.workspace_path) in listing_before
     assert 'prunable ' in listing_before
 
-    result = WorkspaceMaterializer().materialize(plan)
+    result = materializer.materialize(plan)
 
     assert result.created is True
     assert (plan.workspace_path / '.git').exists()
+    assert (plan.workspace_path / 'README.md').read_text(encoding='utf-8') == 'hello\n'

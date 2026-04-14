@@ -7,6 +7,7 @@ from dataclasses import dataclass
 class LayoutLeaf:
     name: str
     provider: str | None = None
+    workspace_mode: str | None = None
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,8 @@ class LayoutNode:
         if self.kind == 'leaf':
             assert self.leaf is not None
             if self.leaf.provider:
+                if str(self.leaf.workspace_mode or '').strip() == 'worktree':
+                    return f'{self.leaf.name}:{self.leaf.provider}(worktree)'
                 return f'{self.leaf.name}:{self.leaf.provider}'
             return self.leaf.name
         assert self.left is not None

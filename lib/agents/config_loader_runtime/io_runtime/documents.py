@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import re
 
 from agents.models import parse_layout_spec
 
@@ -18,14 +17,11 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback
         import toml as _toml_reader  # type: ignore[no-redef]
 
 
-_COMPACT_ENTRY_RE = re.compile(r'^(?P<agent>[A-Za-z][A-Za-z0-9_-]{0,31})\s*:\s*(?P<provider>[A-Za-z0-9_-]+)$')
-
-
-def _build_compact_agent_record(provider: str) -> dict[str, str]:
+def _build_compact_agent_record(provider: str, *, workspace_mode: str) -> dict[str, str]:
     return {
         'provider': provider,
         'target': '.',
-        'workspace_mode': 'git-worktree',
+        'workspace_mode': workspace_mode,
         'restore': 'auto',
         'permission': 'manual',
     }
@@ -67,13 +63,13 @@ def _consume_compact_leaf(
         return True
     if leaf.provider is None:
         _raise_invalid_compact_token(path, token)
-    match = _COMPACT_ENTRY_RE.fullmatch(f'{token}:{leaf.provider}')
-    if match is None:
-        _raise_invalid_compact_token(path, token)
     if normalized_name in agents:
         raise ConfigValidationError(f'{path}: duplicate agent name in compact config: {token}')
     default_agents.append(token)
-    agents[normalized_name] = _build_compact_agent_record(leaf.provider)
+    agents[normalized_name] = _build_compact_agent_record(
+        leaf.provider,
+        workspace_mode='git-worktree' if str(leaf.workspace_mode or '').strip() == 'worktree' else 'inplace',
+    )
     return cmd_enabled
 
 

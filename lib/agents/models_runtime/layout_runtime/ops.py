@@ -27,6 +27,7 @@ def build_balanced_layout(
     agent_names: Iterable[str],
     *,
     providers_by_agent: dict[str, str] | None = None,
+    workspace_modes_by_agent: dict[str, str] | None = None,
     cmd_enabled: bool = False,
 ) -> LayoutNode:
     ordered_agents = [str(name).strip() for name in agent_names if str(name).strip()]
@@ -35,6 +36,7 @@ def build_balanced_layout(
     leaves = layout_leaves(
         ordered_agents,
         providers_by_agent=dict(providers_by_agent or {}),
+        workspace_modes_by_agent=dict(workspace_modes_by_agent or {}),
         cmd_enabled=cmd_enabled,
     )
     if len(leaves) == 1:
@@ -51,6 +53,7 @@ def layout_leaves(
     ordered_agents: list[str],
     *,
     providers_by_agent: dict[str, str],
+    workspace_modes_by_agent: dict[str, str],
     cmd_enabled: bool,
 ) -> list[LayoutNode]:
     leaves: list[LayoutNode] = []
@@ -60,7 +63,11 @@ def layout_leaves(
         leaves.append(
             LayoutNode(
                 kind='leaf',
-                leaf=LayoutLeaf(name=name, provider=(providers_by_agent.get(name) or None)),
+                leaf=LayoutLeaf(
+                    name=name,
+                    provider=(providers_by_agent.get(name) or None),
+                    workspace_mode=(workspace_modes_by_agent.get(name) or None),
+                ),
             )
         )
     return leaves

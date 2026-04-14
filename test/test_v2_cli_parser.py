@@ -42,18 +42,23 @@ def test_parse_start_defaults(parser: CliParser) -> None:
 
 
 def test_parse_start_with_project_and_flags(parser: CliParser) -> None:
-    parsed = parser.parse(['--project', '/tmp/demo', '-r', '-a'])
+    parsed = parser.parse(['--project', '/tmp/demo', '-s'])
     assert parsed == ParsedStartCommand(
         project='/tmp/demo',
         agent_names=(),
         restore=True,
-        auto_permission=True,
+        auto_permission=False,
     )
 
 
-def test_parse_start_with_flags_only(parser: CliParser) -> None:
-    parsed = parser.parse(['-r'])
-    assert parsed == ParsedStartCommand(project=None, agent_names=(), restore=True, auto_permission=True)
+def test_parse_start_rejects_removed_restore_flag(parser: CliParser) -> None:
+    with pytest.raises(CliUsageError, match='no longer supported'):
+        parser.parse(['-r'])
+
+
+def test_parse_start_rejects_removed_auto_flag(parser: CliParser) -> None:
+    with pytest.raises(CliUsageError, match='no longer supported'):
+        parser.parse(['-a'])
 
 
 def test_parse_start_with_safe_flag(parser: CliParser) -> None:
@@ -88,9 +93,9 @@ def test_parse_start_with_new_context_and_safe_flag(parser: CliParser) -> None:
     )
 
 
-def test_parse_start_rejects_auto_and_safe_together(parser: CliParser) -> None:
-    with pytest.raises(CliUsageError):
-        parser.parse(['-a', '-s'])
+def test_parse_start_rejects_unknown_start_flag(parser: CliParser) -> None:
+    with pytest.raises(CliUsageError, match='invalid start command'):
+        parser.parse(['--bogus'])
 
 
 def test_parse_start_rejects_manual_agent_selection(parser: CliParser) -> None:
@@ -184,6 +189,20 @@ def test_parse_ask_wait_submit_with_output_and_timeout(parser: CliParser) -> Non
     )
 
 
+@pytest.mark.parametrize(
+    ('argv', 'message'),
+    [
+        (['ask', '--sync', 'agent1', 'ship', 'it'], '--sync is no longer supported'),
+        (['ask', '--async', 'agent1', 'ship', 'it'], '--async is no longer supported'),
+        (['ask', '-o', '/tmp/reply.txt', 'agent1', 'ship', 'it'], '-o is no longer supported'),
+        (['ask', '-t', '30', 'agent1', 'ship', 'it'], '-t is no longer supported'),
+    ],
+)
+def test_parse_ask_rejects_removed_alias_flags(parser: CliParser, argv: list[str], message: str) -> None:
+    with pytest.raises(CliUsageError, match=message):
+        parser.parse(argv)
+
+
 def test_parse_ask_wait_get_and_cancel_subcommands(parser: CliParser) -> None:
     assert parser.parse(['ask', 'wait', 'job_123']) == ParsedAskWaitCommand(project=None, job_id='job_123')
     assert parser.parse(['ask', 'get', 'job_123']) == ParsedPendCommand(project=None, target='job_123', count=None)
@@ -212,7 +231,7 @@ def test_parse_kill(parser: CliParser) -> None:
 
 
 def test_parse_ps_and_pend(parser: CliParser) -> None:
-    assert parser.parse(['ps', '--alive']) == ParsedPsCommand(project=None, alive_only=True)
+    assert parser.parse(['ps']) == ParsedPsCommand(project=None)
     assert parser.parse(['pend', 'job_123', '5']) == ParsedPendCommand(project=None, target='job_123', count=5)
     assert parser.parse(['queue', 'all']) == ParsedQueueCommand(project=None, target='all')
 
@@ -257,12 +276,14 @@ def test_parse_logs(parser: CliParser) -> None:
 
 def test_parse_doctor_bundle(parser: CliParser) -> None:
     assert parser.parse(['doctor']) == ParsedDoctorCommand(project=None, bundle=False, output_path=None)
-    assert parser.parse(['doctor', '--bundle']) == ParsedDoctorCommand(project=None, bundle=True, output_path=None)
+    assert parser.parse(['doctor', '--output']) == ParsedDoctorCommand(project=None, bundle=True, output_path=None)
     assert parser.parse(['doctor', '--output', '/tmp/support.tar.gz']) == ParsedDoctorCommand(
         project=None,
         bundle=True,
         output_path='/tmp/support.tar.gz',
     )
+    with pytest.raises(CliUsageError, match='doctor --bundle'):
+        parser.parse(['doctor', '--bundle'])
 
 
 def test_parse_config_validate(parser: CliParser) -> None:

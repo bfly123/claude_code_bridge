@@ -24,8 +24,8 @@ SUBCOMMANDS = {
     'fault',
 }
 
-ASK_OPTIONS_WITH_VALUES = {'--task-id', '--reply-to', '--mode', '--output', '-o', '--timeout', '-t'}
-ASK_FLAG_OPTIONS = {'--silence', '--wait', '--sync', '--async'}
+ASK_OPTIONS_WITH_VALUES = {'--task-id', '--reply-to', '--mode', '--output', '--timeout'}
+ASK_FLAG_OPTIONS = {'--silence', '--wait'}
 WAIT_COMMAND_TO_MODE = {
     'wait-any': 'any',
     'wait-all': 'all',

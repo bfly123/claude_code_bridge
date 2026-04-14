@@ -86,6 +86,7 @@ class BaseCompletionDetector:
             self._state.anchor_seen = False
             self._state.reply_started = False
             self._state.reply_stable = False
+            self._state.tool_active = False
             self._state.last_reply_hash = None
             self._state.last_reply_at = None
             self._state.stable_since = None

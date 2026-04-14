@@ -11,6 +11,8 @@ class StartSummary:
     daemon_started: bool
     socket_path: str
     cleanup_summaries: tuple[object, ...] = ()
+    worktree_warnings: tuple[object, ...] = ()
+    worktree_retired: tuple[object, ...] = ()
 
 
 def start_agents(
@@ -20,9 +22,12 @@ def start_agents(
     ensure_daemon_started_fn,
     startup_report_store_cls,
     cleanup_summary_cls,
+    before_client_start_fn=None,
+    enrich_summary_fn=None,
 ) -> StartSummary:
     handle = ensure_daemon_started_fn(context)
     assert handle.client is not None
+    pre_start_result = before_client_start_fn(context) if before_client_start_fn is not None else None
     payload = handle.client.start(
         agent_names=command.agent_names,
         restore=command.restore,
@@ -33,12 +38,15 @@ def start_agents(
         daemon_started=handle.started,
         startup_report_store_cls=startup_report_store_cls,
     )
-    return _summary_from_start_payload(
+    summary = _summary_from_start_payload(
         context,
         payload,
         daemon_started=handle.started,
         cleanup_summary_cls=cleanup_summary_cls,
     )
+    if enrich_summary_fn is not None:
+        return enrich_summary_fn(context, summary, pre_start_result)
+    return summary
 
 
 def _summary_from_start_payload(context, payload: dict, *, daemon_started: bool, cleanup_summary_cls) -> StartSummary:

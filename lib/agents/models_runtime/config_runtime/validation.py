@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from agents.models_runtime.layout import build_balanced_layout, parse_layout_spec
+from agents.models_runtime.enums import WorkspaceMode
 
 from ..names import AgentValidationError, normalize_agent_name
 
@@ -42,6 +43,11 @@ def _default_layout_spec(
     return build_balanced_layout(
         default_agents,
         providers_by_agent={name: normalized_agents[name].provider for name in default_agents},
+        workspace_modes_by_agent={
+            name: WorkspaceMode.GIT_WORKTREE.value
+            for name in default_agents
+            if normalized_agents[name].workspace_mode is WorkspaceMode.GIT_WORKTREE
+        },
         cmd_enabled=bool(cmd_enabled),
     ).render()
 

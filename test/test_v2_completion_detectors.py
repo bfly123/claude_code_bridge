@@ -230,3 +230,44 @@ def test_anchored_session_stability_detector_does_not_complete_after_rotate_with
     decision = detector.decision()
     assert decision.terminal is False
     assert decision.reply == ''
+
+
+def test_anchored_session_stability_detector_waits_while_tool_calls_are_active() -> None:
+    detector = AnchoredSessionStabilityDetector(settle_window_s=2.0)
+    detector.bind(_ctx(), _cursor(0))
+    detector.ingest(_item(CompletionItemKind.ANCHOR_SEEN, 1, '2026-03-18T00:00:01Z'))
+    detector.ingest(
+        _item(
+            CompletionItemKind.SESSION_SNAPSHOT,
+            2,
+            '2026-03-18T00:00:02Z',
+            {
+                'message_id': 'm1',
+                'reply': 'I will inspect the files first.',
+                'message_count': 2,
+                'last_updated': '1',
+                'tool_call_count': 1,
+            },
+        )
+    )
+    detector.tick('2026-03-18T00:00:06Z', _cursor(2))
+    assert detector.decision().terminal is False
+
+    detector.ingest(
+        _item(
+            CompletionItemKind.SESSION_SNAPSHOT,
+            3,
+            '2026-03-18T00:00:07Z',
+            {
+                'message_id': 'm2',
+                'reply': 'Final answer.',
+                'message_count': 3,
+                'last_updated': '2',
+                'tool_call_count': 0,
+            },
+        )
+    )
+    detector.tick('2026-03-18T00:00:08Z', _cursor(3))
+    assert detector.decision().terminal is False
+    detector.tick('2026-03-18T00:00:09Z', _cursor(3))
+    assert detector.decision().terminal is True

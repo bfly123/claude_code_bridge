@@ -38,6 +38,7 @@ class KillSummary:
     socket_path: str
     forced: bool
     cleanup_summaries: tuple[ProjectTmuxCleanupSummary, ...] = ()
+    worktree_warnings: tuple[object, ...] = ()
 
 
 __all__ = [

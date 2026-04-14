@@ -1491,6 +1491,118 @@ def test_ccbd_socket_gemini_long_silence_and_session_rotate_do_not_finish_early(
     assert not thread.is_alive()
 
 
+def test_ccbd_socket_gemini_tool_call_progress_does_not_finish_on_first_round(monkeypatch, tmp_path: Path) -> None:
+    from provider_execution import gemini as gemini_adapter_module
+
+    fixed_req_id = 'job_geminitoolwait'
+    project_root = tmp_path / 'repo-gemini-toolwait'
+    _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('demo', 'gemini'))
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            del pane_id, text
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%3'
+
+    class FakeSession:
+        data = {}
+        gemini_session_path = str(tmp_path / 'gemini-session.json')
+        gemini_session_id = 'gemini-session-id'
+        work_dir = str(project_root)
+
+        def ensure_pane(self):
+            return True, '%3'
+
+    class FakeReader:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+            self._calls = 0
+
+        def set_preferred_session(self, session_path) -> None:
+            del session_path
+
+        def capture_state(self):
+            return {'session_path': str(tmp_path / 'gemini-session.json'), 'msg_count': 0}
+
+        def try_get_message(self, state):
+            self._calls += 1
+            if self._calls == 1:
+                return (
+                    'I will inspect the manuscript first.',
+                    {
+                        **state,
+                        'msg_count': 1,
+                        'last_gemini_id': 'msg-1',
+                        'mtime_ns': 111,
+                        'last_tool_call_count': 1,
+                    },
+                )
+            if self._calls < 10:
+                return None, state
+            if self._calls == 10:
+                return (
+                    'Final review result.',
+                    {
+                        **state,
+                        'msg_count': 2,
+                        'last_gemini_id': 'msg-2',
+                        'mtime_ns': 222,
+                        'last_tool_call_count': 0,
+                    },
+                )
+            return None, state
+
+    monkeypatch.setattr(gemini_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(gemini_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(gemini_adapter_module, 'GeminiLogReader', FakeReader)
+
+    app = CcbdApp(project_root)
+    _freeze_next_job_id(app, monkeypatch, fixed_req_id)
+    app.paths.workspace_path('demo').mkdir(parents=True, exist_ok=True)
+    thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread.start()
+    _wait_for(app.paths.ccbd_socket_path)
+
+    client = CcbdClient(app.paths.ccbd_socket_path)
+    client.attach(
+        agent_name='demo',
+        workspace_path=str(app.paths.workspace_path('demo')),
+        backend_type='pane-backed',
+        runtime_ref='tmux:%3',
+        session_ref='gemini-session-id',
+    )
+
+    submit = client.submit(
+        MessageEnvelope(
+            project_id=app.project_id,
+            to_agent='demo',
+            from_actor='user',
+            body='hello gemini tool progress',
+            task_id='task-gemini-tool-progress',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    job_id = submit['job_id']
+
+    time.sleep(0.15)
+    running = client.get(job_id)
+    assert running['status'] == 'running'
+    assert running['completion_reason'] is None
+    assert running['reply'] == 'I will inspect the manuscript first.'
+
+    completed = _wait_for_job_status(client, job_id, 'completed', timeout=5.0)
+    assert completed['reply'] == 'Final review result.'
+    assert completed['completion_reason'] == 'session_reply_stable'
+
+    shutdown = client.shutdown()
+    assert shutdown['state'] == 'unmounted'
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+
+
 def test_ccbd_socket_gemini_rotate_clears_stale_reply_preview(monkeypatch, tmp_path: Path) -> None:
     from provider_execution import gemini as gemini_adapter_module
 

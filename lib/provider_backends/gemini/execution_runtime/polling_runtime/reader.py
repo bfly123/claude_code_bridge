@@ -299,6 +299,8 @@ def build_snapshot_item(
             'message_count': state.get('msg_count'),
             'message_id': state.get('last_gemini_id'),
             'last_updated': state.get('mtime_ns') or state.get('mtime'),
+            'tool_call_count': int_or_none(state.get('last_tool_call_count')) or 0,
+            'thought_count': int_or_none(state.get('last_thought_count')) or 0,
             'done_marker_seen': bool(request_anchor and is_done_text_fn(str(reply), request_anchor)),
         },
         cursor_kwargs={

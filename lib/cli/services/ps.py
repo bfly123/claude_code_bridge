@@ -10,28 +10,19 @@ from .provider_binding import binding_status
 
 
 def ps_summary(context: CliContext, command: ParsedPsCommand) -> dict:
+    del command
     config = load_project_config(context.project.project_root).config
     store = AgentRuntimeStore(context.paths)
     local = ping_local_state(context)
     agents: list[dict] = []
     for agent_name, spec in sorted(config.agents.items()):
         runtime = store.load(agent_name)
-        if not _include_runtime(runtime, alive_only=command.alive_only):
-            continue
         agents.append(_agent_summary(context, agent_name=agent_name, spec=spec, runtime=runtime))
     return {
         'project_id': context.project.project_id,
         'ccbd_state': local.mount_state,
         'agents': agents,
     }
-
-
-def _include_runtime(runtime, *, alive_only: bool) -> bool:
-    if not alive_only:
-        return True
-    if runtime is None:
-        return False
-    return runtime.state.value in {'starting', 'idle', 'busy', 'degraded'}
 
 
 def _agent_summary(context: CliContext, *, agent_name: str, spec, runtime) -> dict:

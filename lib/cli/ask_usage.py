@@ -32,7 +32,7 @@ def write_ask_usage(
         print("", file=out)
     print("Usage:", file=out)
     print(
-        f"  {command_name} [--wait|--sync|--async] [--output FILE|-o FILE] [--timeout SECONDS|-t SECONDS]",
+        f"  {command_name} [--wait] [--output FILE] [--timeout SECONDS]",
         file=out,
     )
     print(

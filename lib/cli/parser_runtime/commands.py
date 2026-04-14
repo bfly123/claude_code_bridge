@@ -45,10 +45,8 @@ def parse_open(tokens: list[str], *, project: str | None, error_type) -> ParsedO
 
 
 def parse_ps(tokens: list[str], *, project: str | None, error_type) -> ParsedPsCommand:
-    parser = argparse.ArgumentParser(prog='ccb ps', add_help=False)
-    parser.add_argument('--alive', action='store_true')
-    namespace = parse_args(parser, tokens, error_message='invalid ps command', error_type=error_type)
-    return ParsedPsCommand(project=project, alive_only=bool(namespace.alive))
+    require_no_extra(tokens, command='ps', error_type=error_type)
+    return ParsedPsCommand(project=project)
 
 
 def parse_ping(tokens: list[str], *, project: str | None, error_type) -> ParsedPingCommand:
@@ -146,11 +144,16 @@ def parse_logs(tokens: list[str], *, project: str | None, error_type) -> ParsedL
 
 def parse_doctor(tokens: list[str], *, project: str | None, error_type) -> ParsedDoctorCommand:
     parser = argparse.ArgumentParser(prog='ccb doctor', add_help=False)
-    parser.add_argument('--bundle', action='store_true')
-    parser.add_argument('--output', dest='output_path', default=None)
-    namespace = parse_args(parser, tokens, error_message='invalid doctor command', error_type=error_type)
-    bundle = bool(namespace.bundle or namespace.output_path)
-    return ParsedDoctorCommand(project=project, bundle=bundle, output_path=namespace.output_path)
+    parser.add_argument('--output', dest='output_path', nargs='?', const='', default=None)
+    try:
+        namespace = parse_args(parser, tokens, error_message='invalid doctor command', error_type=error_type)
+    except Exception as exc:
+        if '--bundle' in tokens:
+            raise error_type('`doctor --bundle` is no longer supported; use `doctor --output`') from exc
+        raise
+    bundle = namespace.output_path is not None
+    output_path = str(namespace.output_path) if namespace.output_path else None
+    return ParsedDoctorCommand(project=project, bundle=bundle, output_path=output_path)
 
 
 def parse_config(tokens: list[str], *, project: str | None, error_type) -> ParsedConfigValidateCommand:

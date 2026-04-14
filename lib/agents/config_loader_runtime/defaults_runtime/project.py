@@ -37,7 +37,7 @@ def build_default_agent_spec(*, name: str, provider: str) -> AgentSpec:
         name=name,
         provider=provider,
         target='.',
-        workspace_mode=WorkspaceMode.GIT_WORKTREE,
+        workspace_mode=WorkspaceMode.INPLACE,
         workspace_root=None,
         runtime_mode=RuntimeMode.PANE_BACKED,
         restore_default=RestoreMode.AUTO,

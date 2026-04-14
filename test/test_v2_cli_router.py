@@ -68,10 +68,8 @@ def test_dispatch_management_command_returns_none_for_non_management() -> None:
     ) is None
 
 
-def test_parse_start_args_defaults_resume_and_auto_and_supports_new_context() -> None:
+def test_parse_start_args_supports_safe_and_new_context() -> None:
     args = parse_start_args(["-n", "-s"])
-    assert args.resume is True
-    assert args.auto is True
     assert args.new_context is True
     assert args.safe is True
 
@@ -188,7 +186,7 @@ def test_run_cli_entrypoint_prints_ask_help() -> None:
 
     assert result == 0
     assert "Usage:" in stdout.getvalue()
-    assert "ccb ask [--wait|--sync|--async]" in stdout.getvalue()
+    assert "ccb ask [--wait] [--output FILE] [--timeout SECONDS]" in stdout.getvalue()
     assert stderr.getvalue() == ""
 
 

@@ -55,11 +55,25 @@ def _last_gemini_message(messages: list[dict[str, Any]]) -> dict[str, Any] | Non
     return None
 
 
-def extract_last_gemini(payload: dict[str, Any]) -> tuple[str | None, str] | None:
+def last_gemini_details(payload: dict[str, Any]) -> dict[str, Any] | None:
     last = _last_gemini_message(_payload_messages(payload))
     if last is None:
         return None
-    return last.get("id"), _message_content(last)
+    tool_calls = last.get("toolCalls")
+    thoughts = last.get("thoughts")
+    return {
+        "id": last.get("id"),
+        "content": _message_content(last),
+        "tool_call_count": len(tool_calls) if isinstance(tool_calls, list) else 0,
+        "thought_count": len(thoughts) if isinstance(thoughts, list) else 0,
+    }
+
+
+def extract_last_gemini(payload: dict[str, Any]) -> tuple[str | None, str] | None:
+    details = last_gemini_details(payload)
+    if details is None:
+        return None
+    return details["id"], str(details["content"] or "")
 
 
 def _session_stats(session: Path | None) -> tuple[float, int, int]:
@@ -74,14 +88,17 @@ def _session_stats(session: Path | None) -> tuple[float, int, int]:
     return mtime, mtime_ns, stat.st_size
 
 
-def _last_gemini_metadata(payload: dict[str, Any] | None) -> tuple[str | None, str | None]:
-    last = extract_last_gemini(payload or {})
-    if not last:
-        return None, None
-    last_id, content = last
+def _last_gemini_metadata(payload: dict[str, Any] | None) -> tuple[str | None, str | None, int, int]:
+    details = last_gemini_details(payload or {})
+    if not details:
+        return None, None, 0, 0
+    last_id = details["id"]
+    content = str(details["content"] or "")
+    tool_call_count = int(details["tool_call_count"] or 0)
+    thought_count = int(details["thought_count"] or 0)
     if not content:
-        return last_id, None
-    return last_id, hashlib.sha256(content.encode("utf-8")).hexdigest()
+        return last_id, None, tool_call_count, thought_count
+    return last_id, hashlib.sha256(content.encode("utf-8")).hexdigest(), tool_call_count, thought_count
 
 
 def _session_payload(reader) -> tuple[Path | None, dict[str, Any] | None]:
@@ -117,7 +134,7 @@ def _latest_gemini_text(payload: dict[str, Any] | None) -> str | None:
 def _state_from_payload(*, session: Path | None, payload: dict[str, Any] | None) -> dict[str, Any]:
     mtime, mtime_ns, size = _session_stats(session)
     msg_count = -1 if session is not None and payload is None else len(_payload_messages(payload))
-    last_gemini_id, last_gemini_hash = _last_gemini_metadata(payload)
+    last_gemini_id, last_gemini_hash, last_tool_call_count, last_thought_count = _last_gemini_metadata(payload)
     return state_payload(
         session=session,
         msg_count=msg_count,
@@ -126,6 +143,8 @@ def _state_from_payload(*, session: Path | None, payload: dict[str, Any] | None)
         size=size,
         last_gemini_id=last_gemini_id,
         last_gemini_hash=last_gemini_hash,
+        last_tool_call_count=last_tool_call_count,
+        last_thought_count=last_thought_count,
     )
 
 
@@ -150,6 +169,7 @@ def latest_conversations(reader, n: int = 1) -> list[tuple[str, str]]:
 __all__ = [
     "capture_state",
     "extract_last_gemini",
+    "last_gemini_details",
     "latest_conversations",
     "latest_message",
     "read_session_json",

@@ -18,7 +18,7 @@ def export_diagnostic_bundle(context, command) -> DiagnosticBundleSummary:
     output_path = resolve_output_path(context, command, bundle_id=bundle_id)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    doctor_payload, doctor_error = doctor_payload(context)
+    doctor_data, doctor_error = _doctor_payload(context)
     entries: list[DiagnosticBundleEntry] = []
 
     support_dir = context.paths.ccbd_support_dir
@@ -31,7 +31,7 @@ def export_diagnostic_bundle(context, command) -> DiagnosticBundleSummary:
             context=context,
             bundle_id=bundle_id,
             generated_at=generated_at,
-            doctor_payload=doctor_payload,
+            doctor_payload=doctor_data,
             doctor_error=doctor_error,
         )
         for category, path in project_root_sources(context):
@@ -49,7 +49,7 @@ def export_diagnostic_bundle(context, command) -> DiagnosticBundleSummary:
     return _bundle_summary(context, output_path=output_path, bundle_id=bundle_id, doctor_error=doctor_error, entries=entries)
 
 
-def doctor_payload(context) -> tuple[dict[str, Any], str | None]:
+def _doctor_payload(context) -> tuple[dict[str, Any], str | None]:
     try:
         return doctor_summary(context), None
     except Exception as exc:

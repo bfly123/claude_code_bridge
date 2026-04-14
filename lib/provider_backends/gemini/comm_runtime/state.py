@@ -41,6 +41,8 @@ def state_payload(
     size: int,
     last_gemini_id: str | None,
     last_gemini_hash: str | None,
+    last_tool_call_count: int = 0,
+    last_thought_count: int = 0,
 ) -> dict[str, Any]:
     return {
         "session_path": session,
@@ -50,6 +52,8 @@ def state_payload(
         "size": size,
         "last_gemini_id": last_gemini_id,
         "last_gemini_hash": last_gemini_hash,
+        "last_tool_call_count": int(last_tool_call_count or 0),
+        "last_thought_count": int(last_thought_count or 0),
     }
 
 

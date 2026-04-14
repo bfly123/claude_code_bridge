@@ -62,7 +62,7 @@ def test_ask_alias_help_uses_canonical_usage(monkeypatch) -> None:
 
     assert code == 0
     text = stdout.getvalue()
-    assert 'ask [--wait|--sync|--async]' in text
+    assert 'ask [--wait] [--output FILE] [--timeout SECONDS]' in text
     assert '--task-id' not in text
     assert '[from <sender>]' not in text
     assert '`ask` is a compatibility alias for `ccb ask`.' in text

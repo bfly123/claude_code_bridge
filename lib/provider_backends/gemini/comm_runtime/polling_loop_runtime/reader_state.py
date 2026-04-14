@@ -26,6 +26,8 @@ def missing_session_state(cursor) -> dict[str, object]:
         size=0,
         last_gemini_id=cursor.prev_last_gemini_id,
         last_gemini_hash=cursor.prev_last_gemini_hash,
+        last_tool_call_count=cursor.prev_last_tool_call_count,
+        last_thought_count=cursor.prev_last_thought_count,
     )
 
 
@@ -65,6 +67,8 @@ def reply_state_payload(
     current_size: int,
     last_id: str | None,
     current_hash: str,
+    last_tool_call_count: int = 0,
+    last_thought_count: int = 0,
 ) -> dict[str, object]:
     return state_payload(
         session=session,
@@ -74,6 +78,8 @@ def reply_state_payload(
         size=current_size,
         last_gemini_id=last_id,
         last_gemini_hash=current_hash,
+        last_tool_call_count=last_tool_call_count,
+        last_thought_count=last_thought_count,
     )
 
 

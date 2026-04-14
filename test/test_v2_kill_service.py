@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
+import subprocess
 from types import SimpleNamespace
 
-from agents.models import AgentRuntime, AgentState
+from agents.models import AgentRuntime, AgentState, AgentSpec, PermissionMode, QueuePolicy, RestoreMode, RuntimeMode, WorkspaceMode
 from agents.store import AgentRuntimeStore
 from ccbd.lifecycle_report_store import CcbdShutdownReportStore
 from ccbd.models import LeaseHealth
@@ -15,6 +17,8 @@ from cli.services.daemon import KillSummary, shutdown_daemon
 from cli.services.kill import kill_project
 from cli.services.tmux_project_cleanup import ProjectTmuxCleanupSummary
 from project.resolver import bootstrap_project
+from workspace.materializer import WorkspaceMaterializer
+from workspace.planner import WorkspacePlanner
 
 
 def _namespace_controller(*, destroyed: bool):
@@ -26,6 +30,21 @@ def _namespace_controller(*, destroyed: bool):
             tmux_session_name='ccb-test',
             reason=str(kwargs.get('reason') or 'kill'),
         )
+    )
+
+
+def _git_worktree_spec() -> AgentSpec:
+    return AgentSpec(
+        name='agent1',
+        provider='codex',
+        target='.',
+        workspace_mode=WorkspaceMode.GIT_WORKTREE,
+        workspace_root=None,
+        runtime_mode=RuntimeMode.PANE_BACKED,
+        restore_default=RestoreMode.AUTO,
+        permission_default=PermissionMode.MANUAL,
+        queue_policy=QueuePolicy.SERIAL_PER_AGENT,
+        branch_template=None,
     )
 
 
@@ -518,3 +537,53 @@ def test_kill_project_fallback_still_cleans_external_tmux_after_namespace_destro
 
     assert len(summary.cleanup_summaries) == 1
     assert summary.cleanup_summaries[0].killed_panes == ('%7',)
+
+
+def test_kill_project_force_prunes_missing_registered_project_worktrees(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-kill-prune-worktree'
+    project_root.mkdir(parents=True, exist_ok=True)
+    (project_root / 'README.md').write_text('hello\n', encoding='utf-8')
+    subprocess.run(['git', 'init'], cwd=project_root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    subprocess.run(['git', 'config', 'user.email', 'test@example.com'], cwd=project_root, check=True)
+    subprocess.run(['git', 'config', 'user.name', 'Test User'], cwd=project_root, check=True)
+    subprocess.run(['git', 'add', '.'], cwd=project_root, check=True)
+    subprocess.run(['git', 'commit', '-m', 'init'], cwd=project_root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('agent1:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+
+    command = ParsedKillCommand(project=None, force=True)
+    context = CliContextBuilder().build(command, cwd=project_root, bootstrap_if_missing=False)
+    plan = WorkspacePlanner().plan(_git_worktree_spec(), context.project)
+    WorkspaceMaterializer().materialize(plan)
+    shutil.rmtree(plan.workspace_path)
+
+    monkeypatch.setattr('cli.services.kill.connect_mounted_daemon', lambda context, allow_restart_stale: (_ for _ in ()).throw(CcbdServiceError('down')))
+    monkeypatch.setattr('cli.services.kill.ProjectNamespaceController', _namespace_controller(destroyed=False))
+    monkeypatch.setattr(
+        'cli.services.kill.shutdown_daemon',
+        lambda context, force: KillSummary(
+            project_id=context.project.project_id,
+            state='unmounted',
+            socket_path=str(context.paths.ccbd_socket_path),
+            forced=force,
+        ),
+    )
+    monkeypatch.setattr('cli.services.kill.set_tmux_ui_active', lambda active: None)
+    monkeypatch.setattr('cli.services.kill.cleanup_project_tmux_orphans_by_socket', lambda **kwargs: ())
+    monkeypatch.setattr(
+        'cli.services.kill.TmuxCleanupHistoryStore',
+        lambda paths: type('Store', (), {'append': staticmethod(lambda event: None)})(),
+    )
+
+    summary = kill_project(context, command)
+
+    assert summary.state == 'unmounted'
+    worktrees = subprocess.run(
+        ['git', '-C', str(project_root), 'worktree', 'list', '--porcelain'],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    ).stdout
+    assert str(plan.workspace_path) not in worktrees

@@ -32,7 +32,13 @@ def test_gemini_capture_state_reports_last_gemini_metadata(monkeypatch, tmp_path
             "messages": [
                 {"type": "user", "content": "q1"},
                 {"type": "gemini", "id": "g1", "content": "a1"},
-                {"type": "gemini", "id": "g2", "content": "a2"},
+                {
+                    "type": "gemini",
+                    "id": "g2",
+                    "content": "a2",
+                    "toolCalls": [{"id": "tool-1"}],
+                    "thoughts": [{"subject": "note"}],
+                },
             ]
         },
     )
@@ -47,6 +53,8 @@ def test_gemini_capture_state_reports_last_gemini_metadata(monkeypatch, tmp_path
     assert state["msg_count"] == 3
     assert state["last_gemini_id"] == "g2"
     assert state["last_gemini_hash"] == hashlib.sha256(b"a2").hexdigest()
+    assert state["last_tool_call_count"] == 1
+    assert state["last_thought_count"] == 1
 
 
 def test_gemini_capture_state_marks_invalid_json_as_unknown(monkeypatch, tmp_path: Path) -> None:
