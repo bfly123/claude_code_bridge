@@ -708,8 +708,8 @@ copy_project() {
   # Update GIT_COMMIT and GIT_DATE in ccb file
   local git_commit="" git_date=""
 
-  # Method 1: From git repo
-  if command -v git >/dev/null 2>&1 && [[ -d "$REPO_ROOT/.git" ]]; then
+  # Method 1: From git repo or git worktree
+  if command -v git >/dev/null 2>&1 && git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     git_commit=$(git -C "$REPO_ROOT" log -1 --format='%h' 2>/dev/null || echo "")
     git_date=$(git -C "$REPO_ROOT" log -1 --format='%cs' 2>/dev/null || echo "")
   fi
