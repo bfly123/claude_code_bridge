@@ -726,7 +726,13 @@ copy_project() {
     git_date="${CCB_GIT_DATE:-}"
   fi
 
-  # Method 4: From GitHub API (fallback)
+  # Method 4: From embedded package metadata
+  if [[ -z "$git_commit" && -f "$INSTALL_PREFIX/ccb" ]]; then
+    git_commit=$(sed -n 's/^GIT_COMMIT = "\(.*\)"/\1/p' "$INSTALL_PREFIX/ccb" | head -1)
+    git_date=$(sed -n 's/^GIT_DATE = "\(.*\)"/\1/p' "$INSTALL_PREFIX/ccb" | head -1)
+  fi
+
+  # Method 5: From GitHub API (fallback)
   if [[ -z "$git_commit" ]] && command -v curl >/dev/null 2>&1; then
     local api_response
     api_response=$(curl -fsSL "https://api.github.com/repos/bfly123/claude_code_bridge/commits/main" 2>/dev/null || echo "")
