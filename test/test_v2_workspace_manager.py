@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
 import subprocess
 
 import pytest
@@ -168,3 +169,35 @@ def test_workspace_materializer_clears_placeholder_binding_before_worktree_add(t
 
     assert (plan.workspace_path / '.git').exists()
     assert not plan.binding_path.exists()
+
+
+def test_workspace_materializer_prunes_stale_registered_worktree_before_recreate(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    project_root.mkdir()
+    (project_root / 'README.md').write_text('hello\n', encoding='utf-8')
+    subprocess.run(['git', 'init'], cwd=project_root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    subprocess.run(['git', 'config', 'user.email', 'test@example.com'], cwd=project_root, check=True)
+    subprocess.run(['git', 'config', 'user.name', 'Test User'], cwd=project_root, check=True)
+    subprocess.run(['git', 'add', '.'], cwd=project_root, check=True)
+    subprocess.run(['git', 'commit', '-m', 'init'], cwd=project_root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    ctx = bootstrap_project(project_root)
+    plan = WorkspacePlanner().plan(_spec(), ctx)
+
+    WorkspaceMaterializer().materialize(plan)
+    shutil.rmtree(plan.workspace_path)
+
+    listing_before = subprocess.run(
+        ['git', '-C', str(project_root), 'worktree', 'list', '--porcelain'],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    ).stdout
+    assert str(plan.workspace_path) in listing_before
+    assert 'prunable ' in listing_before
+
+    result = WorkspaceMaterializer().materialize(plan)
+
+    assert result.created is True
+    assert (plan.workspace_path / '.git').exists()
