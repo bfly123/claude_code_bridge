@@ -4,6 +4,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from ccbd.stop_flow_runtime.pid_cleanup import collect_pid_candidates
+from ccbd.stop_flow_runtime.pid_cleanup import collect_project_process_candidates
+from ccbd.stop_flow_runtime.pid_cleanup import terminate_runtime_pids
 from ccbd.stop_flow_runtime.runtime_records import extra_agent_dir_names
 
 
@@ -35,6 +37,51 @@ def test_collect_pid_candidates_uses_runtime_root_and_force_fallback(tmp_path: P
     assert candidates[123] == [agent_dir / 'runtime.json']
     assert candidates[456] == [provider_runtime_dir / 'fallback.pid']
     assert candidates[789] == [dedicated_runtime_root / 'codex.pid']
+
+
+def test_collect_project_process_candidates_matches_ccb_runtime_cmdline(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    ccb_root = project_root / '.ccb'
+    proc_root = tmp_path / 'proc'
+    for pid in ('101', '202', '303'):
+        (proc_root / pid).mkdir(parents=True)
+
+    mapping = {
+        101: f'python -m provider_backends.codex.bridge --runtime-dir {ccb_root / "agents/agent1/provider-runtime/codex"}',
+        202: f'tmux -S {ccb_root / "ccbd/tmux.sock"} new-session -d',
+        303: 'python unrelated.py',
+    }
+
+    candidates = collect_project_process_candidates(
+        project_root,
+        proc_root=proc_root,
+        read_proc_cmdline_fn=lambda pid: mapping.get(pid, ''),
+        current_pid=999999,
+    )
+
+    assert sorted(candidates) == [101, 202]
+    assert candidates[101] == [ccb_root]
+    assert candidates[202] == [ccb_root]
+
+
+def test_terminate_runtime_pids_includes_project_process_scan(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo'
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        'ccbd.stop_flow_runtime.pid_cleanup._terminate_runtime_pids_impl',
+        lambda **kwargs: seen.update(kwargs),
+    )
+    monkeypatch.setattr(
+        'ccbd.stop_flow_runtime.pid_cleanup.collect_project_process_candidates',
+        lambda project_root: {321: [project_root / '.ccb']},
+    )
+
+    terminate_runtime_pids(project_root=project_root, pid_candidates={123: [project_root / 'hint.pid']})
+
+    collect_fn = seen['collect_project_process_candidates_fn']
+    assert collect_fn(project_root) == {321: [project_root / '.ccb']}
+    assert seen['pid_candidates'] == {123: [project_root / 'hint.pid']}
 
 
 __all__ = []

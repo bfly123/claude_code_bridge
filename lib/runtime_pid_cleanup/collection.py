@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
-from .procfs import read_pid_file
+from .procfs import read_pid_file, read_proc_cmdline
 from .utils import coerce_pid, resolved_runtime_roots
 
 
@@ -21,4 +22,32 @@ def collect_pid_candidates(agent_dir: Path, *, runtime, fallback_to_agent_dir: b
     return candidates
 
 
-__all__ = ['collect_pid_candidates']
+def collect_project_process_candidates(
+    project_root: Path,
+    *,
+    proc_root: Path = Path('/proc'),
+    read_proc_cmdline_fn=read_proc_cmdline,
+    current_pid: int | None = None,
+) -> dict[int, list[Path]]:
+    current_pid = int(current_pid or os.getpid())
+    ccb_root = project_root.expanduser() / '.ccb'
+    marker = str(ccb_root)
+    if not marker:
+        return {}
+    candidates: dict[int, list[Path]] = {}
+    try:
+        entries = list(proc_root.iterdir())
+    except Exception:
+        return candidates
+    for entry in entries:
+        pid = coerce_pid(entry.name)
+        if pid is None or pid == current_pid:
+            continue
+        cmdline = str(read_proc_cmdline_fn(pid) or '').strip()
+        if marker not in cmdline:
+            continue
+        candidates.setdefault(pid, []).append(ccb_root)
+    return candidates
+
+
+__all__ = ['collect_pid_candidates', 'collect_project_process_candidates']

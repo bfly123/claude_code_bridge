@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from runtime_pid_cleanup import collect_pid_candidates as _collect_pid_candidates_impl
+from runtime_pid_cleanup import collect_project_process_candidates
 from runtime_pid_cleanup import coerce_pid
 from runtime_pid_cleanup import path_within
 from runtime_pid_cleanup import pid_matches_project
@@ -14,6 +15,7 @@ def collect_agent_pid_candidates(agent_dir, *, runtime, fallback_to_agent_dir: b
 
 __all__ = [
     "collect_agent_pid_candidates",
+    "collect_project_process_candidates",
     "coerce_pid",
     "path_within",
     "pid_matches_project",

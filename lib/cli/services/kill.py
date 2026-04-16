@@ -13,6 +13,7 @@ from cli.services.kill_runtime.finalize import finalize_kill as _finalize_kill_i
 from cli.services.kill_runtime.lifecycle import destroy_project_namespace as _destroy_project_namespace_impl
 from cli.services.kill_runtime.pid_cleanup import (
     collect_agent_pid_candidates as _collect_agent_pid_candidates_impl,
+    collect_project_process_candidates as _collect_project_process_candidates_impl,
     path_within as _path_within_impl,
     pid_matches_project as _pid_matches_project_impl,
     read_proc_cmdline as _read_proc_cmdline_impl,
@@ -153,6 +154,7 @@ def _terminate_runtime_pids(*, project_root, pid_candidates) -> None:
         pid_matches_project_fn=_pid_matches_project,
         terminate_pid_tree_fn=terminate_pid_tree,
         remove_pid_files_fn=_remove_pid_files,
+        collect_project_process_candidates_fn=_collect_project_process_candidates_impl,
     )
 
 

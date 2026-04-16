@@ -9,9 +9,14 @@ def terminate_runtime_pids(
     pid_matches_project_fn,
     terminate_pid_tree_fn,
     remove_pid_files_fn,
+    collect_project_process_candidates_fn=None,
 ) -> None:
-    for pid in sorted(pid_candidates):
-        hint_paths = tuple(dict.fromkeys(pid_candidates[pid]))
+    merged_candidates: dict[int, list] = {pid: list(paths) for pid, paths in pid_candidates.items()}
+    if collect_project_process_candidates_fn is not None:
+        for pid, sources in collect_project_process_candidates_fn(project_root).items():
+            merged_candidates.setdefault(pid, []).extend(sources)
+    for pid in sorted(merged_candidates):
+        hint_paths = tuple(dict.fromkeys(merged_candidates[pid]))
         if not is_pid_alive_fn(pid):
             remove_pid_files_fn(hint_paths)
             continue
