@@ -1,17 +1,17 @@
 <div align="center">
 
-# Claude Code Bridge (ccb) v5.2.6
+# CCB v6 - Infinite Parallel Agent Edition
 
-**Multi-Model Collaboration via Split-Pane Terminal**
+**Infinite parallel agents in one project runtime**
 **Claude · Codex · Gemini · OpenCode · Droid**
-**Lightweight async messaging — full CLI power, every interaction visible**
+**Visible concurrency, native communication, project-scoped runtime**
 
 <p>
   <img src="https://img.shields.io/badge/Every_Interaction_Visible-096DD9?style=for-the-badge" alt="Every Interaction Visible">
   <img src="https://img.shields.io/badge/Every_Model_Controllable-CF1322?style=for-the-badge" alt="Every Model Controllable">
 </p>
 
-[![Version](https://img.shields.io/badge/version-5.2.6-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-6.0.0-orange.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![CI](https://github.com/bfly123/claude_code_bridge/actions/workflows/test.yml/badge.svg)](https://github.com/bfly123/claude_code_bridge/actions/workflows/test.yml)
@@ -34,25 +34,52 @@
 
 ---
 
-**Introduction:** Multi-model collaboration avoids model bias, cognitive blind spots, and context limits. Unlike MCP or API-based approaches, ccb gives you a WYSIWYG split-pane terminal where every interaction is visible and every model is controllable.
+**Introduction:** CCB v6 is the infinite parallel agent edition. It turns split-pane collaboration into a native multi-agent runtime where agents can run side by side, hold independent roles and personalities, and delegate to each other through a stable built-in communication layer.
+
+## Why Parallel Agents Matter
+
+Parallel agents are not just "more panes on screen". In CCB, each agent can own a fully independent role, task stream, skill library, and personality.
+
+- **Independent roles**: implementer, reviewer, planner, domain specialist, or anything else
+- **Independent tasks**: agents can work in parallel without collapsing into one shared context
+- **Independent skills**: each agent can use different skills, rules, and execution patterns
+- **Independent personalities**: each agent can follow a distinct collaboration style
+
+CCB provides the runtime foundation for stable agent-to-agent communication and effectively unbounded delegation.
+
+## ⚡ CCB v6 At A Glance
+
+| Feature | Benefit |
+| :--- | :--- |
+| **♾️ Infinite Parallel Agents** | CCB is designed as the runtime foundation for effectively unbounded agent-to-agent delegation and parallel execution. |
+| **🧠 Independent Roles** | Each agent can own a separate role, task stream, skill set, and personality. |
+| **🤝 Stable Native Communication** | Agents communicate through a built-in control plane instead of fragile shell glue. |
+| **🪟 Visible Concurrency** | Multiple agents run side by side in one project-scoped tmux UI with isolated runtime/session state. |
+| **♻️ Rebuildable Projects** | `.ccb/ccb.config` remains the durable source of truth; runtime state can be cleared and rebuilt safely. |
+
+## 🚀 User Commands
+
+Public user workflow:
+
+- `ccb`
+- `ccb -s`
+- `ccb -n`
+- `ccb kill`
+- `ccb kill -f`
+
+These are the only commands that define the public user-side startup and reset workflow in CCB v6.
+
+## 🧱 Runtime Model
+
+- **Project config is authoritative**: `.ccb/ccb.config` defines the project agents and startup surface.
+- **Runtime state is disposable**: agent runtime, sessions, mailboxes, and provider state live under `.ccb`, but can be rebuilt from config.
+- **Legacy projects are auto-cleaned**: on first `ccb` inside a pre-6 project, CCB preserves `.ccb/ccb.config`, clears the rest of the old `.ccb` runtime state, and rebuilds locally.
+- **Worktree safety is explicit**: dirty or unmerged CCB-managed git worktrees still block destructive cleanup.
+- **Current runtime is marked**: `.ccb/project-runtime.json` prevents active 6.x projects from being mistaken for legacy state.
 
 ## Agent-First v2 Status
 
 `ccb_source` currently contains the new agent-first v2 implementation baseline.
-
-Implemented project-scoped commands:
-
-- `ccb [agents...]`
-- `ccb ask <agent_name> [from <sender>] <message>`
-- `ccb ping <agent_name>`
-- `ccb pend <agent_name|job_id>`
-- `ccb watch <agent_name|job_id>`
-- `ccb cancel <job_id>`
-- `ccb kill`
-- `ccb ps`
-- `ccb doctor`
-
-Current provider status:
 
 | Provider | v2 adapter status | Completion family |
 | :--- | :--- | :--- |
@@ -74,28 +101,65 @@ pytest -q
 pytest -q test/test_v2_execution_service.py test/test_v2_ccbd_socket.py test/test_v2_phase2_entrypoint.py
 ```
 
-## ⚡ Why ccb?
-
-| Feature | Benefit |
-| :--- | :--- |
-| **🖥️ Visual & Controllable** | Multiple AI models in split-pane CLI. See everything, control everything. |
-| **🧠 Persistent Context** | Each AI maintains its own memory. Close and resume anytime (`-r` flag). |
-| **📉 Token Savings** | Sends lightweight prompts instead of full file history. |
-| **🪟 Native Workflow** | Runs inside a project-scoped **tmux** namespace. Pane lifecycle, layout, and attach/detach stay under one backend authority. |
-
 ---
 
 <h2 align="center">🚀 What's New</h2>
 
-Historical note: older release notes below may mention `askd`; that name refers to the pre-`ccbd` control plane and is kept only as historical changelog context.
+Historical note: older release notes below may mention `askd`, legacy flags, or removed commands. Those references are kept only as changelog history and do not redefine the current CLI surface.
 
 <details open>
+<summary><b>v6.0.0</b> - Native Multi-Agent Runtime, Stable Native Communication, and Linux-Only Auto Upgrade</summary>
+
+**🚀 New Runtime Direction:**
+- **Infinite Parallel Agent Foundation**: CCB v6 is built as the runtime base for effectively unbounded agent-to-agent delegation and orchestration
+- **Independent Agent Identity**: agents can carry different roles, task ownership, skill libraries, and personalities
+- **Focused User Command Surface**: the public user workflow stays centered on `ccb`, `ccb -s`, `ccb -n`, `ccb kill`, and `ccb kill -f`
+
+**🧱 Project Rebuild Semantics:**
+- **Config-Preserving Legacy Cleanup**: On first `ccb` inside a pre-6 project, CCB preserves `.ccb/ccb.config`, removes the rest of the old `.ccb` runtime state, and rebuilds locally
+- **Runtime Marker**: Modern projects now record `.ccb/project-runtime.json` so current runtime state is distinguished from legacy state
+- **Worktree Safety Guard**: Dirty or unmerged CCB-managed worktrees still block destructive rebuilds until the user resolves them
+
+**🔄 Upgrade Policy:**
+- **Linux/WSL Only**: `ccb update` is now available only on Linux/WSL for the 6.x line
+- **Release-Only Upgrades**: Source tags are still published with each version, but `ccb update` for 6.x installs the GitHub release asset, not the source archive
+- **Stable Release Targeting**: Default upgrades now resolve to the latest stable release instead of the moving `main` branch
+- **Major Upgrade Confirmation**: Upgrading into `6.0.0` requires explicit confirmation before replacing the installed runtime
+
+**🤖 Provider Reliability:**
+- **Gemini Multi-Round Stability**: Gemini completion polling now waits through tool activity and no longer exits on the first stable planning sentence
+
+</details>
+
+<details>
+<summary><b>v5.3.0</b> - Simplified CLI, Explicit Worktree Mode, and Gemini Completion Stability</summary>
+
+**🚀 User-Facing CLI Simplification:**
+- **Narrowed Main Surface**: Public startup flow is now `ccb`, `ccb -s`, `ccb -n`, `ccb kill`, and `ccb kill -f`
+- **Model Control Plane Still Available**: `ask`, `ping`, `pend`, and `watch` remain for agent-to-agent orchestration without cluttering primary help
+
+**🧱 Workspace Semantics Made Explicit:**
+- **Default Inplace Mode**: Compact `ccb.config` entries now expand to `workspace_mode='inplace'`
+- **Opt-In Isolation**: Use `agent:provider(worktree)` when an agent must run in its own git worktree
+- **Safe Agent Churn**: Adding agents no longer disturbs existing worktrees; removing or renaming worktree agents retires clean branches and blocks on dirty or unmerged ones
+
+**🛠 Recovery & Reset Hardening:**
+- **Config-Preserving Reset**: `ccb -n` rebuilds project runtime state while keeping `.ccb/ccb.config`
+- **Stale Registration Cleanup**: Start and reset now prune missing registered git worktrees before rematerialization
+- **Kill Warnings**: `ccb kill` warns clearly when a worktree agent still has unmerged or dirty state
+
+**🤖 Gemini Completion Fix:**
+- **No Early Stop on Planning Text**: Gemini completion polling now tracks tool-call activity and waits for the real final reply instead of finishing on the first stable “I will ...” message
+
+</details>
+
+<details>
 <summary><b>v5.2.6</b> - Async Communication & Gemini 0.29 Compatibility</summary>
 
 **🔧 Gemini CLI 0.29.0 Support:**
 - **Dual Hash Strategy**: Session path discovery now supports both basename and SHA-256 formats
 - **Autostart**: `ccb-ping` and `ccb-mounted` gain `--autostart` flag to launch offline provider daemons
-- **Cleanup Path**: zombie-session cleanup is now handled by `ccb kill --zombies`
+- **Cleanup Path**: zombie-session cleanup is now handled by `ccb kill -f`
 
 **🔗 Async Communication Fixes:**
 - **OpenCode Deadlock**: Fixed session ID pinning that caused second async call to always fail
@@ -428,13 +492,10 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 install
 ### Run
 ```bash
 ccb                              # Start default agents from .ccb/ccb.config
-ccb agent1 reviewer              # Start named agents
-ccb -r agent1 reviewer           # Resume named agents
-ccb -a agent1 reviewer           # Auto-approval mode for named agents
-ccb ask agent1 from user "continue the refactor"
-ccb ping agent1
-ccb pend agent1
-ccb logs agent1
+ccb -s                           # Safe start: keep configured/manual permission behavior
+ccb -n                           # Rebuild .ccb except ccb.config, then start fresh
+ccb kill                         # Stop this project's background runtime
+ccb kill -f                      # Force cleanup before rebuilding state
 
 tmux tip: CCB's tmux status/pane theming is enabled only while CCB is running.
 tmux tip: press `Ctrl+b` then `Space` to cycle tmux layouts. You can press it repeatedly to keep switching layouts.
@@ -446,8 +507,8 @@ Note: `ccb up` is removed; use `ccb ...` with `.ccb/ccb.config`.
 ### Flags
 | Flag | Description | Example |
 | :--- | :--- | :--- |
-| `-r` | Resume previous session context | `ccb -r` |
-| `-a` | Auto-mode, skip permission prompts | `ccb -a` |
+| `-s` | Safe start; disable CLI auto-permission override | `ccb -s` |
+| `-n` | Rebuild `.ccb` except `ccb.config`, then start fresh | `ccb -n` |
 | `-h` | Show help information | `ccb -h` |
 | `-v` | Show version and check for updates | `ccb -v` |
 
@@ -469,16 +530,19 @@ agent1:codex,agent2:codex,agent3:claude,cmd
 Rules:
 - Each agent entry must be `agent_name:provider`.
 - `cmd` is a reserved standalone token for the shell pane, not an agent name.
-- Each agent entry expands to fixed defaults: `target='.'`, `workspace_mode='git-worktree'`, `restore='auto'`, `permission='manual'`.
+- Each agent entry expands to fixed defaults: `target='.'`, `workspace_mode='inplace'`, `restore='auto'`, `permission='manual'`.
+- Use `agent_name:provider(worktree)` when you want that agent isolated in its own git worktree.
 - Missing project config is auto-created as `codex:codex,claude:claude`.
 - Cmd pane participates in the layout as the first extra pane and does not change which AI runs in the current pane.
 
 ### Update
+CCB v6 currently supports `ccb update` only on Linux/WSL. A major upgrade fully replaces the installed runtime. On the first `ccb` inside an older project, CCB preserves `.ccb/ccb.config`, clears the rest of the old `.ccb` state, and rebuilds locally.
+
 ```bash
-ccb update              # Update ccb to the latest version
-ccb update 4            # Update to the highest v4.x.x version
-ccb update 4.1          # Update to the highest v4.1.x version
-ccb update 4.1.2        # Update to specific version v4.1.2
+ccb update              # Update to the latest stable release
+ccb update 6            # Update to the highest v6.x.x version
+ccb update 6.0          # Update to the highest v6.0.x version
+ccb update 6.0.0        # Update to a specific version
 ccb uninstall           # Uninstall ccb and clean configs
 ccb reinstall           # Clean then reinstall ccb
 ```
@@ -488,7 +552,7 @@ ccb reinstall           # Clean then reinstall ccb
 <details>
 <summary><b>🪟 Windows Environment Guide</b></summary>
 
-> **Key Point:** `ccb` and the underlying agent CLIs must run in the **same environment**. The most common issue is environment mismatch causing agent attach or `ccb ping` to fail.
+> **Key Point:** `ccb` and the underlying agent CLIs must run in the **same environment**. The most common issue is environment mismatch causing project startup or agent attach to fail.
 
 Note: The installers also install OS-specific `SKILL.md` variants for Claude/Codex skills:
 - Linux/macOS/WSL: bash heredoc templates (`SKILL.md.bash`)
@@ -518,10 +582,9 @@ Determine based on **how you installed/run Claude Code/Codex**:
 - If you want the stable split-pane/runtime supervision path, run `ccb` and all agent CLIs inside WSL, then use `tmux`.
 - If your tools currently run natively on Windows, keep that environment consistent, but treat native split-pane orchestration as transitional until `psmux` lands.
 
-### 4) Troubleshooting: `cping` Not Working
+### 4) Troubleshooting: `ccb` Not Starting Correctly
 
 - **Most common:** Environment mismatch (ccb in WSL but codex in native Windows, or vice versa)
-- **Codex session not running:** Run `ccb codex` (or add codex to ccb.config) first
 - **tmux not available:** Install `tmux` in the environment where you run `ccb`
 - **Terminal not refreshed:** Restart the shell after installation so PATH changes are visible
 
@@ -532,7 +595,7 @@ Determine based on **how you installed/run Claude Code/Codex**:
 
 ### Command Not Found After Installation
 
-If `ccb`, `cask`, `cping` commands are not found after running `./install.sh install`:
+If `ccb` is not found after running `./install.sh install`:
 
 **Cause:** The install directory (`~/.local/bin`) is not in your PATH.
 
@@ -594,41 +657,22 @@ Once started, collaborate naturally. Claude will detect when to delegate tasks.
 >
 > 🃏 Claude (Landlord) vs 🎯 Codex + 💎 Gemini (Farmers)
 
-> **Note:** The canonical manual surfaces are `ccb ask`, `ccb ping`, `ccb pend`, `ccb watch`, and `ccb logs`. `ask` remains only as a thin alias for `ccb ask`. Legacy `cask/gask/...` wrappers remain only as removal shims.
+> **Note:** The public project runtime workflow in CCB v6 is intentionally small: `ccb`, `ccb -s`, `ccb -n`, `ccb kill`, and `ccb kill -f`. Internal control-plane commands still exist for agent-side orchestration, but they are not part of the user-facing startup/reset surface.
 
 ---
 
-## 🛠️ Unified Command System
+## 🛠️ User-Facing CLI
 
-### Legacy Commands (Deprecated)
-- `cask/gask/oask/dask/lask` - Removed provider-specific submit wrappers; they now fail fast and point users to `ask <agent_name> -- <message>`
-- `cping/gping/oping/dping/lping` - Provider diagnostics only; not part of the agent-first request path
-- `cpend/gpend/opend/dpend/lpend` - Provider/session diagnostics only; not part of the agent-first request path
+The public project runtime workflow in CCB v6 is intentionally reduced to five primary commands:
 
-### Unified Commands
-- **`ccb ask <agent> [from <sender>] <message>`** - Standard agent-to-agent or user-to-agent request
-  - Target uses agent name from `.ccb/ccb.config`
-  - Sender defaults to the current workspace agent and falls back to `user`
-  - `all` broadcasts to every mounted agent except the sender
+- **`ccb`** - Default start path; launch agents defined by `.ccb/ccb.config`
+- **`ccb -s`** - Safe start; keep each agent's configured/default permission behavior
+- **`ccb -n`** - Rebuild project `.ccb` state except `ccb.config`, then start fresh with confirmation
+- **`ccb kill`** - Stop the current project's runtime
+- **`ccb kill -f`** - Force cleanup project-owned runtime residue before `ccb -n`
+  - Also works as a recovery path when `.ccb` exists but `ccb.config` is missing or stale
 
-- **`ask <agent> [from <sender>] <message>`** - Thin alias for `ccb ask`
-  - Same submission semantics and flags
-  - Kept for convenience, not as a separate control surface
-
-- **`ccb ping <agent|all>`** - Mounted agent or project daemon health check
-
-- **`ccb pend <agent|job_id> [N]`** - Fetch the latest reply for a named agent or specific job
-
-- **`ccb watch <agent|job_id>`** - Stream current job events and terminal reply state
-
-- **`ccb logs <agent>`** - Inspect the current agent runtime/session log tail
-
-- **`ccb droid setup-delegation`** - Register the MCP delegation server with generic agent tools (`ccb_ask_agent`, `ccb_pend_agent`, `ccb_ping_agent`)
-
-### Skills System
-- `/ask <agent> <message>` - Request skill
-- `/ping <agent|all>` - Connectivity test skill
-- `/pend <agent|job_id>` - Reply fetch skill
+Internal control-plane commands still exist for model-side orchestration and automation, but they are intentionally not presented here as public user commands.
 
 ### Cross-Platform Support
 - **Linux/macOS/WSL**: Uses `tmux` as terminal backend
@@ -682,7 +726,7 @@ When to use:
 
 ## Legacy Cleanup Note
 
-The legacy mail subsystem has been removed from the repo. The supported path is project-scoped named agents plus `ccb ask/ping/pend/watch/logs/ps/doctor`.
+The legacy mail subsystem has been removed from the repo. The current runtime is project-scoped around `.ccb/ccb.config`, and old runtime state can be cleared and rebuilt.
 
 ---
 
@@ -793,7 +837,7 @@ ccb reinstall
 ### v4.0.7
 - **Tmux Status Bar Redesign**: Dual-line status bar with modern dot indicators (●/○), git branch, and CCB version display
 - **Session Freshness**: Always scan logs for latest session instead of using cached session file
-- **Simplified Auto Mode**: `ccb -a` now purely uses `--dangerously-skip-permissions`
+- **Simplified Auto Mode (Historical)**: auto-permission behavior was consolidated into the current primary start flow
 
 ### v4.0.6
 - **Session Overrides**: `cping/gping/oping/cpend/opend` support `--session-file` / `CCB_SESSION_FILE` to bypass wrong `cwd`
