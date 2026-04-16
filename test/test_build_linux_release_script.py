@@ -30,17 +30,29 @@ def test_copy_repo_tree_excludes_runtime_state(tmp_path: Path) -> None:
     destination = tmp_path / "out"
     (repo_root / ".git").mkdir(parents=True)
     (repo_root / ".ccb" / "ccbd").mkdir(parents=True)
+    (repo_root / ".loop").mkdir(parents=True)
+    (repo_root / ".architec").mkdir(parents=True)
+    (repo_root / ".tmp_pytest" / "run").mkdir(parents=True)
+    (repo_root / ".tmp_test_env_arch1" / "env").mkdir(parents=True)
     (repo_root / "lib").mkdir(parents=True)
     (repo_root / "ccb").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
     (repo_root / "install.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
     (repo_root / "lib" / "app.py").write_text("print('ok')\n", encoding="utf-8")
     (repo_root / ".ccb" / "ccbd" / "lease.json").write_text("{}", encoding="utf-8")
+    (repo_root / ".loop" / "state.json").write_text("{}", encoding="utf-8")
+    (repo_root / ".architec" / "summary.json").write_text("{}", encoding="utf-8")
+    (repo_root / ".tmp_pytest" / "run" / "state.json").write_text("{}", encoding="utf-8")
+    (repo_root / ".tmp_test_env_arch1" / "env" / "state.json").write_text("{}", encoding="utf-8")
 
     module.copy_repo_tree(repo_root, destination)
 
     assert (destination / "lib" / "app.py").exists()
     assert not (destination / ".git").exists()
     assert not (destination / ".ccb").exists()
+    assert not (destination / ".loop").exists()
+    assert not (destination / ".architec").exists()
+    assert not (destination / ".tmp_pytest").exists()
+    assert not (destination / ".tmp_test_env_arch1").exists()
 
 
 def test_dirty_worktree_entries_reads_porcelain_output(monkeypatch) -> None:
@@ -65,6 +77,24 @@ def test_dirty_worktree_entries_ignores_excluded_local_metadata(monkeypatch) -> 
         return SimpleNamespace(
             returncode=0,
             stdout="?? .gemini/settings.json\n M install.sh\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", _fake_run)
+
+    entries = module.dirty_worktree_entries(Path("/tmp/repo"))
+
+    assert entries == (" M install.sh",)
+
+
+def test_dirty_worktree_entries_ignores_excluded_temp_env_prefix(monkeypatch) -> None:
+    module = _load_module()
+
+    def _fake_run(cmd, **kwargs):
+        assert cmd[-2:] == ["--porcelain", "--untracked-files=all"]
+        return SimpleNamespace(
+            returncode=0,
+            stdout="?? .tmp_test_env_arch1/runtime/state.json\n M install.sh\n",
             stderr="",
         )
 

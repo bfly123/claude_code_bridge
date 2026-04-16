@@ -19,7 +19,12 @@ DEFAULT_OUTPUT_DIR = REPO_ROOT / "dist"
 EXCLUDES = {
     ".git",
     ".ccb",
+    ".architec",
+    ".claude",
     ".gemini",
+    ".hippocampus",
+    ".loop",
+    ".tmp_pytest",
     "__pycache__",
     ".pytest_cache",
     ".mypy_cache",
@@ -244,7 +249,16 @@ def is_excluded_status_entry(line: str) -> bool:
 
 def is_excluded_relpath(value: str) -> bool:
     path = Path(str(value or "").strip())
-    return any(part in EXCLUDES for part in path.parts)
+    return any(is_excluded_part(part) for part in path.parts)
+
+
+def is_excluded_part(part: str) -> bool:
+    text = str(part or "").strip()
+    if not text:
+        return False
+    if text in EXCLUDES:
+        return True
+    return text.startswith(".tmp_test_env_")
 
 
 def export_git_archive(repo_root: Path, destination: Path, *, git_ref: str) -> None:
@@ -263,7 +277,7 @@ def export_git_archive(repo_root: Path, destination: Path, *, git_ref: str) -> N
 
 def prune_excluded_paths(root: Path) -> None:
     for path in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
-        if path.name not in EXCLUDES:
+        if not is_excluded_part(path.name):
             continue
         if path.is_dir():
             shutil.rmtree(path, ignore_errors=True)
