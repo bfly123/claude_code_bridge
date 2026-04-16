@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agents.models_runtime.layout import build_balanced_layout, parse_layout_spec
+from agents.models_runtime.layout import LayoutLeaf, LayoutNode, build_balanced_layout, parse_layout_spec
 from agents.models_runtime.enums import WorkspaceMode
 
 from ..names import AgentValidationError, normalize_agent_name
@@ -59,6 +59,33 @@ def _parse_resolved_layout(rendered: str) -> object:
         raise AgentValidationError(f'invalid layout_spec: {exc}') from exc
 
 
+def _normalize_layout_leaf_name(name: str) -> str:
+    token = str(name or '').strip()
+    if token.lower() == 'cmd':
+        return 'cmd'
+    return normalize_agent_name(token)
+
+
+def _normalize_layout_tree(node: LayoutNode) -> LayoutNode:
+    if node.kind == 'leaf':
+        assert node.leaf is not None
+        return LayoutNode(
+            kind='leaf',
+            leaf=LayoutLeaf(
+                name=_normalize_layout_leaf_name(node.leaf.name),
+                provider=node.leaf.provider,
+                workspace_mode=node.leaf.workspace_mode,
+            ),
+        )
+    assert node.left is not None
+    assert node.right is not None
+    return LayoutNode(
+        kind=node.kind,
+        left=_normalize_layout_tree(node.left),
+        right=_normalize_layout_tree(node.right),
+    )
+
+
 def _expected_layout_names(default_agents: tuple[str, ...], *, cmd_enabled: bool) -> set[str]:
     expected = set(default_agents)
     if cmd_enabled:
@@ -97,7 +124,7 @@ def resolve_layout_spec(
             normalized_agents=normalized_agents,
             cmd_enabled=cmd_enabled,
         )
-    layout = _parse_resolved_layout(rendered)
+    layout = _normalize_layout_tree(_parse_resolved_layout(rendered))
     layout_names = tuple(leaf.name for leaf in layout.iter_leaves())
     _validate_layout_names(
         layout_names,

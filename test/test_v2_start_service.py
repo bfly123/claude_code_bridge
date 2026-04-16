@@ -174,6 +174,26 @@ def test_start_agents_updates_startup_report_with_daemon_started_flag(tmp_path: 
     assert report.daemon_started is True
 
 
+def test_start_agents_validates_config_before_starting_daemon(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-start-invalid-config'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('agent1:codex, cmd\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    command = ParsedStartCommand(project=None, agent_names=(), restore=False, auto_permission=False)
+    context = CliContextBuilder().build(command, cwd=project_root, bootstrap_if_missing=False)
+    daemon_calls: list[str] = []
+
+    monkeypatch.setattr(
+        'cli.services.start.ensure_daemon_started',
+        lambda context: daemon_calls.append(str(context.project.project_root)) or SimpleNamespace(client=None, started=False),
+    )
+
+    with pytest.raises(Exception, match='layout_spec must anchor cmd as the first pane'):
+        start_agents(context, command)
+
+    assert daemon_calls == []
+
+
 def test_start_agents_retires_removed_merged_worktree_before_start(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / 'repo-start-retire-worktree'
     _init_git_repo(project_root)

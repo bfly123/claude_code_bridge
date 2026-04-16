@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ccbd.keeper import KeeperStateStore
 from ccbd.models import LeaseHealth
 from ccbd.services.mount import MountManager
 from ccbd.services.ownership import OwnershipGuard
@@ -47,18 +48,21 @@ def inspect_daemon(context: CliContext):
 
 
 def ensure_daemon_started(context: CliContext) -> DaemonHandle:
-    return _ensure_daemon_started_runtime(
-        context,
-        clear_shutdown_intent_fn=clear_shutdown_intent,
-        ensure_keeper_started_fn=_ensure_keeper_started,
-        inspect_daemon_fn=inspect_daemon,
-        connect_compatible_daemon_fn=_connect_compatible_daemon,
-        should_restart_unreachable_daemon_fn=_should_restart_unreachable_daemon,
-        restart_unreachable_daemon_fn=_restart_unreachable_daemon,
-        spawn_ccbd_process_fn=_spawn_ccbd_process,
-        incompatible_daemon_error_fn=_incompatible_daemon_error,
-        start_timeout_s=_DEF_START_TIMEOUT_S,
-    )
+    try:
+        return _ensure_daemon_started_runtime(
+            context,
+            clear_shutdown_intent_fn=clear_shutdown_intent,
+            ensure_keeper_started_fn=_ensure_keeper_started,
+            inspect_daemon_fn=inspect_daemon,
+            connect_compatible_daemon_fn=_connect_compatible_daemon,
+            should_restart_unreachable_daemon_fn=_should_restart_unreachable_daemon,
+            restart_unreachable_daemon_fn=_restart_unreachable_daemon,
+            spawn_ccbd_process_fn=_spawn_ccbd_process,
+            incompatible_daemon_error_fn=_incompatible_daemon_error,
+            start_timeout_s=_DEF_START_TIMEOUT_S,
+        )
+    except CcbdServiceError as exc:
+        raise _augment_start_failure(context, exc) from exc
 
 
 def connect_mounted_daemon(context: CliContext, *, allow_restart_stale: bool) -> DaemonHandle:
@@ -192,3 +196,27 @@ def _restart_unreachable_daemon(context: CliContext, inspection) -> None:
         manager_factory=MountManager,
         kill_pid_fn=kill_pid,
     )
+
+
+def _augment_start_failure(context: CliContext, exc: CcbdServiceError) -> CcbdServiceError:
+    message = str(exc or '').strip()
+    if not message.startswith('ccbd is unavailable:'):
+        return exc
+    try:
+        _, _, inspection = inspect_daemon(context)
+    except Exception:
+        inspection = None
+    if inspection is not None and inspection.health not in {
+        LeaseHealth.MISSING,
+        LeaseHealth.UNMOUNTED,
+        LeaseHealth.STALE,
+    }:
+        return exc
+    try:
+        keeper_state = KeeperStateStore(context.paths).load()
+    except Exception:
+        keeper_state = None
+    failure_reason = str(getattr(keeper_state, 'last_failure_reason', '') or '').strip()
+    if not failure_reason or failure_reason in message:
+        return exc
+    return CcbdServiceError(f'{message}; keeper_last_failure: {failure_reason}')

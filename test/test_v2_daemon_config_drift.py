@@ -4,6 +4,7 @@ from pathlib import Path
 
 from agents.config_identity import project_config_identity_payload
 from agents.config_loader import load_project_config
+from ccbd.keeper import KeeperState, KeeperStateStore
 from ccbd.models import CcbdLease, LeaseHealth, LeaseInspection, MountState
 from ccbd.socket_client import CcbdClientError
 from cli.context import CliContext
@@ -11,6 +12,7 @@ from cli.models import ParsedStartCommand
 import cli.services.daemon as daemon_service
 from project.resolver import bootstrap_project
 from storage.paths import PathLayout
+import pytest
 
 
 def _write(path: Path, text: str) -> None:
@@ -395,3 +397,43 @@ def test_connect_mounted_daemon_restarts_unmounted_daemon_when_recovery_allowed(
     handle = daemon_service.connect_mounted_daemon(ctx, allow_restart_stale=True)
 
     assert handle is expected_handle
+
+
+def test_ensure_daemon_started_surfaces_keeper_failure_reason_when_startup_stalls(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-keeper-failure'
+    ctx = _context(project_root, 'agent1:codex\n')
+    inspection = _inspection(
+        ctx,
+        health=LeaseHealth.UNMOUNTED,
+        socket_connectable=False,
+        pid_alive=False,
+        heartbeat_fresh=False,
+        mount_state=MountState.UNMOUNTED,
+        reason='lease_unmounted',
+    )
+    KeeperStateStore(ctx.paths).save(
+        KeeperState(
+            project_id=ctx.project.project_id,
+            keeper_pid=12345,
+            started_at='2026-04-16T00:00:00Z',
+            last_check_at='2026-04-16T00:00:01Z',
+            state='running',
+            restart_count=1,
+            last_restart_at='2026-04-16T00:00:01Z',
+            last_failure_reason='layout_spec must include each configured agent exactly once and cmd',
+        )
+    )
+
+    monkeypatch.setattr(daemon_service, 'inspect_daemon', lambda context: (None, None, inspection))
+    monkeypatch.setattr(daemon_service, '_ensure_keeper_started', lambda context: False)
+    monkeypatch.setattr(daemon_service, '_spawn_ccbd_process', lambda context: None)
+    monkeypatch.setattr(daemon_service, '_DEF_START_TIMEOUT_S', 0.0)
+
+    with pytest.raises(
+        daemon_service.CcbdServiceError,
+        match='keeper_last_failure: layout_spec must include each configured agent exactly once and cmd',
+    ):
+        daemon_service.ensure_daemon_started(ctx)

@@ -64,6 +64,23 @@ def test_load_project_config_supports_named_simple_agent_map(tmp_path: Path) -> 
     assert result.config.layout_spec == 'cmd, agent1:codex; agent2:codex, agent3:claude'
 
 
+def test_load_project_config_normalizes_mixed_case_compact_agent_names(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-mixed-case'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        'cmd, Alice:codex; Tomy:codex, Hanmeimei:claude; Lilei:gemini, Harry:gemini\n',
+    )
+
+    result = load_project_config(project_root)
+
+    assert result.config.default_agents == ('alice', 'tomy', 'hanmeimei', 'lilei', 'harry')
+    assert set(result.config.agents) == {'alice', 'tomy', 'hanmeimei', 'lilei', 'harry'}
+    assert result.config.layout_spec == (
+        'cmd, alice:codex; tomy:codex, hanmeimei:claude; lilei:gemini, harry:gemini'
+    )
+
+
 def test_load_project_config_rejects_case_insensitive_duplicates(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo'
     config_path = project_root / '.ccb' / 'ccb.config'

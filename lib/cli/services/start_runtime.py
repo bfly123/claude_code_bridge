@@ -25,9 +25,9 @@ def start_agents(
     before_client_start_fn=None,
     enrich_summary_fn=None,
 ) -> StartSummary:
+    pre_start_result = before_client_start_fn(context) if before_client_start_fn is not None else None
     handle = ensure_daemon_started_fn(context)
     assert handle.client is not None
-    pre_start_result = before_client_start_fn(context) if before_client_start_fn is not None else None
     payload = handle.client.start(
         agent_names=command.agent_names,
         restore=command.restore,
