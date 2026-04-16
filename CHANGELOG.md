@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v6.0.1 (2026-04-16)
+
+### 🔧 Release Hygiene & Upgrade Safety
+
+- **Tracked Temp Cleanup**: Removed accidentally tracked `.tmp_pytest` artifacts that contaminated GitHub source archives
+- **Repo Hygiene Guard**: Added a regression test to block ephemeral test artifacts from entering the git index again
+- **Safer Tar Validation**: Upgrade/install extraction now rejects unsafe symlink targets before unpacking
+- **Clearer Extraction Errors**: Unsafe archive failures now explain that the archive contains unsafe paths or links and should be replaced with a clean source archive or official release asset
+
 ## v6.0.0 (2026-04-16)
 
 ### 🚀 Multi-Agent Runtime

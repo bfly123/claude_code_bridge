@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Every_Model_Controllable-CF1322?style=for-the-badge" alt="Every Model Controllable">
 </p>
 
-[![Version](https://img.shields.io/badge/version-6.0.0-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-6.0.1-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 **English** | [Chinese](README_zh.md)
@@ -92,6 +92,16 @@ This layout means:
 Historical note: older release notes below may mention `askd`, legacy flags, or removed commands. Those references are kept only as changelog history and do not redefine the current CLI surface.
 
 <details open>
+<summary><b>v6.0.1</b> - Release Archive Hygiene & Safer Upgrade Extraction</summary>
+
+- **Source Archive Cleanup**: Removed accidentally tracked pytest temp artifacts so GitHub source archives are clean again
+- **Safer Tar Validation**: Upgrade extraction now rejects unsafe symlink targets before unpacking
+- **Clearer Failure Mode**: Unsafe archive extraction errors now point users toward release assets or clean source archives
+- **Regression Coverage**: Added tests to block ephemeral repo artifacts from being tracked again
+
+</details>
+
+<details>
 <summary><b>v6.0.0</b> - Native Multi-Agent Runtime, Stable Native Communication, and Linux-Only Auto Upgrade</summary>
 
 **🚀 New Runtime Direction:**
@@ -529,7 +539,7 @@ CCB v6 currently supports `ccb update` only on Linux/WSL. A major upgrade fully 
 ccb update              # Update to the latest stable release
 ccb update 6            # Update to the highest v6.x.x version
 ccb update 6.0          # Update to the highest v6.0.x version
-ccb update 6.0.0        # Update to a specific version
+ccb update 6.0.1        # Update to a specific version
 ccb uninstall           # Uninstall ccb and clean configs
 ccb reinstall           # Clean then reinstall ccb
 ```

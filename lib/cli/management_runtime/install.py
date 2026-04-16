@@ -12,6 +12,14 @@ import time
 import urllib.request
 
 
+def _is_within_directory(root: Path, candidate: Path) -> bool:
+    try:
+        candidate.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
 def _env_install_prefix() -> Path | None:
     env_prefix = (os.environ.get("CODEX_INSTALL_PREFIX") or "").strip()
     return Path(env_prefix).expanduser() if env_prefix else None
@@ -177,8 +185,26 @@ def download_tarball(url: str, destination: Path) -> bool:
 def _ensure_safe_tar_members(tar: tarfile.TarFile, destination: Path) -> None:
     for member in tar.getmembers():
         member_path = (destination / member.name).resolve()
-        if not str(member_path).startswith(str(destination) + os.sep):
+        if not _is_within_directory(destination, member_path):
             raise RuntimeError(f"Unsafe tar member path: {member.name}")
+        if not (member.issym() or member.islnk()):
+            continue
+        link_target = Path(member.linkname)
+        if link_target.is_absolute():
+            raise RuntimeError(f"Unsafe tar link target: {member.name} -> {member.linkname}")
+        resolved_link_target = ((destination / member.name).parent / member.linkname).resolve()
+        if not _is_within_directory(destination, resolved_link_target):
+            raise RuntimeError(f"Unsafe tar link target: {member.name} -> {member.linkname}")
+
+
+def _format_tar_extract_error(exc: tarfile.TarError) -> str:
+    detail = str(exc).strip() or exc.__class__.__name__
+    return (
+        "Unsafe tar archive content detected: "
+        f"{detail}. "
+        "This usually means the downloaded archive contains unsafe paths or links. "
+        "Use an official release asset or a clean source archive."
+    )
 
 
 def safe_extract_tar(tar: tarfile.TarFile, destination: Path) -> None:
@@ -188,3 +214,5 @@ def safe_extract_tar(tar: tarfile.TarFile, destination: Path) -> None:
         tar.extractall(destination, filter="data")
     except TypeError:
         tar.extractall(destination)
+    except tarfile.TarError as exc:
+        raise RuntimeError(_format_tar_extract_error(exc)) from exc
