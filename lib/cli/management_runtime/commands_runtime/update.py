@@ -14,6 +14,11 @@ from .matching import find_matching_version, latest_version
 
 
 def cmd_update(args, *, script_root: Path) -> int:
+    supported, reason = _supported_update_platform()
+    if not supported:
+        print(reason)
+        return 1
+
     default_install_dir = Path.home() / ".local/share/codex-dual"
     install_dir = Path(os.environ.get("CODEX_INSTALL_PREFIX") or default_install_dir).expanduser()
     if (script_root / "install.sh").exists():
@@ -28,10 +33,6 @@ def cmd_update(args, *, script_root: Path) -> int:
         print(f"🔄 Updating to v{target_version}...")
     else:
         print("🔄 Checking for release updates...")
-
-    git_result = _try_git_update(install_dir, target_version=target_version, old_info=old_info)
-    if git_result is not None:
-        return git_result
 
     try:
         tmp_base = pick_temp_base_dir(install_dir)
@@ -68,54 +69,15 @@ def _resolve_target_version(args) -> str | bool | None:
     return target_version
 
 
-def _try_git_update(install_dir: Path, *, target_version: str | None, old_info: dict[str, object]) -> int | None:
-    if not (shutil.which("git") and (install_dir / ".git").exists()):
-        return None
-    if target_version:
-        print(f"📦 Switching to v{target_version} via git...")
-        subprocess.run(
-            ["git", "-C", str(install_dir), "fetch", "--tags", "--force"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        result = subprocess.run(
-            ["git", "-C", str(install_dir), "checkout", f"v{target_version}"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-    else:
-        print("📦 Updating via git pull...")
-        result = subprocess.run(
-            ["git", "-C", str(install_dir), "pull", "--ff-only"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-    if result.returncode != 0:
-        err_msg = "Git checkout failed" if target_version else "Git pull failed"
-        print(f"⚠️ {err_msg}: {result.stderr.strip()}")
-        print("Falling back to tarball download...")
-        return None
-
-    print(result.stdout.strip() if result.stdout.strip() else "Already up to date.")
-    print("🔧 Reinstalling...")
-    env = os.environ.copy()
-    env["CCB_CLEAN_INSTALL"] = "1"
-    if platform.system() == "Windows":
-        subprocess.run(
-            ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(install_dir / "install.ps1"), "install"],
-            env=env,
-        )
-    else:
-        subprocess.run([str(install_dir / "install.sh"), "install"], env=env)
-    new_info = get_version_info(install_dir)
-    _print_update_outcome(old_info, new_info)
-    return 0
+def _supported_update_platform() -> tuple[bool, str | None]:
+    system_name = platform.system()
+    if system_name == "Linux":
+        return True, None
+    return (
+        False,
+        "❌ `ccb update` is currently supported only on Linux/WSL.\n"
+        "   Please use a Linux/WSL runtime, or reinstall manually on this platform.",
+    )
 
 
 def _resolve_latest_release_version() -> str | None:
@@ -127,8 +89,12 @@ def _update_via_tarball(tmp_base: Path, *, install_dir: Path, target_version: st
     if not target_version:
         print("❌ Update failed: no release version selected")
         return 1
-    tarball_url = f"{REPO_URL}/archive/refs/tags/v{target_version}.tar.gz"
-    extracted_name = f"claude_code_bridge-{target_version}"
+    artifact_name = _release_artifact_name()
+    if not artifact_name:
+        print(f"❌ Update failed: unsupported Linux architecture '{platform.machine()}'")
+        return 1
+    tarball_url = _release_artifact_url(target_version, artifact_name=artifact_name)
+    extracted_name = artifact_name
 
     tmp_dir = tmp_base / "ccb_update"
     try:
@@ -136,7 +102,7 @@ def _update_via_tarball(tmp_base: Path, *, install_dir: Path, target_version: st
         if tmp_dir.exists():
             shutil.rmtree(tmp_dir)
         tmp_dir.mkdir(parents=True, exist_ok=True)
-        tarball_path = tmp_dir / "main.tar.gz"
+        tarball_path = tmp_dir / artifact_name
         if not download_tarball(tarball_url, tarball_path):
             print("❌ Update failed: unable to download release tarball")
             return 1
@@ -150,14 +116,11 @@ def _update_via_tarball(tmp_base: Path, *, install_dir: Path, target_version: st
         env = os.environ.copy()
         env["CODEX_INSTALL_PREFIX"] = str(install_dir)
         env["CCB_CLEAN_INSTALL"] = "1"
-        if platform.system() == "Windows":
-            subprocess.run(
-                ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(extracted_dir / "install.ps1"), "install"],
-                check=True,
-                env=env,
-            )
-        else:
-            subprocess.run([str(extracted_dir / "install.sh"), "install"], check=True, env=env)
+        bash_bin = shutil.which("bash")
+        if not bash_bin:
+            print("❌ Update failed: required shell 'bash' is not available")
+            return 1
+        subprocess.run([bash_bin, str(extracted_dir / "install.sh"), "install"], check=True, env=env)
 
         new_info = get_version_info(install_dir)
         _print_update_outcome(old_info, new_info)
@@ -177,6 +140,28 @@ def _print_update_outcome(old_info: dict[str, object], new_info: dict[str, objec
         print(f"✅ Updated: {old_str} → {new_str}")
     else:
         print(f"✅ Already up to date: {new_str}")
+
+
+def _release_artifact_url(version: str, *, artifact_name: str) -> str:
+    return f"{REPO_URL}/releases/download/v{version}/{artifact_name}"
+
+
+def _release_artifact_name() -> str | None:
+    arch = _normalize_linux_arch(platform.machine())
+    if arch is None:
+        return None
+    return f"ccb-linux-{arch}.tar.gz"
+
+
+def _normalize_linux_arch(raw_arch: str) -> str | None:
+    text = str(raw_arch or "").strip().lower()
+    mapping = {
+        "x86_64": "x86_64",
+        "amd64": "x86_64",
+        "aarch64": "aarch64",
+        "arm64": "aarch64",
+    }
+    return mapping.get(text)
 
 
 __all__ = ['cmd_update']

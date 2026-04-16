@@ -14,7 +14,7 @@ def test_cmd_update_defaults_to_latest_release(monkeypatch, tmp_path: Path) -> N
     captured: dict[str, object] = {}
 
     monkeypatch.setenv("CODEX_INSTALL_PREFIX", str(install_dir))
-    monkeypatch.setattr(update_runtime, "_try_git_update", lambda *args, **kwargs: None)
+    monkeypatch.setattr(update_runtime.platform, "system", lambda: "Linux")
     monkeypatch.setattr(update_runtime, "pick_temp_base_dir", lambda _install_dir: tmp_base)
     monkeypatch.setattr(update_runtime, "get_available_versions", lambda: ["5.1.0", "5.3.0", "5.2.8"])
 
@@ -42,10 +42,34 @@ def test_cmd_update_errors_when_latest_release_cannot_be_resolved(monkeypatch, t
     tmp_base.mkdir()
 
     monkeypatch.setenv("CODEX_INSTALL_PREFIX", str(install_dir))
-    monkeypatch.setattr(update_runtime, "_try_git_update", lambda *args, **kwargs: None)
+    monkeypatch.setattr(update_runtime.platform, "system", lambda: "Linux")
     monkeypatch.setattr(update_runtime, "pick_temp_base_dir", lambda _install_dir: tmp_base)
     monkeypatch.setattr(update_runtime, "get_available_versions", lambda: [])
 
     code = update_runtime.cmd_update(SimpleNamespace(target=None), script_root=tmp_path / "script-root")
 
     assert code == 1
+
+
+def test_cmd_update_rejects_non_linux_platform(monkeypatch, tmp_path: Path, capsys) -> None:
+    monkeypatch.setattr(update_runtime.platform, "system", lambda: "Darwin")
+
+    code = update_runtime.cmd_update(SimpleNamespace(target=None), script_root=tmp_path / "script-root")
+
+    assert code == 1
+    captured = capsys.readouterr()
+    assert "Linux/WSL" in captured.out
+
+
+def test_release_artifact_name_uses_linux_arch_aliases(monkeypatch) -> None:
+    monkeypatch.setattr(update_runtime.platform, "machine", lambda: "amd64")
+    assert update_runtime._release_artifact_name() == "ccb-linux-x86_64.tar.gz"
+
+    monkeypatch.setattr(update_runtime.platform, "machine", lambda: "arm64")
+    assert update_runtime._release_artifact_name() == "ccb-linux-aarch64.tar.gz"
+
+
+def test_release_artifact_url_points_to_release_download() -> None:
+    url = update_runtime._release_artifact_url("6.0.0", artifact_name="ccb-linux-x86_64.tar.gz")
+
+    assert url == "https://github.com/bfly123/claude_code_bridge/releases/download/v6.0.0/ccb-linux-x86_64.tar.gz"

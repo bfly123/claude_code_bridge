@@ -184,6 +184,7 @@ Optional environment variables:
   CCB_BUILD_ARCH           Override build arch metadata (default: uname -m)
   CCB_BUILD_TIME           Override build timestamp metadata (default: current UTC time)
   CCB_SOURCE_KIND          Override source kind metadata (default: source if .git exists, else release)
+  CCB_CONFIRM_MAJOR_UPGRADE Set to 1 to confirm replacing a pre-v6 install with v6+
   CCB_CLAUDE_MD_MODE       CLAUDE.md injection mode: "inline" (default) or "route"
                            inline = full config in CLAUDE.md (~57 lines)
                            route  = minimal pointer in CLAUDE.md, full config in ~/.claude/rules/ccb-config.md
@@ -479,6 +480,95 @@ resolve_install_mode() {
   else
     echo "release"
   fi
+}
+
+read_simple_json_string_field() {
+  local file="$1"
+  local key="$2"
+  if [[ ! -f "$file" ]]; then
+    return 0
+  fi
+  grep -o "\"${key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$file" 2>/dev/null | head -1 | sed -E "s/.*:[[:space:]]*\"([^\"]*)\"/\1/"
+}
+
+read_installed_version() {
+  if [[ -f "$INSTALL_PREFIX/VERSION" ]]; then
+    tr -d '[:space:]' < "$INSTALL_PREFIX/VERSION"
+    return
+  fi
+  local build_info_version
+  build_info_version="$(read_simple_json_string_field "$INSTALL_PREFIX/BUILD_INFO.json" "version")"
+  if [[ -n "$build_info_version" ]]; then
+    echo "$build_info_version"
+    return
+  fi
+  if [[ -f "$INSTALL_PREFIX/ccb" ]]; then
+    sed -n 's/^VERSION[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' "$INSTALL_PREFIX/ccb" | head -1
+  fi
+}
+
+version_major() {
+  local version_text="${1:-}"
+  if [[ "$version_text" =~ ^([0-9]+)(\..*)?$ ]]; then
+    echo "${BASH_REMATCH[1]}"
+  fi
+}
+
+require_major_upgrade_confirmation() {
+  local target_version existing_version target_major existing_major
+  target_version="$(resolve_install_version)"
+  existing_version="$(read_installed_version)"
+
+  if [[ -z "$target_version" || -z "$existing_version" ]]; then
+    return 0
+  fi
+
+  target_major="$(version_major "$target_version")"
+  existing_major="$(version_major "$existing_version")"
+  if [[ -z "$target_major" || -z "$existing_major" ]]; then
+    return 0
+  fi
+
+  if (( target_major < 6 || existing_major >= 6 )); then
+    return 0
+  fi
+
+  if [[ "${CCB_CONFIRM_MAJOR_UPGRADE:-}" == "1" || "${CCB_INSTALL_ASSUME_YES:-}" == "1" ]]; then
+    return 0
+  fi
+
+  echo
+  echo "================================================================"
+  echo "WARN: Major upgrade confirmation required"
+  echo "================================================================"
+  echo "Detected existing install : v$existing_version"
+  echo "Incoming install version  : v$target_version"
+  echo
+  echo "CCB v6 replaces the old source-era update path and rebuilds runtime behavior."
+  echo "To avoid accidental upgrades, this install stops until you confirm explicitly."
+  echo
+  echo "Continue options:"
+  echo "  1. Interactive shell: rerun and answer the prompt"
+  echo "  2. Non-interactive : CCB_CONFIRM_MAJOR_UPGRADE=1 ccb update"
+  echo "  3. Direct install  : CCB_CONFIRM_MAJOR_UPGRADE=1 ./install.sh install"
+  echo "================================================================"
+
+  if [[ ! -t 0 ]]; then
+    echo "ERROR: Aborting major upgrade in non-interactive mode without confirmation."
+    return 1
+  fi
+
+  local reply
+  read -r -p "Confirm replacing the existing pre-v6 install with CCB v${target_version}? (y/N): " reply
+  case "$reply" in
+    y|Y|yes|YES)
+      return 0
+      ;;
+    *)
+      echo "Installation cancelled"
+      return 1
+      ;;
+  esac
 }
 
 print_install_identity_summary() {
@@ -1645,6 +1735,7 @@ cleanup_legacy_files() {
 }
 
 install_all() {
+  require_major_upgrade_confirmation
   install_requirements
   remove_codex_mcp
   cleanup_legacy_files
