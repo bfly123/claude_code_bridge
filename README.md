@@ -1,8 +1,8 @@
 <div align="center">
 
-# CCB v6 - Infinite Parallel Agent Edition
+# CCB v6(Linux) - Infinite Parallel Agents Edition
 
-**Infinite parallel agents in one project runtime**
+**Native multi-agent runtime for terminal split panes**
 **Claude · Codex · Gemini · OpenCode · Droid**
 **Visible concurrency, native communication, project-scoped runtime**
 
@@ -12,9 +12,6 @@
 </p>
 
 [![Version](https://img.shields.io/badge/version-6.0.0-orange.svg)]()
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![CI](https://github.com/bfly123/claude_code_bridge/actions/workflows/test.yml/badge.svg)](https://github.com/bfly123/claude_code_bridge/actions/workflows/test.yml)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 **English** | [Chinese](README_zh.md)
@@ -34,74 +31,61 @@
 
 ---
 
-**Introduction:** CCB v6 is the infinite parallel agent edition. It turns split-pane collaboration into a native multi-agent runtime where agents can run side by side, hold independent roles and personalities, and delegate to each other through a stable built-in communication layer.
+**Introduction:** CCB v6 is the infinite parallel agents edition. It turns split-pane collaboration into a native multi-agent runtime where agents can run side by side, hold independent roles and personalities, and delegate to each other through a stable built-in communication layer.
 
 ## Why Parallel Agents Matter
 
 Parallel agents are not just "more panes on screen". In CCB, each agent can own a fully independent role, task stream, skill library, and personality.
 
-- **Independent roles**: implementer, reviewer, planner, domain specialist, or anything else
-- **Independent tasks**: agents can work in parallel without collapsing into one shared context
-- **Independent skills**: each agent can use different skills, rules, and execution patterns
-- **Independent personalities**: each agent can follow a distinct collaboration style
-
-CCB provides the runtime foundation for stable agent-to-agent communication and effectively unbounded delegation.
-
-## ⚡ CCB v6 At A Glance
-
-| Feature | Benefit |
-| :--- | :--- |
-| **♾️ Infinite Parallel Agents** | CCB is designed as the runtime foundation for effectively unbounded agent-to-agent delegation and parallel execution. |
-| **🧠 Independent Roles** | Each agent can own a separate role, task stream, skill set, and personality. |
-| **🤝 Stable Native Communication** | Agents communicate through a built-in control plane instead of fragile shell glue. |
-| **🪟 Visible Concurrency** | Multiple agents run side by side in one project-scoped tmux UI with isolated runtime/session state. |
-| **♻️ Rebuildable Projects** | `.ccb/ccb.config` remains the durable source of truth; runtime state can be cleared and rebuilt safely. |
+CCB provides the runtime foundation for stable agent-to-agent communication and effectively unbounded delegation. It supports arbitrary agent naming and window arrangement, per-agent control, broadcast dispatch, and point-to-point communication.
 
 ## 🚀 User Commands
 
-Public user workflow:
+- `ccb` open CCB in the project directory from the terminal
+- `ccb -s` safe mode
+- `ccb -n` rebuild the project `.ccb` state
+- `ccb kill` close CCB
+- `ccb kill -f` deep-clean exit
 
-- `ccb`
-- `ccb -s`
-- `ccb -n`
-- `ccb kill`
-- `ccb kill -f`
+## 💬 Communication Usage
 
-These are the only commands that define the public user-side startup and reset workflow in CCB v6.
+Inside a provider / agent runtime:
 
-## 🧱 Runtime Model
+- `/ask all "sync on the latest repo state"` broadcasts one message to all live agents.
+- `/ask reviewer "review the new parser change"` sends work to the named `[reviewer]` agent.
 
-- **Project config is authoritative**: `.ccb/ccb.config` defines the project agents and startup surface.
-- **Runtime state is disposable**: agent runtime, sessions, mailboxes, and provider state live under `.ccb`, but can be rebuilt from config.
-- **Legacy projects are auto-cleaned**: on first `ccb` inside a pre-6 project, CCB preserves `.ccb/ccb.config`, clears the rest of the old `.ccb` runtime state, and rebuilds locally.
-- **Worktree safety is explicit**: dirty or unmerged CCB-managed git worktrees still block destructive cleanup.
-- **Current runtime is marked**: `.ccb/project-runtime.json` prevents active 6.x projects from being mistaken for legacy state.
+Typical pattern:
 
-## Agent-First v2 Status
+- use `ask all` for one-shot broadcast or global sync
+- use `ask agent_name` for targeted delegation
+- use implicit skill-based calls; agents invoke `ask` themselves, and skills are currently auto-installed into Codex, Claude, and other providers
+- if you only occasionally need to inspect replies manually, `pend` and `watch` are secondary tools
 
-`ccb_source` currently contains the new agent-first v2 implementation baseline.
+## 🛠 Config Control
 
-| Provider | v2 adapter status | Completion family |
-| :--- | :--- | :--- |
-| `codex` | real adapter | `protocol_turn` |
-| `claude` | real adapter | `session_boundary` |
-| `gemini` | real adapter | `anchored_session_stability` |
-| `opencode` | minimal v2 adapter | `legacy_text_quiet` |
-| `droid` | minimal v2 adapter | `legacy_text_quiet` |
+`ccb` is controlled by `.ccb/ccb.config`. That file defines agent names, pane layout, and whether an agent runs `inplace` or in a separate git worktree.
 
-Diagnostic output has been tightened for v2:
+Quick rules:
 
-- `ccb ps` now prints runtime/session/workspace binding
-- `ccb doctor` now prints `binding_status`, runtime ref, session ref, and workspace path
+- `agent_name:provider` defines one agent. `agent_name` is also the pane label and logical runtime name.
+- `cmd` adds one shell pane.
+- `;` splits panes horizontally from left to right.
+- `,` splits panes vertically from top to bottom.
+- Default workspace mode is `inplace`. If one agent needs an isolated git worktree to avoid conflicts, write `agent_name:provider(worktree)`.
 
-Recommended validation commands:
+Example:
 
-```bash
-pytest -q
-pytest -q test/test_v2_execution_service.py test/test_v2_ccbd_socket.py test/test_v2_phase2_entrypoint.py
+```text
+cmd; writer:codex, reviewer:claude; qa:gemini(worktree)
 ```
 
----
+This layout means:
+
+- left pane: `cmd`
+- right side: a vertical stack
+- top-right pane: `writer`
+- bottom-right side: a horizontal split between `reviewer` and `qa`
+- `qa` runs in an isolated git worktree; `writer` and `reviewer` run inplace in the main project
 
 <h2 align="center">🚀 What's New</h2>
 
@@ -530,6 +514,9 @@ agent1:codex,agent2:codex,agent3:claude,cmd
 Rules:
 - Each agent entry must be `agent_name:provider`.
 - `cmd` is a reserved standalone token for the shell pane, not an agent name.
+- `;` splits panes horizontally from left to right.
+- `,` splits panes vertically from top to bottom.
+- `(...)` groups part of the layout explicitly.
 - Each agent entry expands to fixed defaults: `target='.'`, `workspace_mode='inplace'`, `restore='auto'`, `permission='manual'`.
 - Use `agent_name:provider(worktree)` when you want that agent isolated in its own git worktree.
 - Missing project config is auto-created as `codex:codex,claude:claude`.

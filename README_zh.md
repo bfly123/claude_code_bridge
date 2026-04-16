@@ -1,6 +1,6 @@
 <div align="center">
 
-# CCB v6 - 无限并发 agent 版本
+# CCB v6(Linux) - 无限并发 agents 版本
 
 **终端分屏原生多 Agent Runtime**
 **Claude · Codex · Gemini · OpenCode · Droid**
@@ -31,7 +31,7 @@
 
 </div>
 
---- 
+---
 
 **简介：** CCB v6 是“无限并发 agent 版本”。它把终端分屏协作提升为原生多 agent runtime，让 agent 可以并排运行、保持独立角色与人格，并通过稳定的内建通信层彼此调用。
 
@@ -39,72 +39,59 @@
 
 多 agent 并行并不只是“多开几个 pane”。在 CCB 里，每个 agent 都可以拥有完全独立的角色、任务流、skill 库和人格。
 
-- **角色独立**：可以分别扮演实现、审查、规划、领域分析等不同角色
-- **任务独立**：多个 agent 可以并行推进，不必挤在同一个上下文里
-- **skill 独立**：每个 agent 都可以使用不同的 skill、规则和执行方式
-- **人格独立**：每个 agent 都可以有不同的协作风格
+CCB 为稳定的 agent 间通信和几乎无限量的 agent 互相调用提供运行时基础。支持任意命名和桌面窗口排列, 支持每个agent独立控制,支持派发和单点通讯.
 
-CCB 为稳定的 agent 间通信和几乎无限量的 agent 互相调用提供运行时基础。
 
-## ⚡ CCB v6 的核心特征
-
-| 特性 | 价值 |
-| :--- | :--- |
-| **无限并发 agent 基础** | CCB 是为几乎无限量的 agent 互调与并行编排提供运行时基础。 |
-| **独立角色** | 每个 agent 都可以拥有独立的角色、任务流、skill 集和人格。 |
-| **稳定原生通信** | agent 间通信依赖内建 control plane，而不是脆弱 shell 拼接。 |
-| **可见并发** | 多个 agent 在同一个项目级 tmux UI 中并排运行，并保持隔离的 runtime/session 状态。 |
-| **可重建项目** | `.ccb/ccb.config` 是持久真相源，运行时状态可以安全清理并重建。 |
 
 ## 🚀 用户命令
 
-公开用户工作流：
+- `ccb`  基于terminal 在项目目录打开ccb
+- `ccb -s safe模式`
+- `ccb -n 重建项目ccb`
+- `ccb kill 关闭ccb`
+- `ccb kill -f 深度清理式退出`
 
-- `ccb`
-- `ccb -s`
-- `ccb -n`
-- `ccb kill`
-- `ccb kill -f`
+## 💬 通讯使用
 
-这些命令构成了 CCB v6 面向用户的公开启动与重建工作流。
+在 provider / agent runtime 内
 
-## 🧱 运行时模型
+- `/ask all  "sync on the latest repo state"` 会把一条消息广播给所有存活 agent。
+- `/ask reviewer "review the new parser change"` 会把任务定向发给[reviewer]命名 agent。
 
-- **项目配置是唯一权威**：`.ccb/ccb.config` 定义项目里的 agent 和启动入口。
-- **运行时状态可丢弃可重建**：agent runtime、session、mailbox、provider state 都在 `.ccb` 下，但可由 config 重新构建。
-- **旧项目自动清理**：首次在 pre-6 项目里执行 `ccb` 时，会保留 `.ccb/ccb.config`，清理其余旧 `.ccb` 运行时状态，再原地重建。
-- **Worktree 安全显式处理**：CCB 管理的 git worktree 如果存在脏改动或未合并状态，仍会阻断破坏性清理。
-- **当前运行时有标记**：`.ccb/project-runtime.json` 用于区分 6.x 当前运行时和旧状态。
+典型模式：
 
-## Agent-First v2 状态
+- 用 `ask all` 做一次广播或全局同步
+- 用 `ask agent_name` 做定向委派
+- 通过skill隐式调用, agent自己会使用ask ,目前自动安装skill到codex claude 等provider
+- 如果只是偶尔需要手动查看回复，`pend` 和 `watch` 仍然可用，但它们属于次级查看工具
 
-`ccb_source` 当前以 agent-first v2 为主线实现。
+## 🛠 配置控制
 
-当前 provider 状态：
+`ccb` 的行为由 `.ccb/ccb.config` 控制。这个文件直接定义 agent 名字、pane 分屏方式，以及某个 agent 是 `inplace` 运行还是进入独立 git worktree。
 
-| Provider | v2 适配状态 | 完成检测族 |
-| :--- | :--- | :--- |
-| `codex` | real adapter | `protocol_turn` |
-| `claude` | real adapter | `session_boundary` |
-| `gemini` | real adapter | `anchored_session_stability` |
-| `opencode` | minimal v2 adapter | `legacy_text_quiet` |
-| `droid` | minimal v2 adapter | `legacy_text_quiet` |
+快速规则：
 
-诊断输出也已收敛到 v2：
+- `agent_name:provider` 定义一个 agent；其中 `agent_name` 同时也是 pane 标题和逻辑运行时名字。
+- `cmd` 表示增加一个 shell pane。
+- `;` 表示左右分栏。
+- `,` 表示上下分栏。
+- 默认工作区模式是 `inplace`。如果某个 agent 需要独立 git worktree(可以避免冲突)，就写成 `agent_name:provider(worktree)`。
 
-- `ccb ps` 输出 runtime/session/workspace 绑定
-- `ccb doctor` 输出 `binding_status`、runtime ref、session ref 与 workspace path
+示例：
 
-推荐验证命令：
-
-```bash
-pytest -q
-pytest -q test/test_v2_execution_service.py test/test_v2_ccbd_socket.py test/test_v2_phase2_entrypoint.py
+```text
+cmd; writer:codex, reviewer:claude; qa:gemini(worktree)
 ```
 
----
+这个布局表示：
 
-有人问我，和其他工作流软件的区别是什么，我用一句话回答：该项目只是不满api调用的agent交互方式而打造的**可见可控的多模型通讯方案**，该项目并不是工作流项目，但是基于它可以更容易发展出你所理想的工作流。
+- 左侧 pane：`cmd`
+- 右侧整体：上下堆叠
+- 右上 pane：`writer`
+- 右下区域：`reviewer` 和 `qa` 左右并排
+- `qa` 使用独立 git worktree；`writer` 和 `reviewer` 在主项目目录中以 inplace 方式运行.
+
+
 
 <h2 align="center">🚀 新版本速览</h2>
 
@@ -489,6 +476,9 @@ agent1:codex,agent2:codex,agent3:claude,cmd
 规则：
 - 每个 agent 项都必须写成 `agent_name:provider`
 - `cmd` 是独立保留字，只表示 shell pane，不是 agent 名
+- `;` 表示左右分栏
+- `,` 表示上下分栏
+- `(...)` 表示显式分组
 - 每个 agent 项都会展开成固定默认值：`target='.'`、`workspace_mode='inplace'`、`restore='auto'`、`permission='manual'`
 - 如果希望某个 agent 使用独立 git worktree，请显式写成 `agent_name:provider(worktree)`
 - 缺失项目配置时会自动生成：`codex:codex,claude:claude`
