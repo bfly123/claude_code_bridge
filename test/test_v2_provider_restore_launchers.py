@@ -8,6 +8,7 @@ from pathlib import Path
 from agents.models import AgentSpec, PermissionMode, QueuePolicy, RestoreMode, RuntimeMode, WorkspaceMode
 from cli.models import ParsedStartCommand
 from provider_backends.claude import launcher as claude_launcher
+from provider_backends.claude.launcher_runtime.history import ClaudeHistoryLocator
 from provider_backends.gemini import launcher as gemini_launcher
 
 
@@ -155,6 +156,80 @@ def test_claude_build_start_cmd_skips_continue_when_restore_disabled_even_with_h
     )
 
     assert '--continue' not in cmd
+
+
+def test_claude_restore_ignores_project_root_history_for_ccb_managed_workspace(
+    monkeypatch, tmp_path: Path
+) -> None:
+    home_dir = tmp_path / 'home'
+    project_root = tmp_path / 'repo'
+    runtime_dir = project_root / '.ccb' / 'agents' / 'reviewer' / 'provider-runtime' / 'claude'
+    workspace_path = project_root / '.ccb' / 'workspaces' / 'reviewer'
+    runtime_dir.mkdir(parents=True)
+    workspace_path.mkdir(parents=True)
+    (workspace_path / '.ccb-workspace.json').write_text(
+        json.dumps(
+            {
+                'schema_version': 2,
+                'record_type': 'workspace_binding',
+                'workspace_path': str(workspace_path),
+                'target_project': str(project_root),
+                'project_id': 'demo-project',
+                'agent_name': 'reviewer',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    project_dir = home_dir / '.claude' / 'projects' / ''.join(ch if ch.isalnum() else '-' for ch in str(project_root))
+    session_env_root = home_dir / '.claude' / 'session-env'
+    project_dir.mkdir(parents=True)
+    session_env_root.mkdir(parents=True)
+    session_id = str(uuid.uuid4())
+    (project_dir / f'{session_id}.jsonl').write_text('history\n', encoding='utf-8')
+    (session_env_root / session_id).mkdir()
+    monkeypatch.setattr(claude_launcher.Path, 'home', lambda: home_dir)
+
+    target = claude_launcher._resolve_claude_restore_target(
+        spec=_spec('reviewer', 'claude'),
+        runtime_dir=runtime_dir,
+        workspace_path=workspace_path,
+        restore=True,
+    )
+
+    assert target.has_history is False
+    assert target.run_cwd == workspace_path
+
+
+def test_claude_history_locator_tracks_actual_pwd_fallback_directory(monkeypatch, tmp_path: Path) -> None:
+    home_dir = tmp_path / 'home'
+    project_root = tmp_path / 'repo'
+    workspace_path = project_root / '.ccb' / 'workspaces' / 'reviewer'
+    workspace_path.mkdir(parents=True)
+
+    project_dir = home_dir / '.claude' / 'projects' / ''.join(ch if ch.isalnum() else '-' for ch in str(project_root))
+    session_env_root = home_dir / '.claude' / 'session-env'
+    project_dir.mkdir(parents=True)
+    session_env_root.mkdir(parents=True)
+    session_id = str(uuid.uuid4())
+    (project_dir / f'{session_id}.jsonl').write_text('history\n', encoding='utf-8')
+    (session_env_root / session_id).mkdir()
+
+    monkeypatch.setenv('PWD', str(project_root))
+    locator = ClaudeHistoryLocator(
+        invocation_dir=workspace_path,
+        project_root=project_root,
+        env={'PWD': str(project_root)},
+        home_dir=home_dir,
+    )
+
+    resolved_session_id, has_history, best_cwd = locator.latest_session_id()
+
+    assert resolved_session_id == session_id
+    assert has_history is True
+    assert best_cwd == project_root
 
 
 def test_gemini_build_start_cmd_skips_resume_when_restore_disabled_even_with_history(monkeypatch, tmp_path: Path) -> None:

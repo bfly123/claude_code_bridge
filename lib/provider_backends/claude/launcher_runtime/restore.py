@@ -31,11 +31,12 @@ def resolve_claude_restore_target(
     if session_target is not None:
         return session_target
 
-    project_root = context.project_root or context.workspace_path
+    managed_workspace = is_ccb_managed_workspace(context.workspace_path)
+    project_root = context.workspace_path if managed_workspace else (context.project_root or context.workspace_path)
     _session_id, has_history, best_cwd = claude_history_state_fn(
         invocation_dir=context.workspace_path,
         project_root=project_root,
-        include_env_pwd=True,
+        include_env_pwd=not managed_workspace,
     )
     if has_history:
         return ProviderRestoreTarget(run_cwd=existing_dir(best_cwd) or context.workspace_path, has_history=True)
@@ -92,9 +93,17 @@ def existing_dir(value: object) -> Path | None:
     return path if path.is_dir() else None
 
 
+def is_ccb_managed_workspace(workspace_path: Path) -> bool:
+    try:
+        return (workspace_path / ".ccb-workspace.json").is_file()
+    except Exception:
+        return False
+
+
 __all__ = [
     'claude_history_state',
     'existing_dir',
+    'is_ccb_managed_workspace',
     'project_session_restore_target',
     'resolve_claude_restore_target',
 ]

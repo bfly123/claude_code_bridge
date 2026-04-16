@@ -14,14 +14,14 @@ class ClaudeHistoryLocator:
     env: Mapping[str, str]
     home_dir: Path
 
-    def project_dir(self, work_dir: Path) -> Path:
-        return project_dir_for_work_dir(work_dir=work_dir, env=self.env, home_dir=self.home_dir)
+    def project_binding(self, work_dir: Path) -> tuple[Path, Path]:
+        return project_binding_for_work_dir(work_dir=work_dir, env=self.env, home_dir=self.home_dir)
 
     def latest_session_id(self) -> tuple[str | None, bool, Path | None]:
         return latest_session_id_for_candidates(
             candidates=history_candidates(self.invocation_dir, self.project_root),
             home_dir=self.home_dir,
-            project_dir_fn=self.project_dir,
+            project_binding_fn=self.project_binding,
         )
 
 
@@ -34,13 +34,20 @@ def history_candidates(invocation_dir: Path, project_root: Path) -> list[Path]:
     return candidates
 
 
-def project_dir_for_work_dir(*, work_dir: Path, env: Mapping[str, str], home_dir: Path) -> Path:
+def project_binding_for_work_dir(*, work_dir: Path, env: Mapping[str, str], home_dir: Path) -> tuple[Path, Path]:
     projects_root = home_dir / ".claude" / "projects"
     for candidate in project_dir_candidates(work_dir, env):
+        normalized_candidate = resolve_fallback_path(candidate)
         project_dir = projects_root / project_key(candidate)
         if project_dir.exists():
-            return project_dir
-    return projects_root / project_key(resolve_fallback_path(work_dir))
+            return project_dir, normalized_candidate
+    fallback = resolve_fallback_path(work_dir)
+    return projects_root / project_key(fallback), fallback
+
+
+def project_dir_for_work_dir(*, work_dir: Path, env: Mapping[str, str], home_dir: Path) -> Path:
+    project_dir, _matched_cwd = project_binding_for_work_dir(work_dir=work_dir, env=env, home_dir=home_dir)
+    return project_dir
 
 
 def project_dir_candidates(work_dir: Path, env: Mapping[str, str]) -> list[Path]:
@@ -70,7 +77,7 @@ def project_key(work_dir: Path) -> str:
     return re.sub(r"[^A-Za-z0-9]", "-", str(work_dir))
 
 
-def latest_session_id_for_candidates(*, candidates: list[Path], home_dir: Path, project_dir_fn) -> tuple[str | None, bool, Path | None]:
+def latest_session_id_for_candidates(*, candidates: list[Path], home_dir: Path, project_binding_fn) -> tuple[str | None, bool, Path | None]:
     session_env_root = home_dir / ".claude" / "session-env"
     best_uuid: Path | None = None
     best_any: Path | None = None
@@ -78,17 +85,17 @@ def latest_session_id_for_candidates(*, candidates: list[Path], home_dir: Path, 
     best_cwd: Path | None = None
 
     for work_dir in candidates:
-        project_dir = project_dir_fn(work_dir)
+        project_dir, matched_cwd = project_binding_fn(work_dir)
         if not project_dir.exists():
             continue
         session_files = list(project_dir.glob("*.jsonl"))
         if not session_files:
             continue
         has_any_history = True
-        best_any, best_cwd = maybe_update_best_any(session_files, work_dir, best_any=best_any, best_cwd=best_cwd)
+        best_any, best_cwd = maybe_update_best_any(session_files, matched_cwd, best_any=best_any, best_cwd=best_cwd)
         best_uuid, best_cwd = update_best_uuid_session(
             session_files,
-            work_dir,
+            matched_cwd,
             session_env_root=session_env_root,
             best_uuid=best_uuid,
             best_cwd=best_cwd,
