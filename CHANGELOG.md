@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+## v6.0.0 (2026-04-16)
+
+### 🚀 Multi-Agent Runtime
+
+- **Infinite Parallel Agent Edition**: CCB v6 establishes the runtime foundation for effectively unbounded multi-agent delegation inside one project
+- **Independent Agent Identity**: Each agent can carry its own role, task stream, skill set, and collaboration style
+- **Stable Native Communication**: Agent-to-agent orchestration continues through the built-in control plane instead of shell-level glue
+
+### 🧭 Public CLI Surface
+
+- **User Workflow Reduced**: Public startup and rebuild flow is now intentionally centered on `ccb`, `ccb -s`, `ccb -n`, `ccb kill`, and `ccb kill -f`
+- **Control Plane Retained**: `ask`, `ping`, `pend`, and `watch` remain available for model-side coordination without dominating user help
+- **Safe Rebuild Semantics**: Legacy project runtime state is rebuilt from `.ccb/ccb.config`, while current 6.x projects retain an explicit runtime marker
+
+### 🌳 Workspace & Recovery
+
+- **Default Inplace Workspaces**: Agents now default to `inplace`; isolated branches are opt-in via `agent:provider(worktree)`
+- **Worktree Reconciliation**: Added stable handling for added, removed, renamed, dirty, missing, and unmerged worktree agents during start, kill, and `ccb -n`
+- **Restore Stability**: Namespace root panes are preserved during cleanup so restart/restore flows no longer self-delete active project panes
+
+### 🤖 Provider & Release Reliability
+
+- **Gemini Multi-Round Completion**: Gemini completion polling now survives planning/tool rounds and waits for the real final reply
+- **Linux Release Path**: `ccb update` for the 6.x line is now aligned to Linux/WSL release assets instead of source snapshots
+- **Release Metadata Preservation**: Install/update paths preserve embedded version, commit, and date metadata, including git worktree installs
+
 ## v5.3.0 (2026-04-14)
 
 ### 🚀 CLI & Workspace Model

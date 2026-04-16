@@ -57,6 +57,24 @@ def test_dirty_worktree_entries_reads_porcelain_output(monkeypatch) -> None:
     assert entries == (" M install.sh", "?? scripts/build_linux_release.py")
 
 
+def test_dirty_worktree_entries_ignores_excluded_local_metadata(monkeypatch) -> None:
+    module = _load_module()
+
+    def _fake_run(cmd, **kwargs):
+        assert cmd[-2:] == ["--porcelain", "--untracked-files=all"]
+        return SimpleNamespace(
+            returncode=0,
+            stdout="?? .gemini/settings.json\n M install.sh\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", _fake_run)
+
+    entries = module.dirty_worktree_entries(Path("/tmp/repo"))
+
+    assert entries == (" M install.sh",)
+
+
 def test_ensure_clean_worktree_raises_on_dirty(monkeypatch) -> None:
     module = _load_module()
     monkeypatch.setattr(

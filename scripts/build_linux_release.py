@@ -19,6 +19,7 @@ DEFAULT_OUTPUT_DIR = REPO_ROOT / "dist"
 EXCLUDES = {
     ".git",
     ".ccb",
+    ".gemini",
     "__pycache__",
     ".pytest_cache",
     ".mypy_cache",
@@ -223,7 +224,27 @@ def dirty_worktree_entries(repo_root: Path) -> tuple[str, ...]:
     )
     if result.returncode != 0:
         raise RuntimeError(f"git status failed: {result.stderr.strip() or result.stdout.strip() or result.returncode}")
-    return tuple(line.rstrip() for line in result.stdout.splitlines() if line.strip())
+    return tuple(
+        line.rstrip()
+        for line in result.stdout.splitlines()
+        if line.strip() and not is_excluded_status_entry(line)
+    )
+
+
+def is_excluded_status_entry(line: str) -> bool:
+    text = str(line or "").rstrip()
+    if len(text) < 4:
+        return False
+    payload = text[3:].strip()
+    if not payload:
+        return False
+    candidates = [part.strip() for part in payload.split("->")]
+    return all(is_excluded_relpath(candidate) for candidate in candidates if candidate)
+
+
+def is_excluded_relpath(value: str) -> bool:
+    path = Path(str(value or "").strip())
+    return any(part in EXCLUDES for part in path.parts)
 
 
 def export_git_archive(repo_root: Path, destination: Path, *, git_ref: str) -> None:
