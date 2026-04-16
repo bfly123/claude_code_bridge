@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from ccbd.app import CcbdApp
 from ccbd.lifecycle_report_store import CcbdStartupReportStore
 from ccbd.start_flow import StartFlowSummary
+from ccbd.start_flow_runtime.service_tmux import project_socket_active_panes
 from ccbd.socket_client import CcbdClient
 from cli.services.provider_binding import AgentBinding
 from cli.services.runtime_launch import RuntimeLaunchResult
@@ -36,6 +37,18 @@ class _FakeNamespaceTmuxBackend:
         if args[:2] == ['list-panes', '-t']:
             return SimpleNamespace(stdout='%0\n')
         raise AssertionError(f'unexpected tmux args: {args}')
+
+
+def test_project_socket_active_panes_preserves_namespace_root_without_cmd() -> None:
+    active_panes, cmd_pane_id = project_socket_active_panes(
+        tmux_layout=SimpleNamespace(cmd_pane_id=None, agent_panes={}),
+        tmux_socket_path='/tmp/ccb.sock',
+        config=SimpleNamespace(cmd_enabled=False),
+        root_pane_id='%0',
+    )
+
+    assert active_panes == ['%0']
+    assert cmd_pane_id is None
 
 
 def test_ccbd_start_flow_writes_runtime_authority_via_rpc(tmp_path: Path, monkeypatch) -> None:

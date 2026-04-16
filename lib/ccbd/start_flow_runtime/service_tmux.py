@@ -64,10 +64,12 @@ def project_socket_active_panes(
     root_pane_id: str | None,
 ) -> tuple[list[str], str | None]:
     active_panes: list[str] = []
+    if root_pane_id and tmux_socket_path is not None:
+        active_panes.append(root_pane_id)
     cmd_pane_id = tmux_layout.cmd_pane_id
     if cmd_pane_id is None and tmux_socket_path is not None and bool(getattr(config, 'cmd_enabled', False)):
         cmd_pane_id = root_pane_id
-    if cmd_pane_id and tmux_socket_path is not None:
+    if cmd_pane_id and tmux_socket_path is not None and cmd_pane_id not in active_panes:
         active_panes.append(cmd_pane_id)
     return active_panes, cmd_pane_id
 

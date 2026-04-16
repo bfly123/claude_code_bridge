@@ -853,7 +853,7 @@ def test_ccb_v2_project_lifecycle(tmp_path: Path) -> None:
     assert ps.returncode == 0, ps.stderr
     assert 'ccbd_state: mounted' in ps.stdout
     assert 'agent: name=codex state=idle provider=codex queue=0' in ps.stdout
-    assert f'workspace={project_root / ".ccb" / "workspaces" / "codex"}' in ps.stdout
+    assert f'workspace={project_root.resolve()}' in ps.stdout
 
     doctor = _run_ccb(['doctor'], cwd=project_root)
     assert doctor.returncode == 0, doctor.stderr
@@ -861,7 +861,7 @@ def test_ccb_v2_project_lifecycle(tmp_path: Path) -> None:
     assert 'ccbd_generation: 1' in doctor.stdout
     assert 'ccbd_reason: healthy' in doctor.stdout
     assert 'agent: name=codex health=restored provider=codex completion=protocol_turn' in doctor.stdout
-    assert f'workspace={project_root / ".ccb" / "workspaces" / "codex"}' in doctor.stdout
+    assert f'workspace={project_root.resolve()}' in doctor.stdout
 
     ask = _run_ccb(['ask', 'codex', 'from', 'user', 'hello from test'], cwd=project_root)
     assert ask.returncode == 0, ask.stderr
@@ -2683,9 +2683,13 @@ def test_ccb_two_named_claude_agents_concurrent_ask_isolated(monkeypatch, tmp_pa
 
     class FakeReader:
         def __init__(self, *args, **kwargs) -> None:
-            work_dir = Path(kwargs.get('work_dir') or '')
-            self.agent_name = work_dir.name
-            if self.agent_name == 'agent1':
+            self.agent_name = ''
+            self._events = []
+
+        def set_preferred_session(self, session_path) -> None:
+            session_name = Path(session_path).name
+            if 'agent1' in session_name:
+                self.agent_name = 'agent1'
                 self._events = [
                     {'role': 'user', 'text': f'CCB_REQ_ID: {request_ids[0]}\n\nprompt', 'entry_type': 'user'},
                     {'role': 'assistant', 'text': 'claude agent1 partial', 'entry_type': 'assistant', 'uuid': 'claude-agent1-uuid'},
@@ -2697,7 +2701,9 @@ def test_ccb_two_named_claude_agents_concurrent_ask_isolated(monkeypatch, tmp_pa
                         'parent_uuid': 'claude-agent1-uuid',
                     },
                 ]
-            elif self.agent_name == 'agent2':
+                return
+            if 'agent2' in session_name:
+                self.agent_name = 'agent2'
                 self._events = [
                     {'role': 'user', 'text': f'CCB_REQ_ID: {request_ids[1]}\n\nprompt', 'entry_type': 'user'},
                     {'role': 'assistant', 'text': 'claude agent2 partial', 'entry_type': 'assistant', 'uuid': 'claude-agent2-uuid'},
@@ -2709,11 +2715,8 @@ def test_ccb_two_named_claude_agents_concurrent_ask_isolated(monkeypatch, tmp_pa
                         'parent_uuid': 'claude-agent2-uuid',
                     },
                 ]
-            else:
-                raise AssertionError(f'unexpected claude work_dir: {work_dir}')
-
-        def set_preferred_session(self, session_path) -> None:
-            del session_path
+                return
+            raise AssertionError(f'unexpected claude session path: {session_path}')
 
         def capture_state(self):
             return {'index': 0, 'session_path': f'{self.agent_name}.jsonl'}

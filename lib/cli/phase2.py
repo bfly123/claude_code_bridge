@@ -17,6 +17,7 @@ from cli.phase2_runtime import (
     stream_is_tty as _stream_is_tty_impl,
 )
 from cli.phase2_services import build_phase2_dispatch_services
+from cli.render import render_kill, write_lines
 from cli.services.ack import ack_reply
 from cli.services.ask import exit_code_for_ask_status, submit_ask, watch_ask_job, write_ask_output
 from cli.services.cancel import cancel_job
