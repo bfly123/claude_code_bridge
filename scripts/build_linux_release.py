@@ -307,8 +307,12 @@ def write_release_metadata(artifact_root: Path, build_info: dict[str, str | None
 
 
 def create_tarball(*, stage_root: Path, artifact_root: Path, artifact_path: Path) -> None:
+    legacy_alias = stage_root / artifact_path.name
+    legacy_alias.unlink(missing_ok=True)
+    legacy_alias.symlink_to(artifact_root.name)
     with tarfile.open(artifact_path, "w:gz") as tar:
         tar.add(artifact_root, arcname=artifact_root.name)
+        tar.add(legacy_alias, arcname=legacy_alias.name)
     shutil.rmtree(stage_root, ignore_errors=True)
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import tarfile
 from types import SimpleNamespace
 
 
@@ -193,3 +194,22 @@ def test_resolve_version_prefers_git_ref_snapshot(monkeypatch, tmp_path: Path) -
     version = module.resolve_version(repo_root, git_ref="v5.2.8")
 
     assert version == "gitref-version"
+
+
+def test_create_tarball_includes_legacy_update_alias(tmp_path: Path) -> None:
+    module = _load_module()
+    stage_root = tmp_path / "stage"
+    artifact_root = stage_root / "ccb-linux-x86_64"
+    artifact_root.mkdir(parents=True)
+    (artifact_root / "install.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    artifact_path = tmp_path / "ccb-linux-x86_64.tar.gz"
+
+    module.create_tarball(stage_root=stage_root, artifact_root=artifact_root, artifact_path=artifact_path)
+
+    with tarfile.open(artifact_path, "r:gz") as archive:
+        install_member = archive.getmember("ccb-linux-x86_64/install.sh")
+        alias_member = archive.getmember("ccb-linux-x86_64.tar.gz")
+
+    assert install_member.isfile()
+    assert alias_member.issym()
+    assert alias_member.linkname == "ccb-linux-x86_64"

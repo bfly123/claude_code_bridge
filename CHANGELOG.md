@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v6.0.4 (2026-04-17)
+
+### 🔁 Legacy Update Compatibility
+
+- **Backward-Compatible Release Assets**: Linux release tarballs now include a compatibility alias so older 6.x updaters that treat the asset filename as the extracted directory can still install successfully
+- **Pre-6.0.3 Upgrade Path Restored**: existing `v6.0.1` and `v6.0.2` installs can now update to the latest stable release without relying on patched local updater code
+- **Self-Update Hotfix Retained**: current runtime still resolves the extracted release directory correctly and no longer depends on the compatibility alias
+
 ## v6.0.3 (2026-04-17)
 
 ### 🔧 Self-Update Hotfix

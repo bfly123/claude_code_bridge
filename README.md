@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Every_Model_Controllable-CF1322?style=for-the-badge" alt="Every Model Controllable">
 </p>
 
-[![Version](https://img.shields.io/badge/version-6.0.3-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-6.0.4-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 **English** | [Chinese](README_zh.md)
@@ -92,6 +92,15 @@ This layout means:
 Historical note: older release notes below may mention `askd`, legacy flags, or removed commands. Those references are kept only as changelog history and do not redefine the current CLI surface.
 
 <details open>
+<summary><b>v6.0.4</b> - Legacy Update Compatibility Hotfix</summary>
+
+- **Backward-Compatible Release Assets**: Linux release tarballs now include a compatibility alias so older 6.x updaters can still find the extracted installer path
+- **Old Clients Can Upgrade Again**: existing `v6.0.1` and `v6.0.2` installs can now update to the latest stable release without needing a patched local updater first
+- **Modern Updater Still Clean**: current runtime keeps the correct extracted-directory resolution and does not depend on the legacy alias
+
+</details>
+
+<details>
 <summary><b>v6.0.3</b> - Self-Update Tarball Hotfix</summary>
 
 - **Release Upgrade Fixed**: `ccb update` now resolves the extracted release directory correctly instead of treating the `.tar.gz` asset name as a folder
@@ -558,7 +567,7 @@ CCB v6 currently supports `ccb update` only on Linux/WSL. A major upgrade fully 
 ccb update              # Update to the latest stable release
 ccb update 6            # Update to the highest v6.x.x version
 ccb update 6.0          # Update to the highest v6.0.x version
-ccb update 6.0.3        # Update to a specific version
+ccb update 6.0.4        # Update to a specific version
 ccb uninstall           # Uninstall ccb and clean configs
 ccb reinstall           # Clean then reinstall ccb
 ```
