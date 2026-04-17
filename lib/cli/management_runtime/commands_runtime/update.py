@@ -110,7 +110,7 @@ def _update_via_tarball(tmp_base: Path, *, install_dir: Path, target_version: st
         print("📂 Extracting...")
         with tarfile.open(tarball_path, "r:gz") as tar:
             safe_extract_tar(tar, tmp_dir)
-        extracted_dir = tmp_dir / extracted_name
+        extracted_dir = tmp_dir / _release_extract_dir_name(extracted_name)
 
         print("🔧 Installing...")
         env = os.environ.copy()
@@ -151,6 +151,15 @@ def _release_artifact_name() -> str | None:
     if arch is None:
         return None
     return f"ccb-linux-{arch}.tar.gz"
+
+
+def _release_extract_dir_name(artifact_name: str) -> str:
+    text = str(artifact_name or "").strip()
+    if text.endswith(".tar.gz"):
+        return text[:-7]
+    if text.endswith(".tgz"):
+        return text[:-4]
+    return Path(text).stem
 
 
 def _normalize_linux_arch(raw_arch: str) -> str | None:

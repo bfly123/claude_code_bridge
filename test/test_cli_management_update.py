@@ -73,3 +73,9 @@ def test_release_artifact_url_points_to_release_download() -> None:
     url = update_runtime._release_artifact_url("6.0.0", artifact_name="ccb-linux-x86_64.tar.gz")
 
     assert url == "https://github.com/bfly123/claude_code_bridge/releases/download/v6.0.0/ccb-linux-x86_64.tar.gz"
+
+
+def test_release_extract_dir_name_strips_tar_suffixes() -> None:
+    assert update_runtime._release_extract_dir_name("ccb-linux-x86_64.tar.gz") == "ccb-linux-x86_64"
+    assert update_runtime._release_extract_dir_name("ccb-linux-aarch64.tgz") == "ccb-linux-aarch64"
+    assert update_runtime._release_extract_dir_name("ccb-preview.zip") == "ccb-preview"

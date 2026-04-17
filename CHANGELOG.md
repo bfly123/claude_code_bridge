@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v6.0.3 (2026-04-17)
+
+### 🔧 Self-Update Hotfix
+
+- **Release Tarball Upgrade Fix**: `ccb update` now resolves the extracted release directory correctly instead of treating the `.tar.gz` filename as a directory path
+- **Installer Handoff Restored**: self-update once again finds `install.sh` inside extracted release assets and completes the replacement flow end to end
+- **Release Build Hygiene**: Linux release packaging now ignores local `.ccb-requests/` mailbox residue so official builds are not blocked by runtime leftovers
+
 ## v6.0.2 (2026-04-17)
 
 ### 🔁 Agent Routing & Install Guardrails
