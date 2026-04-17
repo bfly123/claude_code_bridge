@@ -4,12 +4,9 @@ from collections.abc import Callable, Collection
 
 from agents.models import AgentValidationError
 from ccbd.api_models import DeliveryScope, MessageEnvelope
-from mailbox_runtime.targets import normalize_actor_name
+from mailbox_runtime.targets import CMD_ACTOR, NON_AGENT_ACTORS, normalize_actor_name
 
 from .models import AskSummary
-
-
-_SYSTEM_SENDERS = {'user', 'system', 'manual'}
 
 
 def submit_ask(
@@ -25,14 +22,14 @@ def submit_ask(
     _validate_target(normalized_target, config.agents)
     sender = resolve_ask_sender_fn(context, command.sender)
     normalized_sender = _normalize_sender(sender)
-    _validate_sender(normalized_sender, config.agents)
+    _validate_sender(normalized_sender, config.agents, cmd_enabled=bool(getattr(config, 'cmd_enabled', False)))
     handle = connect_mounted_daemon_fn(context, allow_restart_stale=True)
     assert handle.client is not None
     payload = handle.client.submit(
         MessageEnvelope(
             project_id=context.project.project_id,
             to_agent=normalized_target,
-            from_actor=sender,
+            from_actor=normalized_sender,
             body=command.message,
             task_id=command.task_id,
             reply_to=command.reply_to,
@@ -63,8 +60,10 @@ def _validate_target(target: str, configured_agents: Collection[str]) -> None:
         raise ValueError(f'unknown agent: {target}')
 
 
-def _validate_sender(sender: str, configured_agents: Collection[str]) -> None:
-    if sender in _SYSTEM_SENDERS:
+def _validate_sender(sender: str, configured_agents: Collection[str], *, cmd_enabled: bool) -> None:
+    if sender in NON_AGENT_ACTORS:
+        if sender == CMD_ACTOR and not cmd_enabled:
+            raise ValueError(f'unknown sender agent: {sender}')
         return
     if sender in configured_agents:
         return

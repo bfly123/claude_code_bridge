@@ -20,14 +20,19 @@ def require_mailbox_target(service, agent_name: str) -> str:
 
 
 def summary_targets(service) -> tuple[str, ...]:
-    return tuple(sorted(getattr(service._config, 'agents', {}).keys()))
+    targets = set(getattr(service._config, 'agents', {}).keys())
+    for mailbox_name in getattr(service, '_known_mailboxes', frozenset()):
+        if mailbox_name in targets:
+            continue
+        if mailbox_has_activity(service, mailbox_name):
+            targets.add(mailbox_name)
+    return tuple(sorted(targets))
 
 
 def mailbox_has_activity(service, agent_name: str) -> bool:
-    mailbox = service._mailbox_store.load(agent_name)
-    if mailbox is not None and (mailbox.queue_depth > 0 or mailbox.pending_reply_count > 0 or mailbox.active_inbound_event_id):
-        return True
-    return any(True for _ in service._inbound_store.list_agent(agent_name))
+    from .events import pending_event_records
+
+    return bool(pending_event_records(service, agent_name))
 
 
 def preview_text(value: str, *, limit: int = 120) -> str:

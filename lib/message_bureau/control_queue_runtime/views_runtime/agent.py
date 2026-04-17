@@ -41,8 +41,8 @@ def _active_event(events: tuple[dict, ...], mailbox) -> dict | None:
 
 
 def _last_event_timestamps(events: tuple[dict, ...], mailbox) -> tuple[str | None, str | None]:
-    last_started = mailbox.last_inbound_started_at if mailbox is not None else None
-    last_finished = mailbox.last_inbound_finished_at if mailbox is not None else None
+    last_started = mailbox.last_inbound_started_at if mailbox is not None and events else None
+    last_finished = mailbox.last_inbound_finished_at if mailbox is not None and events else None
     for event in events:
         started_at = event.get('started_at')
         finished_at = event.get('finished_at')
@@ -55,7 +55,7 @@ def _last_event_timestamps(events: tuple[dict, ...], mailbox) -> tuple[str | Non
 
 def _mailbox_facts(normalized: str, mailbox, *, active: dict | None, queue_depth: int) -> tuple[str, str, int]:
     if mailbox is not None:
-        return mailbox.mailbox_id, mailbox.mailbox_state.value, mailbox.lease_version
+        return mailbox.mailbox_id, derive_mailbox_state(active is not None, queue_depth), mailbox.lease_version
     return f'mbx_{normalized}', derive_mailbox_state(active is not None, queue_depth), 0
 
 

@@ -21,6 +21,7 @@ TERMINAL_EVENT_STATES = frozenset(
 
 
 def pending_event_records(service, agent_name: str) -> list:
+    _discard_stale_head_events(service, agent_name)
     latest_by_id: dict[str, object] = {}
     order: list[str] = []
     for record in service._inbound_store.list_agent(agent_name):
@@ -31,6 +32,7 @@ def pending_event_records(service, agent_name: str) -> list:
         latest_by_id[inbound_event_id]
         for inbound_event_id in order
         if latest_by_id[inbound_event_id].status not in TERMINAL_EVENT_STATES
+        and _event_is_live(service, latest_by_id[inbound_event_id])
     ]
 
 
@@ -41,6 +43,28 @@ def reply_for_event(service, event):
     if not reply_id:
         return None
     return service._reply_store.get_latest(reply_id)
+
+
+def _discard_stale_head_events(service, agent_name: str) -> None:
+    abandon = getattr(service._mailbox_kernel, 'abandon', None)
+    if abandon is None:
+        return
+    while True:
+        head = service._mailbox_kernel.head_pending_event(agent_name)
+        if head is None or _event_is_live(service, head):
+            return
+        abandon(agent_name, head.inbound_event_id, finished_at=service._clock())
+
+
+def _event_is_live(service, event) -> bool:
+    message = service._message_store.get_latest(event.message_id)
+    if message is None:
+        return False
+    if event.attempt_id and service._attempt_store.get_latest(event.attempt_id) is None:
+        return False
+    if event.event_type is InboundEventType.TASK_REPLY and reply_for_event(service, event) is None:
+        return False
+    return True
 
 
 def pending_events(service, agent_name: str) -> list[dict[str, object]]:

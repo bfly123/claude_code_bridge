@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from agents.models import AgentState
+from agents.models import AgentState, AgentValidationError
 from completion.tracker import CompletionTrackerView
 
 from .completion import apply_tracker_view, merge_terminal_decision
@@ -115,7 +115,10 @@ class DispatcherFacadeMixin:
 
     def _queue_agent_with_runtime(self, payload: dict) -> dict:
         agent = dict(payload)
-        runtime = self._registry.get(agent.get('agent_name', ''))
+        try:
+            runtime = self._registry.get(agent.get('agent_name', ''))
+        except (AgentValidationError, KeyError):
+            runtime = None
         agent['runtime_state'] = runtime.state.value if runtime is not None else 'stopped'
         agent['runtime_health'] = runtime.health if runtime is not None else 'stopped'
         return agent

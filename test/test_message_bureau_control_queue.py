@@ -137,12 +137,30 @@ def test_queue_summary_ignores_stale_cmd_residue() -> None:
                 ),
             }
         ),
-        inbound_store=_InboundStore({'agent1': [], 'cmd': [SimpleNamespace(inbound_event_id='iev_cmd')]}),
+        inbound_store=_InboundStore(
+            {
+                'agent1': [],
+                'cmd': [
+                    InboundEventRecord(
+                        inbound_event_id='iev_cmd',
+                        agent_name='cmd',
+                        event_type=InboundEventType.TASK_REPLY,
+                        message_id='msg_cmd',
+                        attempt_id='att_cmd',
+                        payload_ref=compose_reply_payload('rep_cmd'),
+                        priority=10,
+                        status=InboundEventStatus.QUEUED,
+                        created_at='2026-04-05T00:00:00Z',
+                    )
+                ],
+            }
+        ),
         attempt_store=_SingleStore({}),
         message_store=_SingleStore({}),
         reply_store=_SingleStore({}),
         mailbox_kernel=_MailboxKernel(None),
     )
+    service._known_mailboxes = {'agent1', 'cmd'}
 
     payload = queue_summary(service, 'all')
 
@@ -217,9 +235,9 @@ def test_ack_reply_returns_reply_metadata_and_next_head() -> None:
             last_inbound_finished_at=None,
             mailbox_state=MailboxState.DELIVERING,
             lease_version=4,
-            updated_at='2026-04-05T00:01:00Z',
-        )}),
-        inbound_store=_InboundStore({'agent1': [next_head]}),
+                updated_at='2026-04-05T00:01:00Z',
+            )}),
+        inbound_store=_InboundStore({'agent1': [head, next_head]}),
         attempt_store=_SingleStore({'att_1': attempt, 'att_2': attempt}),
         message_store=_SingleStore({'msg_1': message, 'msg_2': message}),
         reply_store=_SingleStore({'rep_1': reply}, list_records={'msg_2': [], 'msg_1': [reply]}),

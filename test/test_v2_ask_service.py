@@ -99,7 +99,7 @@ def test_submit_ask_maps_broadcast_payload_and_submission(monkeypatch: pytest.Mo
     }
 
 
-def test_submit_ask_aliases_explicit_cmd_sender_to_user(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_submit_ask_preserves_explicit_cmd_sender(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-ask-explicit-cmd'
     project_root.mkdir()
     context = _build_context(project_root)
@@ -119,7 +119,7 @@ def test_submit_ask_aliases_explicit_cmd_sender_to_user(monkeypatch: pytest.Monk
     monkeypatch.setattr(
         ask_service,
         'load_project_config',
-        lambda project_root: SimpleNamespace(config=SimpleNamespace(agents={'agent1': {}, 'agent2': {}})),
+        lambda project_root: SimpleNamespace(config=SimpleNamespace(agents={'agent1': {}, 'agent2': {}}, cmd_enabled=True)),
     )
     monkeypatch.setattr(
         ask_service,
@@ -132,7 +132,33 @@ def test_submit_ask_aliases_explicit_cmd_sender_to_user(monkeypatch: pytest.Monk
         ParsedAskCommand(project=None, target='agent1', sender='cmd', message='hello'),
     )
 
-    assert captured['from_actor'] == 'user'
+    assert captured['from_actor'] == 'cmd'
+
+
+def test_resolve_ask_sender_defaults_to_cmd_for_project_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-ask-default-cmd'
+    project_root.mkdir()
+    context = _build_context(project_root)
+
+    for env_name in ('CCB_CALLER_ACTOR', 'CCB_CALLER_RUNTIME_DIR', 'CODEX_RUNTIME_DIR', 'CCB_SESSION_ID'):
+        monkeypatch.delenv(env_name, raising=False)
+
+    assert ask_service.resolve_ask_sender(context, None) == 'cmd'
+
+
+def test_resolve_ask_sender_prefers_runtime_dir_actor(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-ask-runtime-actor'
+    project_root.mkdir()
+    context = _build_context(project_root)
+    runtime_dir = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-runtime' / 'codex'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.delenv('CCB_CALLER_ACTOR', raising=False)
+    monkeypatch.delenv('CCB_CALLER_RUNTIME_DIR', raising=False)
+    monkeypatch.setenv('CODEX_RUNTIME_DIR', str(runtime_dir))
+    monkeypatch.setenv('CCB_SESSION_ID', 'legacy-session-without-actor')
+
+    assert ask_service.resolve_ask_sender(context, None) == 'agent1'
 
 
 def test_watch_ask_job_reconnects_and_preserves_cursor(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

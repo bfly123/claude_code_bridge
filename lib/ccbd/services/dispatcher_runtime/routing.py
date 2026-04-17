@@ -4,17 +4,18 @@ from typing import Iterable
 
 from agents.models import AgentState, QueuePolicy, normalize_agent_name
 from ccbd.api_models import DeliveryScope
+from mailbox_runtime.targets import CMD_ACTOR, NON_AGENT_ACTORS
 
 from .records import get_job, latest_for_agent
-
-_EXTERNAL_ACTORS = frozenset({'user', 'system', 'manual'})
 
 
 def validate_sender(dispatcher, sender: str) -> None:
     normalized = str(sender or '').strip().lower()
     if not normalized:
         raise dispatcher._dispatch_error('sender cannot be empty')
-    if normalized in _EXTERNAL_ACTORS:
+    if normalized in NON_AGENT_ACTORS:
+        if normalized == CMD_ACTOR and not bool(getattr(dispatcher._config, 'cmd_enabled', False)):
+            raise dispatcher._dispatch_error(f'unknown sender agent: {normalized}')
         return
     agent_name = normalize_agent_name(normalized)
     if agent_name not in dispatcher._config.agents:
@@ -32,7 +33,7 @@ def resolve_targets(dispatcher, request) -> tuple[str, ...]:
         return (request.to_agent,)
 
     alive = [runtime.agent_name for runtime in dispatcher._registry.list_alive()]
-    if request.from_actor not in _EXTERNAL_ACTORS:
+    if request.from_actor not in NON_AGENT_ACTORS:
         alive = [name for name in alive if name != request.from_actor]
     return tuple(sorted(alive))
 

@@ -417,7 +417,7 @@ def test_dispatcher_silence_does_not_hide_failure_reply_body(tmp_path: Path) -> 
     assert replies[0].diagnostics.get('silence_on_success') is True
 
 
-def test_dispatcher_aliases_legacy_cmd_sender_to_user_without_mailbox(tmp_path: Path) -> None:
+def test_dispatcher_routes_cmd_reply_into_command_mailbox(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-cmd-caller'
     ctx = _bootstrap_test_project(project_root)
     layout = PathLayout(project_root)
@@ -443,11 +443,18 @@ def test_dispatcher_aliases_legacy_cmd_sender_to_user_without_mailbox(tmp_path: 
     dispatcher.complete(job_id, _decision(reply='done for cmd'))
 
     message = MessageStore(layout).list_all()[-1]
-    assert message.from_actor == 'user'
+    assert message.from_actor == 'cmd'
     assert InboundEventStore(layout).list_agent('codex')[-1].event_type is InboundEventType.TASK_REQUEST
     assert MailboxStore(layout).load('codex') is not None
-    with pytest.raises(ValueError, match='unknown mailbox target: cmd'):
-        dispatcher.queue('cmd')
+    queue_cmd = dispatcher.queue('cmd')
+    assert queue_cmd['target'] == 'cmd'
+    assert queue_cmd['agent']['agent_name'] == 'cmd'
+    assert queue_cmd['agent']['queue_depth'] == 1
+    assert queue_cmd['agent']['pending_reply_count'] == 1
+    assert queue_cmd['agent']['queued_events'][0]['event_type'] == 'task_reply'
+    assert dispatcher.inbox('cmd')['head']['reply'] == 'done for cmd'
+    queue_all = dispatcher.queue('all')
+    assert {item['agent_name'] for item in queue_all['agents']} == {'claude', 'cmd', 'codex', 'gemini'}
 
 
 def test_dispatcher_queue_summary_reflects_mailbox_state_and_pending_reply(tmp_path: Path) -> None:
@@ -559,8 +566,13 @@ def test_dispatcher_queue_summary_ignores_stale_cmd_mailbox_residue(tmp_path: Pa
         encoding='utf-8',
     )
 
-    with pytest.raises(ValueError, match='unknown mailbox target: cmd'):
-        dispatcher.queue('cmd')
+    queue_cmd = dispatcher.queue('cmd')
+    assert queue_cmd['target'] == 'cmd'
+    assert queue_cmd['agent']['agent_name'] == 'cmd'
+    assert queue_cmd['agent']['queue_depth'] == 0
+    assert queue_cmd['agent']['pending_reply_count'] == 0
+    assert queue_cmd['agent']['runtime_state'] == 'stopped'
+    assert queue_cmd['agent']['runtime_health'] == 'stopped'
 
     queue_all = dispatcher.queue('all')
     assert {item['agent_name'] for item in queue_all['agents']} == {'claude', 'codex', 'gemini'}

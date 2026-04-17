@@ -4,6 +4,8 @@ import shlex
 from pathlib import Path
 from typing import Callable
 
+from provider_core.caller_env import caller_context_env
+
 
 def build_start_cmd(
     command,
@@ -77,13 +79,13 @@ def _env_map(runtime_dir: Path, launch_session_id: str, *, spec, profile, codex_
         explicit_env.update(profile.env)
     explicit_env.update(spec.env)
     return {
+        **explicit_env,
         'CODEX_RUNTIME_DIR': str(runtime_dir),
         'CODEX_INPUT_FIFO': str(runtime_dir / 'input.fifo'),
         'CODEX_OUTPUT_FIFO': str(runtime_dir / 'output.fifo'),
         'CODEX_TERMINAL': 'tmux',
-        'CCB_SESSION_ID': launch_session_id,
         **codex_home_overrides,
-        **explicit_env,
+        **caller_context_env(actor=spec.name, runtime_dir=runtime_dir, launch_session_id=launch_session_id),
     }
 
 

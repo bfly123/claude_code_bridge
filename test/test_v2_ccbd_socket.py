@@ -558,11 +558,11 @@ def test_ccbd_inbox_and_ack_roundtrip_reply_delivery(tmp_path: Path) -> None:
     assert not thread.is_alive()
 
 
-def test_ccbd_legacy_cmd_sender_aliases_to_user_without_cmd_mailbox(tmp_path: Path) -> None:
+def test_ccbd_cmd_sender_routes_reply_into_cmd_mailbox(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-inbox-ack-cmd'
     ctx = _prepare_project(
         project_root,
-        _agent_config_text(('codex', 'codex'), ('claude', 'claude')),
+        'cmd; codex:codex,claude:claude\n',
     )
     app = CcbdApp(project_root)
     app.registry.upsert(
@@ -599,13 +599,18 @@ def test_ccbd_legacy_cmd_sender_aliases_to_user_without_cmd_mailbox(tmp_path: Pa
     assert completed['status'] == 'completed'
     assert completed['reply'] == 'socket cmd reply'
 
-    queue = client.queue('all')
-    assert {item['agent_name'] for item in queue['agents']} == {'claude', 'codex'}
+    inbox = client.inbox('cmd')
+    assert inbox['target'] == 'cmd'
+    assert inbox['head']['event_type'] == 'task_reply'
+    assert inbox['head']['reply'] == 'socket cmd reply'
 
-    with pytest.raises(CcbdClientError, match='unknown mailbox target: cmd'):
-        client.inbox('cmd')
-    with pytest.raises(CcbdClientError, match='unknown mailbox target: cmd'):
-        client.ack('cmd')
+    queue = client.queue('all')
+    assert {item['agent_name'] for item in queue['agents']} == {'claude', 'cmd', 'codex'}
+
+    ack = client.ack('cmd')
+    assert ack['target'] == 'cmd'
+    assert ack['reply'] == 'socket cmd reply'
+    assert ack['acknowledged_inbound_event_id']
 
     client.shutdown()
     thread.join(timeout=2)

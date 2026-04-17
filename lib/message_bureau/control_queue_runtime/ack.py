@@ -10,7 +10,7 @@ from message_bureau.reply_metadata import (
 from message_bureau.reply_payloads import delivery_job_id_from_payload
 
 from .common import require_mailbox_target
-from .events import reply_for_event
+from .events import pending_event_records, reply_for_event
 from .views import agent_queue
 
 
@@ -33,7 +33,12 @@ def ack_reply(service, agent_name: str, inbound_event_id: str | None = None) -> 
         raise RuntimeError(f'failed to ack reply event: {head.inbound_event_id}')
 
     mailbox_payload = agent_queue(service, normalized)
+    next_records = pending_event_records(service, normalized)
     next_head = service._mailbox_kernel.head_pending_event(normalized)
+    if next_head is None or (
+        next_records and all(record.inbound_event_id != next_head.inbound_event_id for record in next_records)
+    ):
+        next_head = next_records[0] if next_records else None
     return _ack_payload(
         normalized,
         consumed=consumed,
@@ -45,7 +50,8 @@ def ack_reply(service, agent_name: str, inbound_event_id: str | None = None) -> 
 
 
 def _head_reply_event(service, agent_name: str, *, inbound_event_id: str | None):
-    head = service._mailbox_kernel.head_pending_event(agent_name)
+    records = pending_event_records(service, agent_name)
+    head = records[0] if records else None
     if head is None:
         raise ValueError(f'inbox is empty for agent: {agent_name}')
     requested_event_id = str(inbound_event_id or '').strip() or head.inbound_event_id

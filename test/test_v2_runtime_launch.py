@@ -67,6 +67,12 @@ def _write_provider_profile(runtime_dir: Path, profile: ResolvedProviderProfile)
     )
 
 
+def _assert_caller_env_exports(start_cmd: str, *, actor: str, runtime_dir: Path, session_id: str) -> None:
+    assert f'CCB_CALLER_ACTOR={shlex.quote(actor)}' in start_cmd
+    assert f'CCB_CALLER_RUNTIME_DIR={shlex.quote(str(runtime_dir))}' in start_cmd
+    assert f'CCB_SESSION_ID={shlex.quote(session_id)}' in start_cmd
+
+
 def test_ensure_agent_runtime_reconciles_claude_workspace_before_launch(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-claude-hooks'
     home = tmp_path / 'home'
@@ -451,7 +457,13 @@ def test_ensure_agent_runtime_launches_named_gemini_session(monkeypatch, tmp_pat
     assert payload['pane_title_marker'].startswith('CCB-reviewer-')
     assert payload['pane_id'] == '%55'
     assert payload['work_dir'] == str(resume_dir)
-    assert payload['start_cmd'] == 'gemini --yolo --resume latest'
+    _assert_caller_env_exports(
+        payload['start_cmd'],
+        actor='reviewer',
+        runtime_dir=ctx.paths.agent_dir('reviewer') / 'provider-runtime' / 'gemini',
+        session_id=payload['ccb_session_id'],
+    )
+    assert payload['start_cmd'].endswith('gemini --yolo --resume latest')
     assert tmux_state['cwd'] == str(resume_dir)
     assert tmux_state['title'] == ('%55', 'reviewer')
     assert tmux_state['user_option'] == ('%55', '@ccb_project_id', ctx.project.project_id)
@@ -515,8 +527,15 @@ def test_ensure_agent_runtime_launches_named_claude_session(monkeypatch, tmp_pat
     assert payload['work_dir'] == str(resume_dir)
     assert payload['ccb_session_id'].startswith('ccb-reviewer-')
     assert tmux_state['cwd'] == str(resume_dir)
-    assert payload['start_cmd'] == (
-        f'unset ANTHROPIC_BASE_URL; claude --setting-sources user,project,local --settings '
+    assert payload['start_cmd'].startswith('unset ANTHROPIC_BASE_URL; ')
+    _assert_caller_env_exports(
+        payload['start_cmd'],
+        actor='reviewer',
+        runtime_dir=ctx.paths.agent_dir('reviewer') / 'provider-runtime' / 'claude',
+        session_id=payload['ccb_session_id'],
+    )
+    assert payload['start_cmd'].endswith(
+        f'claude --setting-sources user,project,local --settings '
         f'{shlex.quote(str(ctx.paths.agent_dir("reviewer") / "provider-runtime" / "claude" / "claude-settings.json"))} '
         '--dangerously-skip-permissions --continue'
     )
@@ -557,7 +576,13 @@ def test_ensure_agent_runtime_launches_named_opencode_session(monkeypatch, tmp_p
     assert result.binding.session_ref == str(expected_session)
     payload = json.loads(expected_session.read_text(encoding='utf-8'))
     assert payload['pane_title_marker'].startswith('CCB-builder-')
-    assert payload['start_cmd'] == 'opencode --continue'
+    _assert_caller_env_exports(
+        payload['start_cmd'],
+        actor='builder',
+        runtime_dir=ctx.paths.agent_dir('builder') / 'provider-runtime' / 'opencode',
+        session_id=payload['ccb_session_id'],
+    )
+    assert payload['start_cmd'].endswith('opencode --continue')
     assert payload['ccb_session_id'].startswith('ccb-builder-')
 
 
@@ -652,7 +677,13 @@ def test_ensure_agent_runtime_launches_named_droid_session(monkeypatch, tmp_path
     assert result.binding.session_ref == str(expected_session)
     payload = json.loads(expected_session.read_text(encoding='utf-8'))
     assert payload['pane_title_marker'].startswith('CCB-mobile-')
-    assert payload['start_cmd'] == 'droid -r'
+    _assert_caller_env_exports(
+        payload['start_cmd'],
+        actor='mobile',
+        runtime_dir=ctx.paths.agent_dir('mobile') / 'provider-runtime' / 'droid',
+        session_id=payload['ccb_session_id'],
+    )
+    assert payload['start_cmd'].endswith('droid -r')
     assert payload['ccb_session_id'].startswith('ccb-mobile-')
 
 
@@ -1191,8 +1222,14 @@ def test_claude_launcher_build_start_cmd_uses_overlay_and_drops_dead_local_user_
 
     start_cmd = claude_launcher.build_start_cmd(command, spec, runtime_dir, 'claude-sess-1')
 
-    assert start_cmd == (
-        'unset ANTHROPIC_BASE_URL; '
+    assert start_cmd.startswith('unset ANTHROPIC_BASE_URL; ')
+    _assert_caller_env_exports(
+        start_cmd,
+        actor='reviewer',
+        runtime_dir=runtime_dir,
+        session_id='claude-sess-1',
+    )
+    assert start_cmd.endswith(
         'claude --setting-sources user,project,local --dangerously-skip-permissions --continue'
     )
     assert not (runtime_dir / 'claude-settings.json').exists()
@@ -1317,7 +1354,13 @@ def test_claude_launcher_build_start_cmd_uses_agent_settings_overlay_when_presen
     start_cmd = claude_launcher.build_start_cmd(command, spec, runtime_dir, 'claude-sess-local')
 
     settings_path = runtime_dir / 'claude-settings.json'
-    assert start_cmd == (
+    _assert_caller_env_exports(
+        start_cmd,
+        actor='reviewer',
+        runtime_dir=runtime_dir,
+        session_id='claude-sess-local',
+    )
+    assert start_cmd.endswith(
         f'claude --setting-sources user,project,local --settings {shlex.quote(str(settings_path))}'
     )
     assert json.loads(settings_path.read_text(encoding='utf-8')) == {'model': 'opus'}
