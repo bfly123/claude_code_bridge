@@ -741,6 +741,13 @@ print_tmux_install_hint() {
 }
 
 require_terminal_backend() {
+  local platform
+  platform="$(detect_platform)"
+
+  if [[ "$platform" == "macos" ]] && ! command -v brew >/dev/null 2>&1; then
+    echo "WARN: Homebrew not found on macOS. Install from https://brew.sh before installing tmux and other dependencies."
+  fi
+
   if [[ -n "${TMUX:-}" ]]; then
     echo "OK: Detected tmux environment"
     return
@@ -753,7 +760,7 @@ require_terminal_backend() {
 
   echo "ERROR: Missing dependency: tmux"
 
-  if [[ "$(uname)" == "Darwin" ]]; then
+  if [[ "$platform" == "macos" ]]; then
     echo
     echo "NOTE: macOS user recommended options:"
     echo "   - Install tmux: brew install tmux"
