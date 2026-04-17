@@ -3702,31 +3702,59 @@ def cmd_start(args):
             pid = ""
         pid_msg = f" (pid {pid})" if pid else ""
 
-        # Fast-path: if user requests a single provider, try activating its existing pane
-        # in the already-running instance instead of hard failing.
-        focus_provider = requested_providers[0] if len(requested_providers) == 1 else ""
-        if focus_provider:
-            record, pane_id = _existing_provider_pane_for_project(work_dir, focus_provider)
-            if record and pane_id:
-                try:
-                    backend = get_backend_for_session(record)
-                    if backend and backend.is_alive(pane_id):
-                        if os.environ.get("TMUX") or sys.stdin.isatty():
-                            backend.activate(pane_id)
-                        print(
-                            f"ℹ️ Reusing existing ccb instance for this directory{pid_msg}; "
-                            f"activated {focus_provider} pane {pane_id}.",
-                            file=sys.stderr,
-                        )
-                        return 0
-                except Exception:
-                    pass
+        if getattr(args, "replace_existing", False):
+            owner_pid = 0
+            try:
+                owner_pid = int(pid)
+            except Exception:
+                owner_pid = 0
 
-        print(f"❌ Another ccb instance is already running for this directory{pid_msg}.", file=sys.stderr)
-        print("💡 Only one ccb instance is allowed per directory.", file=sys.stderr)
-        if focus_provider:
-            print(f"💡 Try switching to the existing {focus_provider} pane in that ccb session.", file=sys.stderr)
-        return 2
+            if owner_pid <= 0:
+                print(
+                    "❌ Another ccb instance is already running for this directory, but its PID could not be determined.",
+                    file=sys.stderr,
+                )
+                print("💡 Stop the old instance first, then retry.", file=sys.stderr)
+                return 2
+
+            print(f"ℹ️ Replacing existing ccb instance for this directory (pid {owner_pid}).", file=sys.stderr)
+            if not _replace_existing_ccb_instance(lock_cwd, owner_pid):
+                print(
+                    f"❌ Failed to stop the existing ccb instance for this directory (pid {owner_pid}).",
+                    file=sys.stderr,
+                )
+                return 2
+
+            ccb_lock = ProviderLock("ccb", timeout=0.5, cwd=lock_cwd)
+            if not ccb_lock.try_acquire():
+                print("❌ Existing ccb instance exited, but the directory lock is still busy.", file=sys.stderr)
+                return 2
+        else:
+            # Fast-path: if user requests a single provider, try activating its existing pane
+            # in the already-running instance instead of hard failing.
+            focus_provider = requested_providers[0] if len(requested_providers) == 1 else ""
+            if focus_provider:
+                record, pane_id = _existing_provider_pane_for_project(work_dir, focus_provider)
+                if record and pane_id:
+                    try:
+                        backend = get_backend_for_session(record)
+                        if backend and backend.is_alive(pane_id):
+                            if os.environ.get("TMUX") or sys.stdin.isatty():
+                                backend.activate(pane_id)
+                            print(
+                                f"ℹ️ Reusing existing ccb instance for this directory{pid_msg}; "
+                                f"activated {focus_provider} pane {pane_id}.",
+                                file=sys.stderr,
+                            )
+                            return 0
+                    except Exception:
+                        pass
+
+            print(f"❌ Another ccb instance is already running for this directory{pid_msg}.", file=sys.stderr)
+            print("💡 Only one ccb instance is allowed per directory.", file=sys.stderr)
+            if focus_provider:
+                print(f"💡 Try switching to the existing {focus_provider} pane in that ccb session.", file=sys.stderr)
+            return 2
     atexit.register(ccb_lock.release)
 
     providers, cmd_enabled = requested_providers, _requested_cmd_enabled
@@ -3916,6 +3944,34 @@ def _kill_pid(pid: int, force: bool = False) -> bool:
         return True
     except Exception:
         return False
+
+
+def _replace_existing_ccb_instance(lock_cwd: str, pid: int, timeout_s: float = 8.0) -> bool:
+    """Terminate the ccb instance holding the directory lock and wait for release."""
+    if pid <= 0:
+        return False
+
+    if not _kill_pid(pid, force=False):
+        return False
+
+    deadline = time.time() + max(0.5, timeout_s)
+    while time.time() < deadline:
+        probe = ProviderLock("ccb", timeout=0.1, cwd=lock_cwd)
+        if probe.try_acquire():
+            probe.release()
+            return True
+        time.sleep(0.1)
+
+    _kill_pid(pid, force=True)
+    deadline = time.time() + 3.0
+    while time.time() < deadline:
+        probe = ProviderLock("ccb", timeout=0.1, cwd=lock_cwd)
+        if probe.try_acquire():
+            probe.release()
+            return True
+        time.sleep(0.1)
+
+    return False
 
 
 def cmd_kill(args):
@@ -4950,6 +5006,12 @@ def main():
     )
     start_parser.add_argument("-r", "--resume", "--restore", action="store_true", help="Resume context")
     start_parser.add_argument("-a", "--auto", action="store_true", help="Full auto permission mode")
+    start_parser.add_argument(
+        "-R",
+        "--replace-existing",
+        action="store_true",
+        help="Stop an existing ccb instance for this directory before starting",
+    )
     args = start_parser.parse_args(argv)
     return cmd_start(args)
 
