@@ -425,7 +425,13 @@ print_tmux_install_hint() {
 }
 
 require_terminal_backend() {
+  local platform
+  platform="$(detect_platform)"
   local wezterm_override="${CODEX_WEZTERM_BIN:-${WEZTERM_BIN:-}}"
+
+  if [[ "$platform" == "macos" ]] && ! command -v brew >/dev/null 2>&1; then
+    echo "WARN: Homebrew not found on macOS. Install from https://brew.sh before installing tmux and other dependencies."
+  fi
 
   # ============================================
   # Prioritize detecting current environment
@@ -442,7 +448,6 @@ require_terminal_backend() {
       return
     fi
   fi
-
   # 2. If running in tmux environment
   if [[ -n "${TMUX:-}" ]]; then
     echo "OK: Detected tmux environment"
@@ -489,7 +494,7 @@ require_terminal_backend() {
   echo "ERROR: Missing dependency: WezTerm or tmux (at least one required)"
   echo "   WezTerm website: https://wezfurlong.org/wezterm/"
 
-  if [[ "$(uname)" == "Darwin" ]]; then
+  if [[ "$platform" == "macos" ]]; then
     echo
     echo "NOTE: macOS user recommended options:"
     echo "   - Install tmux: brew install tmux"
