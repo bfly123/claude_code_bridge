@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v6.0.2 (2026-04-17)
+
+### 🔁 Agent Routing & Install Guardrails
+
+- **Caller Attribution Fix**: `ccb ask` now preserves the originating agent identity so replies route back to the correct mailbox instead of drifting to `user` or `cmd`
+- **Mailbox Delivery Stability**: control-plane reply routing now keeps async `cmd` mailbox delivery aligned with the real caller chain
+- **Mixed-Case Agent Recovery**: config layout recovery now normalizes mixed-case agent names consistently during restore and startup
+- **macOS Dependency Warning**: `install.sh` now warns when Homebrew is missing on macOS before tmux and related dependencies are installed
+
 ## v6.0.1 (2026-04-16)
 
 ### 🔧 Release Hygiene & Upgrade Safety
