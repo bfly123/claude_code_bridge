@@ -19,6 +19,7 @@ DEFAULT_OUTPUT_DIR = REPO_ROOT / "dist"
 EXCLUDES = {
     ".git",
     ".ccb",
+    ".ccb-requests",
     ".architec",
     ".claude",
     ".gemini",

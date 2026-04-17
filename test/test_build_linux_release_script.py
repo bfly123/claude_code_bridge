@@ -30,6 +30,7 @@ def test_copy_repo_tree_excludes_runtime_state(tmp_path: Path) -> None:
     destination = tmp_path / "out"
     (repo_root / ".git").mkdir(parents=True)
     (repo_root / ".ccb" / "ccbd").mkdir(parents=True)
+    (repo_root / ".ccb-requests").mkdir(parents=True)
     (repo_root / ".loop").mkdir(parents=True)
     (repo_root / ".architec").mkdir(parents=True)
     (repo_root / ".tmp_pytest" / "run").mkdir(parents=True)
@@ -39,6 +40,7 @@ def test_copy_repo_tree_excludes_runtime_state(tmp_path: Path) -> None:
     (repo_root / "install.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
     (repo_root / "lib" / "app.py").write_text("print('ok')\n", encoding="utf-8")
     (repo_root / ".ccb" / "ccbd" / "lease.json").write_text("{}", encoding="utf-8")
+    (repo_root / ".ccb-requests" / "job_1.md").write_text("queued", encoding="utf-8")
     (repo_root / ".loop" / "state.json").write_text("{}", encoding="utf-8")
     (repo_root / ".architec" / "summary.json").write_text("{}", encoding="utf-8")
     (repo_root / ".tmp_pytest" / "run" / "state.json").write_text("{}", encoding="utf-8")
@@ -49,6 +51,7 @@ def test_copy_repo_tree_excludes_runtime_state(tmp_path: Path) -> None:
     assert (destination / "lib" / "app.py").exists()
     assert not (destination / ".git").exists()
     assert not (destination / ".ccb").exists()
+    assert not (destination / ".ccb-requests").exists()
     assert not (destination / ".loop").exists()
     assert not (destination / ".architec").exists()
     assert not (destination / ".tmp_pytest").exists()
@@ -76,7 +79,7 @@ def test_dirty_worktree_entries_ignores_excluded_local_metadata(monkeypatch) -> 
         assert cmd[-2:] == ["--porcelain", "--untracked-files=all"]
         return SimpleNamespace(
             returncode=0,
-            stdout="?? .gemini/settings.json\n M install.sh\n",
+            stdout="?? .gemini/settings.json\n?? .ccb-requests/job_1.md\n M install.sh\n",
             stderr="",
         )
 
