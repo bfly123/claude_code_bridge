@@ -18,6 +18,67 @@ status_script="$bin_dir/ccb-status.sh"
 border_script="$bin_dir/ccb-border.sh"
 git_script="$bin_dir/ccb-git.sh"
 
+resolve_ccb_exec() {
+  if [[ -x "$bin_dir/ccb" ]]; then
+    printf '%s\n' "$bin_dir/ccb"
+    return 0
+  fi
+  if [[ -x "$bin_dir/../ccb" && -d "$bin_dir/../lib" ]]; then
+    printf '%s\n' "$bin_dir/../ccb"
+    return 0
+  fi
+  command -v ccb 2>/dev/null || true
+}
+
+render_theme_exports() {
+  local ccb_exec="$1"
+  local ccb_version="$2"
+  local py=""
+  py="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
+  if [[ -z "$py" || -z "$ccb_exec" ]]; then
+    return 1
+  fi
+  "$py" - "$ccb_exec" "$ccb_version" "$status_script" "$git_script" <<'PY'
+import os
+from pathlib import Path
+import sys
+
+ccb_exec = Path(sys.argv[1]).resolve()
+ccb_version = sys.argv[2]
+status_script = sys.argv[3] or None
+git_script = sys.argv[4] or None
+
+
+def candidate_roots() -> list[Path]:
+    roots: list[Path] = []
+    env_root = str(os.environ.get('CODEX_INSTALL_PREFIX') or '').strip()
+    if env_root:
+        roots.append(Path(env_root).expanduser())
+    roots.append(ccb_exec.parent)
+    roots.append(ccb_exec.parent.parent)
+    return roots
+
+
+for root in candidate_roots():
+    lib_dir = root / 'lib'
+    if (lib_dir / 'terminal_runtime' / 'tmux_theme.py').is_file():
+        sys.path.insert(0, str(lib_dir))
+        break
+else:
+    raise SystemExit(1)
+
+from terminal_runtime.tmux_theme import shell_exports
+
+print(
+    shell_exports(
+        ccb_version=ccb_version,
+        status_script=status_script,
+        git_script=git_script,
+    )
+)
+PY
+}
+
 save_sopt() {
   local opt="$1"
   local key="$2"
@@ -49,9 +110,13 @@ save_hook() {
 }
 
 # Save current per-session/per-window UI settings so we can restore on exit.
+save_sopt status @ccb_prev_status
 save_sopt status-position @ccb_prev_status_position
+save_sopt status-justify @ccb_prev_status_justify
 save_sopt status-interval @ccb_prev_status_interval
 save_sopt status-style @ccb_prev_status_style
+save_sopt 'status-format[0]' @ccb_prev_status_format_0
+save_sopt 'status-format[1]' @ccb_prev_status_format_1
 save_sopt status-left-length @ccb_prev_status_left_length
 save_sopt status-right-length @ccb_prev_status_right_length
 save_sopt status-left @ccb_prev_status_left
@@ -64,6 +129,8 @@ save_wopt pane-border-status @ccb_prev_pane_border_status
 save_wopt pane-border-format @ccb_prev_pane_border_format
 save_wopt pane-border-style @ccb_prev_pane_border_style
 save_wopt pane-active-border-style @ccb_prev_pane_active_border_style
+save_wopt window-style @ccb_prev_window_style
+save_wopt window-active-style @ccb_prev_window_active_style
 
 save_hook after-select-pane @ccb_prev_hook_after_select_pane
 
@@ -72,33 +139,6 @@ tmux set-option -t "$session" @ccb_active "1" >/dev/null 2>&1 || true
 # ---------------------------------------------------------------------------
 # CCB UI Theme (applies only to this tmux session)
 # ---------------------------------------------------------------------------
-
-tmux set-option -t "$session" status-position bottom >/dev/null 2>&1 || true
-status_interval="${CCB_TMUX_STATUS_INTERVAL:-5}"
-tmux set-option -t "$session" status-interval "$status_interval" >/dev/null 2>&1 || true
-tmux set-option -t "$session" status-style 'bg=#1e1e2e fg=#cdd6f4' >/dev/null 2>&1 || true
-tmux set-option -t "$session" status 2 >/dev/null 2>&1 || true
-
-tmux set-option -t "$session" status-left-length 80 >/dev/null 2>&1 || true
-tmux set-option -t "$session" status-right-length 120 >/dev/null 2>&1 || true
-
-# Second status line: quick hints
-status_format_1="#[align=centre,bg=#1e1e2e,fg=#6c7086]Copy: MouseDrag  Paste: Shift-Ctrl-v  Focus: Ctrl-b o"
-tmux set-option -t "$session" 'status-format[1]' "$status_format_1" >/dev/null 2>&1 || true
-
-# First status line: left + center(folder) + right
-status_format_0="#[align=left bg=#1e1e2e]#{T:status-left}#[align=centre fg=#6c7086]#{b:pane_current_path}#[align=right]#{T:status-right}"
-tmux set-option -t "$session" 'status-format[0]' "$status_format_0" >/dev/null 2>&1 || true
-
-# Mode-aware status-left: [MODE] > [git-branch]
-accent='#{?client_prefix,#f38ba8,#{?pane_in_mode,#fab387,#f5c2e7}}'
-label='#{?client_prefix,KEY,#{?pane_in_mode,COPY,INPUT}}'
-git_info='-'
-if [[ -x "$git_script" ]]; then
-  # Cached to avoid blocking tmux (git can be slow in big repos).
-  git_info="#(${git_script} \"#{pane_current_path}\")"
-fi
-tmux set-option -t "$session" status-left "#[fg=#1e1e2e,bg=${accent},bold] ${label} #[fg=${accent},bg=#cba6f7]#[fg=#1e1e2e,bg=#cba6f7] ${git_info} #[fg=#cba6f7,bg=#1e1e2e]" >/dev/null 2>&1 || true
 
 # Right: < Focus:AI < CCB:ver < ○○○○ < HH:MM
 ccb_version="$(ccb --print-version 2>/dev/null || true)"
@@ -109,22 +149,49 @@ if [[ -z "$ccb_version" ]]; then
   fi
 fi
 [[ -n "$ccb_version" ]] || ccb_version="?"
+theme_exports=""
+ccb_exec="$(resolve_ccb_exec)"
+if [[ -n "$ccb_exec" ]]; then
+  theme_exports="$(render_theme_exports "$ccb_exec" "$ccb_version" 2>/dev/null || true)"
+fi
+if [[ -n "$theme_exports" ]]; then
+  eval "$theme_exports"
+fi
+
+default_status_format_1='#[align=centre,bg=#1e1e2e,fg=#6c7086]Copy: MouseDrag  Paste: Shift-Ctrl-v  Focus: Ctrl-b o'
+default_status_format_0='#[align=left bg=#1e1e2e]#{T:status-left}#[align=centre fg=#6c7086]#{b:pane_current_path}#[align=right]#{T:status-right}'
+default_status_left='#[fg=#1e1e2e,bg=#{?client_prefix,#f38ba8,#{?pane_in_mode,#fab387,#f5c2e7}},bold] #{?client_prefix,KEY,#{?pane_in_mode,COPY,INPUT}} #[fg=#{?client_prefix,#f38ba8,#{?pane_in_mode,#fab387,#f5c2e7}},bg=#cba6f7]#[fg=#1e1e2e,bg=#cba6f7] - #[fg=#cba6f7,bg=#1e1e2e]'
+default_status_right="#[fg=#f38ba8,bg=#1e1e2e]#[fg=#1e1e2e,bg=#f38ba8,bold] #{?#{@ccb_agent},#{@ccb_agent},-} #[fg=#cba6f7,bg=#f38ba8]#[fg=#1e1e2e,bg=#cba6f7,bold] CCB:#{@ccb_version} #[fg=#89b4fa,bg=#cba6f7]#[fg=#cdd6f4,bg=#89b4fa] #(${status_script} modern) #[fg=#fab387,bg=#89b4fa]#[fg=#1e1e2e,bg=#fab387,bold] %m/%d %a %H:%M #[default]"
+default_pane_border_format='#{?#{@ccb_agent},#{?#{@ccb_label_style},#{@ccb_label_style},#[fg=#1e1e2e]#[bg=#7aa2f7]#[bold]} #{@ccb_agent} #[default],#[fg=#565f89] #{pane_title} #[default]}'
+
+tmux set-option -t "$session" status-position "${CCB_TMUX_RENDERED_STATUS_POSITION:-bottom}" >/dev/null 2>&1 || true
+tmux set-option -t "$session" status-interval "${CCB_TMUX_RENDERED_STATUS_INTERVAL:-5}" >/dev/null 2>&1 || true
+tmux set-option -t "$session" status-style "${CCB_TMUX_RENDERED_STATUS_STYLE:-bg=#1e1e2e fg=#cdd6f4}" >/dev/null 2>&1 || true
+tmux set-option -t "$session" status "${CCB_TMUX_RENDERED_STATUS_LINES:-2}" >/dev/null 2>&1 || true
+tmux set-option -t "$session" @ccb_theme_profile "${CCB_TMUX_RENDERED_THEME_PROFILE:-default}" >/dev/null 2>&1 || true
+tmux set-option -t "$session" status-left-length "${CCB_TMUX_RENDERED_STATUS_LEFT_LENGTH:-80}" >/dev/null 2>&1 || true
+tmux set-option -t "$session" status-right-length "${CCB_TMUX_RENDERED_STATUS_RIGHT_LENGTH:-120}" >/dev/null 2>&1 || true
+tmux set-option -t "$session" 'status-format[1]' "${CCB_TMUX_RENDERED_STATUS_FORMAT_1:-$default_status_format_1}" >/dev/null 2>&1 || true
+tmux set-option -t "$session" 'status-format[0]' "${CCB_TMUX_RENDERED_STATUS_FORMAT_0:-$default_status_format_0}" >/dev/null 2>&1 || true
+tmux set-option -t "$session" status-left "${CCB_TMUX_RENDERED_STATUS_LEFT:-$default_status_left}" >/dev/null 2>&1 || true
 tmux set-option -t "$session" @ccb_version "$ccb_version" >/dev/null 2>&1 || true
-
-focus_agent='#{?#{@ccb_agent},#{@ccb_agent},-}'
-status_right="#[fg=#f38ba8,bg=#1e1e2e]#[fg=#1e1e2e,bg=#f38ba8,bold] ${focus_agent} #[fg=#cba6f7,bg=#f38ba8]#[fg=#1e1e2e,bg=#cba6f7,bold] CCB:#{@ccb_version} #[fg=#89b4fa,bg=#cba6f7]#[fg=#cdd6f4,bg=#89b4fa] #(${status_script} modern) #[fg=#fab387,bg=#89b4fa]#[fg=#1e1e2e,bg=#fab387,bold] %m/%d %a %H:%M #[default]"
-tmux set-option -t "$session" status-right "$status_right" >/dev/null 2>&1 || true
-
-tmux set-option -t "$session" window-status-format '' >/dev/null 2>&1 || true
-tmux set-option -t "$session" window-status-current-format '' >/dev/null 2>&1 || true
-tmux set-option -t "$session" window-status-separator '' >/dev/null 2>&1 || true
+tmux set-option -t "$session" status-right "${CCB_TMUX_RENDERED_STATUS_RIGHT:-$default_status_right}" >/dev/null 2>&1 || true
+tmux set-option -t "$session" window-status-format "${CCB_TMUX_RENDERED_WINDOW_STATUS_FORMAT:-}" >/dev/null 2>&1 || true
+tmux set-option -t "$session" window-status-current-format "${CCB_TMUX_RENDERED_WINDOW_STATUS_CURRENT_FORMAT:-}" >/dev/null 2>&1 || true
+tmux set-option -t "$session" window-status-separator "${CCB_TMUX_RENDERED_WINDOW_STATUS_SEPARATOR:-}" >/dev/null 2>&1 || true
 
 # Pane titles and borders (window options)
 # Prefer logical agent names from `@ccb_agent` so pane headers stay name-first.
-tmux set-window-option -t "$session" pane-border-status top >/dev/null 2>&1 || true
-tmux set-window-option -t "$session" pane-border-style 'fg=#3b4261,bold' >/dev/null 2>&1 || true
-tmux set-window-option -t "$session" pane-active-border-style 'fg=#7aa2f7,bold' >/dev/null 2>&1 || true
-tmux set-window-option -t "$session" pane-border-format '#{?#{@ccb_agent},#{?#{@ccb_label_style},#{@ccb_label_style},#[fg=#1e1e2e]#[bg=#7aa2f7]#[bold]} #{@ccb_agent} #[default],#[fg=#565f89] #{pane_title} #[default]}' >/dev/null 2>&1 || true
+tmux set-window-option -t "$session" pane-border-status "${CCB_TMUX_RENDERED_PANE_BORDER_STATUS:-top}" >/dev/null 2>&1 || true
+tmux set-window-option -t "$session" pane-border-style "${CCB_TMUX_RENDERED_PANE_BORDER_STYLE:-fg=#3b4261,bold}" >/dev/null 2>&1 || true
+tmux set-window-option -t "$session" pane-active-border-style "${CCB_TMUX_RENDERED_PANE_ACTIVE_BORDER_STYLE:-fg=#7aa2f7,bold}" >/dev/null 2>&1 || true
+tmux set-window-option -t "$session" pane-border-format "${CCB_TMUX_RENDERED_PANE_BORDER_FORMAT:-$default_pane_border_format}" >/dev/null 2>&1 || true
+if [[ -n "${CCB_TMUX_RENDERED_WINDOW_STYLE:-}" ]]; then
+  tmux set-window-option -t "$session" window-style "$CCB_TMUX_RENDERED_WINDOW_STYLE" >/dev/null 2>&1 || true
+fi
+if [[ -n "${CCB_TMUX_RENDERED_WINDOW_ACTIVE_STYLE:-}" ]]; then
+  tmux set-window-option -t "$session" window-active-style "$CCB_TMUX_RENDERED_WINDOW_ACTIVE_STYLE" >/dev/null 2>&1 || true
+fi
 
 # Dynamic active-border color based on active pane agent (per-session hook).
 tmux set-hook -t "$session" after-select-pane "run-shell \"${border_script} \\\"#{pane_id}\\\"\"" >/dev/null 2>&1 || true

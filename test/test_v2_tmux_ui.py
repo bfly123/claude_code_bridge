@@ -103,6 +103,40 @@ def test_apply_project_tmux_ui_sets_session_theme_and_hook_from_current_install_
     assert ['set-option', '-p', '-t', '%9', 'pane-active-border-style', 'fg=#f7768e,bold'] in calls
 
 
+def test_apply_project_tmux_ui_applies_window_theme_for_contrast_profile(monkeypatch, tmp_path: Path) -> None:
+    config_dir = tmp_path / 'config'
+    config_dir.mkdir(parents=True)
+    for script_name in ('ccb-status.sh', 'ccb-border.sh', 'ccb-git.sh'):
+        (config_dir / script_name).write_text('#!/bin/sh\n', encoding='utf-8')
+    (tmp_path / 'VERSION').write_text('9.9.9\n', encoding='utf-8')
+
+    calls: list[list[str]] = []
+
+    class FakeBackend:
+        def _tmux_run(self, args, *, check=False, capture=False):
+            del check
+            calls.append(list(args))
+            if capture and args[:4] == ['list-panes', '-t', 'ccb-demo', '-F']:
+                return SimpleNamespace(returncode=0, stdout='\n%9\n', stderr='')
+            if capture and args[:4] == ['display-message', '-p', '-t', '%9']:
+                return SimpleNamespace(returncode=0, stdout='', stderr='')
+            return SimpleNamespace(returncode=0, stdout='', stderr='')
+
+    monkeypatch.setenv('CCB_TMUX_THEME_PROFILE', 'contrast')
+    monkeypatch.setattr(tmux_helpers, 'current_install_root', lambda: tmp_path)
+
+    tmux_ui.apply_project_tmux_ui(
+        tmux_socket_path='/tmp/ccb.sock',
+        tmux_session_name='ccb-demo',
+        backend=FakeBackend(),
+    )
+
+    assert ['set-option', '-t', 'ccb-demo', '@ccb_theme_profile', 'contrast'] in calls
+    assert ['set-window-option', '-t', 'ccb-demo', 'pane-border-style', 'fg=#565f89,bold'] in calls
+    assert ['set-window-option', '-t', 'ccb-demo', 'window-style', 'bg=#181825'] in calls
+    assert ['set-window-option', '-t', 'ccb-demo', 'window-active-style', 'bg=#1e1e2e'] in calls
+
+
 def test_detect_ccb_version_prefers_current_install_over_path(monkeypatch, tmp_path: Path) -> None:
     current_root = tmp_path / 'current'
     current_root.mkdir()

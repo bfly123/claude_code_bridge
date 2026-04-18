@@ -50,6 +50,8 @@ restore_wopt pane-border-status @ccb_prev_pane_border_status
 restore_wopt pane-border-format @ccb_prev_pane_border_format
 restore_wopt pane-border-style @ccb_prev_pane_border_style
 restore_wopt pane-active-border-style @ccb_prev_pane_active_border_style
+restore_wopt window-style @ccb_prev_window_style
+restore_wopt window-active-style @ccb_prev_window_active_style
 
 restore_sopt status @ccb_prev_status
 restore_sopt status-position @ccb_prev_status_position
@@ -68,3 +70,4 @@ restore_sopt window-status-separator @ccb_prev_window_status_separator
 
 tmux set-option -t "$session" -u @ccb_active >/dev/null 2>&1 || true
 tmux set-option -t "$session" -u @ccb_version >/dev/null 2>&1 || true
+tmux set-option -t "$session" -u @ccb_theme_profile >/dev/null 2>&1 || true

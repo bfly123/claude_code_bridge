@@ -15,6 +15,9 @@ test/dir1/.ccb/
 .gemini-session
 .claude-session
 .opencode-session
+.ccb-requests/
+.gemini/
+dist/
 opencode.json
 .claude/
 *.mp4
