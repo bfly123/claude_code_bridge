@@ -4,20 +4,21 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import cli.services.tmux_ui as tmux_ui
+import cli.services.tmux_ui_runtime.helpers as tmux_helpers
 
 
-def test_set_tmux_ui_active_runs_expected_script(monkeypatch, tmp_path: Path) -> None:
-    bin_dir = tmp_path / '.local' / 'bin'
-    bin_dir.mkdir(parents=True)
-    on_script = bin_dir / 'ccb-tmux-on.sh'
-    off_script = bin_dir / 'ccb-tmux-off.sh'
+def test_set_tmux_ui_active_runs_expected_script_from_current_install_root(monkeypatch, tmp_path: Path) -> None:
+    config_dir = tmp_path / 'config'
+    config_dir.mkdir(parents=True)
+    on_script = config_dir / 'ccb-tmux-on.sh'
+    off_script = config_dir / 'ccb-tmux-off.sh'
     on_script.write_text('#!/bin/sh\n', encoding='utf-8')
     off_script.write_text('#!/bin/sh\n', encoding='utf-8')
 
     calls: list[list[str]] = []
 
     monkeypatch.setenv('TMUX', '/tmp/tmux-1/default,123,0')
-    monkeypatch.setattr(tmux_ui.Path, 'home', classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(tmux_helpers, 'current_install_root', lambda: tmp_path)
     monkeypatch.setattr(tmux_ui.subprocess, 'run', lambda args, **kwargs: calls.append(list(args)))
 
     tmux_ui.set_tmux_ui_active(True)
@@ -31,7 +32,7 @@ def test_set_tmux_ui_active_skips_outside_tmux(monkeypatch, tmp_path: Path) -> N
 
     monkeypatch.delenv('TMUX', raising=False)
     monkeypatch.delenv('TMUX_PANE', raising=False)
-    monkeypatch.setattr(tmux_ui.Path, 'home', classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(tmux_helpers, 'current_install_root', lambda: tmp_path)
     monkeypatch.setattr(tmux_ui.subprocess, 'run', lambda args, **kwargs: calls.append(list(args)))
 
     tmux_ui.set_tmux_ui_active(True)
@@ -39,12 +40,30 @@ def test_set_tmux_ui_active_skips_outside_tmux(monkeypatch, tmp_path: Path) -> N
     assert calls == []
 
 
-def test_apply_project_tmux_ui_sets_session_theme_and_hook(monkeypatch, tmp_path: Path) -> None:
-    bin_dir = tmp_path / '.local' / 'bin'
-    bin_dir.mkdir(parents=True)
+def test_set_tmux_ui_active_falls_back_to_path_lookup(monkeypatch, tmp_path: Path) -> None:
+    path_dir = tmp_path / 'path-bin'
+    path_dir.mkdir(parents=True)
+    on_script = path_dir / 'ccb-tmux-on.sh'
+    on_script.write_text('#!/bin/sh\n', encoding='utf-8')
+
+    calls: list[list[str]] = []
+
+    monkeypatch.setenv('TMUX', '/tmp/tmux-1/default,123,0')
+    monkeypatch.setattr(tmux_helpers, 'current_install_root', lambda: tmp_path / 'missing-root')
+    monkeypatch.setattr(tmux_helpers.shutil, 'which', lambda name: str(on_script) if name == 'ccb-tmux-on.sh' else None)
+    monkeypatch.setattr(tmux_ui.subprocess, 'run', lambda args, **kwargs: calls.append(list(args)))
+
+    tmux_ui.set_tmux_ui_active(True)
+
+    assert calls == [[str(on_script)]]
+
+
+def test_apply_project_tmux_ui_sets_session_theme_and_hook_from_current_install_root(monkeypatch, tmp_path: Path) -> None:
+    config_dir = tmp_path / 'config'
+    config_dir.mkdir(parents=True)
     for script_name in ('ccb-status.sh', 'ccb-border.sh', 'ccb-git.sh'):
-        (bin_dir / script_name).write_text('#!/bin/sh\n', encoding='utf-8')
-    (bin_dir / 'ccb').write_text('VERSION = "9.9.9"\n', encoding='utf-8')
+        (config_dir / script_name).write_text('#!/bin/sh\n', encoding='utf-8')
+    (tmp_path / 'VERSION').write_text('9.9.9\n', encoding='utf-8')
 
     calls: list[list[str]] = []
 
@@ -60,7 +79,7 @@ def test_apply_project_tmux_ui_sets_session_theme_and_hook(monkeypatch, tmp_path
                 return SimpleNamespace(returncode=0, stdout='', stderr='')
             return SimpleNamespace(returncode=0, stdout='', stderr='')
 
-    monkeypatch.setattr(tmux_ui.Path, 'home', classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(tmux_helpers, 'current_install_root', lambda: tmp_path)
 
     tmux_ui.apply_project_tmux_ui(
         tmux_socket_path='/tmp/ccb.sock',
@@ -82,3 +101,20 @@ def test_apply_project_tmux_ui_sets_session_theme_and_hook(monkeypatch, tmp_path
         for call in calls
     )
     assert ['set-option', '-p', '-t', '%9', 'pane-active-border-style', 'fg=#f7768e,bold'] in calls
+
+
+def test_detect_ccb_version_prefers_current_install_over_path(monkeypatch, tmp_path: Path) -> None:
+    current_root = tmp_path / 'current'
+    current_root.mkdir()
+    (current_root / 'VERSION').write_text('9.9.9\n', encoding='utf-8')
+
+    path_root = tmp_path / 'path-root'
+    path_root.mkdir()
+    path_ccb = path_root / 'ccb'
+    path_ccb.write_text('VERSION = "1.2.3"\n', encoding='utf-8')
+
+    monkeypatch.delenv('CCB_VERSION', raising=False)
+    monkeypatch.setattr(tmux_helpers, 'current_install_root', lambda: current_root)
+    monkeypatch.setattr(tmux_helpers.shutil, 'which', lambda name: str(path_ccb) if name == 'ccb' else None)
+
+    assert tmux_helpers.detect_ccb_version() == '9.9.9'
