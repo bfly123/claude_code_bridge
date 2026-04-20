@@ -65,6 +65,26 @@ LASKD_SPEC = ProviderDaemonSpec(
 )
 
 
+LOASKD_SPEC = ProviderDaemonSpec(
+    daemon_key="loaskd",
+    protocol_prefix="loask",
+    state_file_name="loaskd.json",
+    log_file_name="loaskd.log",
+    idle_timeout_env="CCB_LOASKD_IDLE_TIMEOUT_S",
+    lock_name="loaskd",
+)
+
+
+LSASKD_SPEC = ProviderDaemonSpec(
+    daemon_key="lsaskd",
+    protocol_prefix="lsask",
+    state_file_name="lsaskd.json",
+    log_file_name="lsaskd.log",
+    idle_timeout_env="CCB_LSASKD_IDLE_TIMEOUT_S",
+    lock_name="lsaskd",
+)
+
+
 DASKD_SPEC = ProviderDaemonSpec(
     daemon_key="daskd",
     protocol_prefix="dask",
@@ -118,6 +138,30 @@ LASK_CLIENT_SPEC = ProviderClientSpec(
     autostart_env_legacy="CCB_AUTO_LASKD",
     state_file_env="CCB_LASKD_STATE_FILE",
     session_filename=".claude-session",
+    daemon_bin_name="askd",
+    daemon_module="askd.daemon",
+)
+
+
+LOASK_CLIENT_SPEC = ProviderClientSpec(
+    protocol_prefix="loask",
+    enabled_env="CCB_LOASKD",
+    autostart_env_primary="CCB_LOASKD_AUTOSTART",
+    autostart_env_legacy="CCB_AUTO_LOASKD",
+    state_file_env="CCB_LOASKD_STATE_FILE",
+    session_filename=".claude-opus-session",
+    daemon_bin_name="askd",
+    daemon_module="askd.daemon",
+)
+
+
+LSASK_CLIENT_SPEC = ProviderClientSpec(
+    protocol_prefix="lsask",
+    enabled_env="CCB_LSASKD",
+    autostart_env_primary="CCB_LSASKD_AUTOSTART",
+    autostart_env_legacy="CCB_AUTO_LSASKD",
+    state_file_env="CCB_LSASKD_STATE_FILE",
+    session_filename=".claude-sonnet-session",
     daemon_bin_name="askd",
     daemon_module="askd.daemon",
 )

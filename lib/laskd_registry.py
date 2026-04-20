@@ -18,6 +18,7 @@ from typing import Optional
 
 from laskd_session import ClaudeProjectSession, load_project_session, _maybe_auto_extract_old_session
 from project_id import compute_ccb_project_id, normalize_work_dir
+from providers import session_filename_for_instance
 from session_file_watcher import HAS_WATCHDOG, SessionFileWatcher
 from session_utils import (
     CCB_PROJECT_CONFIG_DIRNAME,
@@ -491,37 +492,46 @@ class LaskdSessionRegistry:
         self._stop_root_watcher()
         self._stop_all_watchers()
 
-    def get_session(self, work_dir: Path) -> Optional[ClaudeProjectSession]:
-        key = str(work_dir)
+    @staticmethod
+    def _cache_key(work_dir: Path, instance: str = "") -> str:
+        """Cache key that differentiates named sessions in the same directory."""
+        base = str(work_dir)
+        if instance:
+            return f"{base}::{instance}"
+        return base
+
+    def get_session(self, work_dir: Path, instance: str = "") -> Optional[ClaudeProjectSession]:
+        key = self._cache_key(work_dir, instance)
+        _sfn = session_filename_for_instance(".claude-session", instance or None)
         with self._lock:
             entry = self._sessions.get(key)
             if entry:
                 session_file = (
                     entry.session_file
-                    or find_project_session_file(work_dir, ".claude-session")
-                    or (resolve_project_config_dir(work_dir) / ".claude-session")
+                    or find_project_session_file(work_dir, _sfn)
+                    or (resolve_project_config_dir(work_dir) / _sfn)
                 )
                 if session_file.exists():
                     try:
                         current_mtime = session_file.stat().st_mtime
                         if (not entry.session_file) or (session_file != entry.session_file) or (current_mtime != entry.file_mtime):
                             _write_log(f"[INFO] Session file changed, reloading: {work_dir}")
-                            entry = self._load_and_cache(work_dir)
+                            entry = self._load_and_cache(work_dir, instance=instance)
                     except Exception:
                         pass
 
                 if entry and entry.valid:
                     return entry.session
             else:
-                entry = self._load_and_cache(work_dir)
+                entry = self._load_and_cache(work_dir, instance=instance)
                 if entry:
                     return entry.session
 
         return None
 
-    def register_session(self, work_dir: Path, session: ClaudeProjectSession) -> None:
+    def register_session(self, work_dir: Path, session: ClaudeProjectSession, instance: str = "") -> None:
         """Register an active session for monitoring."""
-        key = str(work_dir)
+        key = self._cache_key(work_dir, instance)
         session_file = session.session_file
         mtime = 0.0
         if session_file and session_file.exists():
@@ -544,12 +554,13 @@ class LaskdSessionRegistry:
             self._sessions[key] = entry
         self._ensure_watchers_for_work_dir(work_dir, key)
 
-    def _load_and_cache(self, work_dir: Path) -> Optional[_SessionEntry]:
-        session = load_project_session(work_dir)
+    def _load_and_cache(self, work_dir: Path, instance: str = "") -> Optional[_SessionEntry]:
+        session = load_project_session(work_dir, instance or None)
+        _sfn = session_filename_for_instance(".claude-session", instance or None)
         session_file = (
             session.session_file
             if session
-            else (find_project_session_file(work_dir, ".claude-session") or (resolve_project_config_dir(work_dir) / ".claude-session"))
+            else (find_project_session_file(work_dir, _sfn) or (resolve_project_config_dir(work_dir) / _sfn))
         )
         mtime = 0.0
         if session_file.exists():
@@ -576,19 +587,19 @@ class LaskdSessionRegistry:
             next_bind_refresh=0.0,
             bind_backoff_s=0.0,
         )
-        self._sessions[str(work_dir)] = entry
+        self._sessions[self._cache_key(work_dir, instance)] = entry
         return entry if entry.valid else None
 
-    def invalidate(self, work_dir: Path) -> None:
-        key = str(work_dir)
+    def invalidate(self, work_dir: Path, instance: str = "") -> None:
+        key = self._cache_key(work_dir, instance)
         with self._lock:
             if key in self._sessions:
                 self._sessions[key].valid = False
                 _write_log(f"[INFO] Session invalidated: {work_dir}")
         self._release_watchers_for_work_dir(work_dir, key)
 
-    def remove(self, work_dir: Path) -> None:
-        key = str(work_dir)
+    def remove(self, work_dir: Path, instance: str = "") -> None:
+        key = self._cache_key(work_dir, instance)
         with self._lock:
             if key in self._sessions:
                 del self._sessions[key]
@@ -622,11 +633,14 @@ class LaskdSessionRegistry:
                     removed_work_dirs.append(entry.work_dir)
             for key in keys_to_remove:
                 del self._sessions[key]
-        for work_dir in removed_work_dirs:
-            self._release_watchers_for_work_dir(work_dir, str(work_dir))
+        for key, work_dir in zip(keys_to_remove, removed_work_dirs):
+            self._release_watchers_for_work_dir(work_dir, key)
 
     def _check_one(self, key: str, work_dir: Path, *, now: float, refresh_interval_s: float, scan_limit: int) -> None:
-        session_file = find_project_session_file(work_dir, ".claude-session") or (resolve_project_config_dir(work_dir) / ".claude-session")
+        # Extract instance from cache key (format: "work_dir::instance" or just "work_dir")
+        _instance = key.split("::", 1)[1] if "::" in key else ""
+        _sfn = session_filename_for_instance(".claude-session", _instance or None)
+        session_file = find_project_session_file(work_dir, _sfn) or (resolve_project_config_dir(work_dir) / _sfn)
         try:
             exists = session_file.exists()
         except Exception:
@@ -655,7 +669,7 @@ class LaskdSessionRegistry:
                 return
             file_changed = bool((entry.session_file != session_file) or (entry.file_mtime != current_mtime))
             if file_changed or (entry.session is None):
-                session = load_project_session(work_dir)
+                session = load_project_session(work_dir, _instance or None)
                 entry.session = session
                 entry.session_file = session_file
                 entry.file_mtime = current_mtime
@@ -853,8 +867,57 @@ class LaskdSessionRegistry:
             return False
         return False
 
-    def _find_claude_session_file(self, work_dir: Path) -> Optional[Path]:
-        return find_project_session_file(work_dir, ".claude-session") or (resolve_project_config_dir(work_dir) / ".claude-session")
+    @staticmethod
+    def _safe_mtime(p: Path) -> float:
+        try:
+            return p.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    def _find_claude_session_file(self, work_dir: Path, session_id: str = "") -> Optional[Path]:
+        """Find the session file matching session_id, checking all claude variants.
+
+        When searching by session_id, ALL claude session files are considered
+        (base, opus, sonnet, named instances) so that the watcher can route
+        log updates to the correct provider's session file.
+
+        When falling back (no session_id match), only base-claude files are
+        considered to avoid cross-provider contamination.
+        """
+        cfg = resolve_project_config_dir(work_dir)
+        if not cfg.is_dir():
+            return find_project_session_file(work_dir, ".claude-session") or (cfg / ".claude-session")
+
+        _variant_prefixes = (".claude-opus-", ".claude-opus-session", ".claude-sonnet-", ".claude-sonnet-session")
+
+        # Collect ALL claude session files for session_id matching.
+        all_candidates = [cfg / ".claude-session"] if (cfg / ".claude-session").exists() else []
+        for p in cfg.glob(".claude-*-session"):
+            if p not in all_candidates:
+                all_candidates.append(p)
+        all_candidates.sort(key=self._safe_mtime, reverse=True)
+
+        if session_id:
+            for c in all_candidates:
+                try:
+                    data = json.loads(c.read_text(encoding="utf-8", errors="replace"))
+                    if isinstance(data, dict) and str(data.get("claude_session_id") or "").strip() == session_id:
+                        return c
+                except Exception:
+                    pass
+
+        # Fallback: restrict to base-claude files only (exclude variant providers).
+        base_candidates = [c for c in all_candidates if not any(c.name == vp or c.name.startswith(vp) for vp in _variant_prefixes)]
+        if not base_candidates:
+            return find_project_session_file(work_dir, ".claude-session") or (cfg / ".claude-session")
+        for c in base_candidates:
+            try:
+                data = json.loads(c.read_text(encoding="utf-8", errors="replace"))
+                if isinstance(data, dict) and data.get("active") is not False:
+                    return c
+            except Exception:
+                pass
+        return base_candidates[0] if base_candidates else (cfg / ".claude-session")
 
     def _update_session_file_direct(self, session_file: Path, log_path: Path, session_id: str) -> None:
         if not session_file.exists():
@@ -902,19 +965,29 @@ class LaskdSessionRegistry:
         if not session_id:
             return
         work_dir = Path(cwd)
-        session_file = self._find_claude_session_file(work_dir)
+        session_file = self._find_claude_session_file(work_dir, session_id=session_id)
         if session_file:
             self._update_session_file_direct(session_file, path, session_id)
 
-        key = str(work_dir)
-        with self._lock:
-            entry = self._sessions.get(key)
-            session = entry.session if entry else None
-        if session:
-            try:
-                session.update_claude_binding(session_path=path, session_id=session_id)
-            except Exception:
-                pass
+        # Determine instance from the matched session file name so we look up
+        # the correct cache entry (default or named).
+        _inst = ""
+        if session_file:
+            _name = session_file.name  # e.g. ".claude-foo-session"
+            if _name.startswith(".claude-") and _name.endswith("-session") and _name != ".claude-session":
+                _inst = _name[len(".claude-"):-len("-session")]
+        # Try instance-specific key first, then fall back to default key.
+        for _try_inst in ([_inst, ""] if _inst else [""]):
+            key = self._cache_key(work_dir, _try_inst)
+            with self._lock:
+                entry = self._sessions.get(key)
+                session = entry.session if entry else None
+            if session:
+                try:
+                    session.update_claude_binding(session_path=path, session_id=session_id)
+                except Exception:
+                    pass
+                break
 
     def _on_new_log_file(self, project_key: str, path: Path) -> None:
         if path.name == "sessions-index.json":
@@ -954,7 +1027,8 @@ class LaskdSessionRegistry:
             for key, entry in entries:
                 if not entry or not entry.valid:
                     continue
-                session = entry.session or load_project_session(entry.work_dir)
+                _inst = key.split("::", 1)[1] if "::" in key else None
+                session = entry.session or load_project_session(entry.work_dir, _inst)
                 if not session:
                     continue
                 current_path = Path(session.claude_session_path).expanduser() if session.claude_session_path else None
@@ -979,7 +1053,8 @@ class LaskdSessionRegistry:
                 continue
             if cwd and not _path_within(cwd, str(entry.work_dir)):
                 continue
-            session = entry.session or load_project_session(entry.work_dir)
+            _inst = key.split("::", 1)[1] if "::" in key else None
+            session = entry.session or load_project_session(entry.work_dir, _inst)
             if not session:
                 continue
             try:
@@ -1009,10 +1084,11 @@ class LaskdSessionRegistry:
             if not session_path or not session_path.exists():
                 continue
             session_id = session_path.stem
-            session_file = self._find_claude_session_file(work_dir)
+            session_file = self._find_claude_session_file(work_dir, session_id=session_id)
             if session_file:
                 self._update_session_file_direct(session_file, session_path, session_id)
-            session = entry.session or load_project_session(work_dir)
+            _inst = key.split("::", 1)[1] if "::" in key else None
+            session = entry.session or load_project_session(work_dir, _inst)
             if not session:
                 continue
             try:

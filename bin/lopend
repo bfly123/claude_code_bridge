@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-lpend - View latest Claude reply
+lopend - View latest Claude-Opus reply
 """
 
 import json
@@ -21,12 +21,12 @@ from ccb_protocol import strip_trailing_markers
 from pane_registry import load_registry_by_session_id, load_registry_by_claude_pane, load_registry_by_project_id, upsert_registry
 from session_utils import find_project_session_file
 from askd_client import resolve_work_dir_with_registry
-from providers import LASK_CLIENT_SPEC, session_filename_for_instance
+from providers import LOASK_CLIENT_SPEC as LASK_CLIENT_SPEC, session_filename_for_instance
 from project_id import compute_ccb_project_id
 
 
 def _debug_enabled() -> bool:
-    return (os.environ.get("CCB_DEBUG") in ("1", "true", "yes")) or (os.environ.get("LPEND_DEBUG") in ("1", "true", "yes"))
+    return (os.environ.get("CCB_DEBUG") in ("1", "true", "yes")) or (os.environ.get("LOPEND_DEBUG") in ("1", "true", "yes"))
 
 
 def _debug(message: str) -> None:
@@ -36,7 +36,7 @@ def _debug(message: str) -> None:
 
 
 def _load_session_log_path(work_dir: Path, explicit_session_file: Path | None) -> tuple[Path | None, str | None]:
-    _sfn = session_filename_for_instance(".claude-session", os.environ.get("CCB_SESSION_NAME", "").strip() or None)
+    _sfn = session_filename_for_instance(".claude-opus-session", os.environ.get("CCB_SESSION_NAME", "").strip() or None)
     session_file = explicit_session_file or find_project_session_file(work_dir, _sfn)
     if not session_file:
         return None, None
@@ -48,7 +48,7 @@ def _load_session_log_path(work_dir: Path, explicit_session_file: Path | None) -
         if path_str:
             return Path(path_str).expanduser(), session_id
     except Exception as exc:
-        _debug(f"Failed to read .claude-session ({session_file}): {exc}")
+        _debug(f"Failed to read .claude-opus-session ({session_file}): {exc}")
     return None, None
 
 
@@ -75,7 +75,7 @@ def _load_registry_log_path(current_pid: str | None) -> tuple[Path | None, dict 
                 record = None
         if record:
             providers = record.get("providers") if isinstance(record.get("providers"), dict) else {}
-            claude = providers.get("claude") if isinstance(providers, dict) else None
+            claude = providers.get("claude-opus") if isinstance(providers, dict) else None
             path_str = (claude or {}).get("claude_session_path") if isinstance(claude, dict) else record.get("claude_session_path")
             if path_str:
                 path = Path(path_str).expanduser()
@@ -91,7 +91,7 @@ def _load_registry_log_path(current_pid: str | None) -> tuple[Path | None, dict 
                 record = None
         if record:
             providers = record.get("providers") if isinstance(record.get("providers"), dict) else {}
-            claude = providers.get("claude") if isinstance(providers, dict) else None
+            claude = providers.get("claude-opus") if isinstance(providers, dict) else None
             path_str = (claude or {}).get("claude_session_path") if isinstance(claude, dict) else record.get("claude_session_path")
             if path_str:
                 path = Path(path_str).expanduser()
@@ -150,7 +150,7 @@ def _sync_registry_claude_path(record: dict | None, path: Path | None) -> None:
     providers = record.get("providers")
     if not isinstance(providers, dict):
         return
-    claude = providers.get("claude")
+    claude = providers.get("claude-opus")
     if not isinstance(claude, dict):
         return
     new_path = str(path)
@@ -178,7 +178,7 @@ def _parse_n(argv: list[str]) -> int:
 
 def main(argv: list[str]) -> int:
     try:
-        parser = argparse.ArgumentParser(prog="lpend", add_help=True)
+        parser = argparse.ArgumentParser(prog="lopend", add_help=True)
         parser.add_argument("n", nargs="?", type=int, default=1, help="Show the latest N conversations")
         parser.add_argument("--raw", action="store_true", help="Do not strip protocol/harness marker lines")
         parser.add_argument("--session-file", dest="session_file", default=None, help="Path to .claude-session (or .ccb/.claude-session)")
@@ -188,7 +188,7 @@ def main(argv: list[str]) -> int:
 
         work_dir, explicit_session_file = resolve_work_dir_with_registry(
             LASK_CLIENT_SPEC,
-            provider="claude",
+            provider="claude-opus",
             cli_session_file=args.session_file,
             env_session_file=os.environ.get("CCB_SESSION_FILE"),
         )
@@ -202,10 +202,10 @@ def main(argv: list[str]) -> int:
         registry_log_path, registry_record = _load_registry_log_path(current_pid)
         if not registry_log_path:
             if current_pid:
-                rec = load_registry_by_project_id(current_pid, "claude")
+                rec = load_registry_by_project_id(current_pid, "claude-opus")
                 if rec:
                     providers = rec.get("providers") if isinstance(rec.get("providers"), dict) else {}
-                    claude = providers.get("claude") if isinstance(providers, dict) else None
+                    claude = providers.get("claude-opus") if isinstance(providers, dict) else None
                     path_str = (claude or {}).get("claude_session_path") if isinstance(claude, dict) else None
                     if isinstance(path_str, str) and path_str.strip():
                         registry_log_path = Path(path_str.strip()).expanduser()

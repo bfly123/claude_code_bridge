@@ -25,7 +25,7 @@ from askd.adapters.codex import CodexAdapter
 from askd.adapters.gemini import GeminiAdapter
 from askd.adapters.opencode import OpenCodeAdapter
 from askd.adapters.droid import DroidAdapter
-from askd.adapters.claude import ClaudeAdapter
+from askd.adapters.claude import ClaudeAdapter, ClaudeOpusAdapter, ClaudeSonnetAdapter
 from askd.adapters.copilot import CopilotAdapter
 from askd.adapters.codebuddy import CodebuddyAdapter
 from askd.adapters.qwen import QwenAdapter
@@ -41,7 +41,7 @@ def _parse_listen(value: str) -> tuple[str, int]:
     return host or "127.0.0.1", int(port_s or "0")
 
 
-ALL_PROVIDERS = ["codex", "gemini", "opencode", "droid", "claude", "copilot", "codebuddy", "qwen"]
+ALL_PROVIDERS = ["codex", "gemini", "opencode", "droid", "claude", "claude-opus", "claude-sonnet", "copilot", "codebuddy", "qwen"]
 
 ADAPTER_CLASSES = {
     "codex": CodexAdapter,
@@ -49,6 +49,8 @@ ADAPTER_CLASSES = {
     "opencode": OpenCodeAdapter,
     "droid": DroidAdapter,
     "claude": ClaudeAdapter,
+    "claude-opus": ClaudeOpusAdapter,
+    "claude-sonnet": ClaudeSonnetAdapter,
     "copilot": CopilotAdapter,
     "codebuddy": CodebuddyAdapter,
     "qwen": QwenAdapter,

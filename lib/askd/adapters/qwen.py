@@ -226,6 +226,7 @@ class QwenAdapter(BaseProviderAdapter):
             work_dir=req.work_dir,
             caller_pane_id=req.caller_pane_id,
             caller_terminal=req.caller_terminal,
+            session_name=req.instance or "",
         )
 
         result = ProviderResult(

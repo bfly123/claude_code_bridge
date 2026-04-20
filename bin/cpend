@@ -24,7 +24,7 @@ try:
     from pane_registry import load_registry_by_session_id, load_registry_by_claude_pane, load_registry_by_project_id
     from session_utils import find_project_session_file
     from askd_client import resolve_work_dir_with_registry
-    from providers import CASK_CLIENT_SPEC
+    from providers import CASK_CLIENT_SPEC, session_filename_for_instance
     from project_id import compute_ccb_project_id
 except ImportError as exc:
     print(f"Import failed: {exc}")
@@ -42,7 +42,8 @@ def _debug(message: str) -> None:
 
 def _load_session_log_path(work_dir: Path, explicit_session_file: Path | None) -> tuple[Path | None, str | None]:
     """Load codex_session_path from .codex-session (or .ccb/.codex-session) if exists"""
-    session_file = explicit_session_file or find_project_session_file(work_dir, ".codex-session")
+    _sfn = session_filename_for_instance(".codex-session", os.environ.get("CCB_SESSION_NAME", "").strip() or None)
+    session_file = explicit_session_file or find_project_session_file(work_dir, _sfn)
     if not session_file:
         return None, None
     try:

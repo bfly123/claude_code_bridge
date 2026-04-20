@@ -23,10 +23,11 @@ from completion_hook import (
     default_reply_for_status,
     notify_completion,
 )
+from claude_session_resolver import resolve_claude_session
 from laskd_registry import get_session_registry
 from laskd_protocol import extract_reply_for_req, is_done_text, wrap_claude_prompt
-from laskd_session import compute_session_key, load_project_session
-from providers import LASKD_SPEC
+from laskd_session import ClaudeProjectSession, _ensure_work_dir_fields, compute_session_key, load_project_session
+from providers import LASKD_SPEC, LOASKD_SPEC, LSASKD_SPEC
 from session_file_watcher import HAS_WATCHDOG
 from terminal import get_backend_for_session
 
@@ -490,6 +491,10 @@ class ClaudeAdapter(BaseProviderAdapter):
     def load_session(self, work_dir: Path, instance: Optional[str] = None) -> Optional[Any]:
         return load_project_session(work_dir, instance)
 
+    def _load_session(self, work_dir: Path, instance: Optional[str] = None) -> Optional[Any]:
+        """Load session using provider-appropriate resolution. Subclasses override for variant providers."""
+        return load_project_session(work_dir, instance)
+
     def compute_session_key(self, session: Any, instance: Optional[str] = None) -> str:
         return compute_session_key(session, instance) if session else "claude:unknown"
 
@@ -497,10 +502,10 @@ class ClaudeAdapter(BaseProviderAdapter):
         started_ms = _now_ms()
         req = task.request
         work_dir = Path(req.work_dir)
-        _write_log(f"[INFO] start provider=claude req_id={task.req_id} work_dir={req.work_dir}")
+        _write_log(f"[INFO] start provider={self.key} req_id={task.req_id} work_dir={req.work_dir}")
 
         instance = task.request.instance
-        session = load_project_session(work_dir, instance)
+        session = self._load_session(work_dir, instance)
         session_key = self.compute_session_key(session, instance)
 
         if not session:
@@ -561,7 +566,7 @@ class ClaudeAdapter(BaseProviderAdapter):
         return result
 
     def _finalize_result(self, result: ProviderResult, req: ProviderRequest, task: QueuedTask) -> None:
-        _write_log(f"[INFO] done provider=claude req_id={result.req_id} exit={result.exit_code}")
+        _write_log(f"[INFO] done provider={self.key} req_id={result.req_id} exit={result.exit_code}")
 
         reply_for_hook = result.reply
         status = result.status or (COMPLETION_STATUS_COMPLETED if result.done_seen else COMPLETION_STATUS_INCOMPLETE)
@@ -576,7 +581,7 @@ class ClaudeAdapter(BaseProviderAdapter):
             f"done_seen={result.done_seen} email_req_id={req.email_req_id}"
         )
         notify_completion(
-            provider="claude",
+            provider=self.key,
             output_file=req.output_path,
             reply=reply_for_hook,
             req_id=result.req_id,
@@ -589,6 +594,7 @@ class ClaudeAdapter(BaseProviderAdapter):
             work_dir=req.work_dir,
             caller_pane_id=req.caller_pane_id,
             caller_terminal=req.caller_terminal,
+            session_name=req.instance or "",
         )
 
     def _postprocess_reply(self, req: ProviderRequest, reply: str) -> str:
@@ -713,3 +719,69 @@ class ClaudeAdapter(BaseProviderAdapter):
             ),
         )
         return result
+
+
+class ClaudeOpusAdapter(ClaudeAdapter):
+    """Adapter for Claude-Opus provider."""
+
+    @property
+    def key(self) -> str:
+        return "claude-opus"
+
+    @property
+    def spec(self):
+        return LOASKD_SPEC
+
+    @property
+    def session_filename(self) -> str:
+        return ".claude-opus-session"
+
+    def load_session(self, work_dir: Path, instance: Optional[str] = None) -> Optional[Any]:
+        return self._load_session(work_dir, instance)
+
+    def _load_session(self, work_dir: Path, instance: Optional[str] = None) -> Optional[Any]:
+        resolution = resolve_claude_session(work_dir, provider="claude-opus", instance=instance)
+        if not resolution or not resolution.data:
+            return None
+        data = dict(resolution.data)
+        session_file = resolution.session_file
+        if not session_file:
+            return None
+        _ensure_work_dir_fields(data, session_file=session_file, fallback_work_dir=work_dir)
+        return ClaudeProjectSession(session_file=session_file, data=data)
+
+    def compute_session_key(self, session: Any, instance: Optional[str] = None) -> str:
+        return compute_session_key(session, instance) if session else "claude-opus:unknown"
+
+
+class ClaudeSonnetAdapter(ClaudeAdapter):
+    """Adapter for Claude-Sonnet provider."""
+
+    @property
+    def key(self) -> str:
+        return "claude-sonnet"
+
+    @property
+    def spec(self):
+        return LSASKD_SPEC
+
+    @property
+    def session_filename(self) -> str:
+        return ".claude-sonnet-session"
+
+    def load_session(self, work_dir: Path, instance: Optional[str] = None) -> Optional[Any]:
+        return self._load_session(work_dir, instance)
+
+    def _load_session(self, work_dir: Path, instance: Optional[str] = None) -> Optional[Any]:
+        resolution = resolve_claude_session(work_dir, provider="claude-sonnet", instance=instance)
+        if not resolution or not resolution.data:
+            return None
+        data = dict(resolution.data)
+        session_file = resolution.session_file
+        if not session_file:
+            return None
+        _ensure_work_dir_fields(data, session_file=session_file, fallback_work_dir=work_dir)
+        return ClaudeProjectSession(session_file=session_file, data=data)
+
+    def compute_session_key(self, session: Any, instance: Optional[str] = None) -> str:
+        return compute_session_key(session, instance) if session else "claude-sonnet:unknown"
