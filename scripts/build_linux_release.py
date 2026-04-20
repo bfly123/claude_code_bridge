@@ -22,6 +22,7 @@ EXCLUDES = {
     ".ccb-requests",
     ".architec",
     ".claude",
+    ".codex",
     ".gemini",
     ".hippocampus",
     ".loop",

@@ -91,6 +91,24 @@ def test_dirty_worktree_entries_ignores_excluded_local_metadata(monkeypatch) -> 
     assert entries == (" M install.sh",)
 
 
+def test_dirty_worktree_entries_ignores_excluded_codex_local_metadata(monkeypatch) -> None:
+    module = _load_module()
+
+    def _fake_run(cmd, **kwargs):
+        assert cmd[-2:] == ["--porcelain", "--untracked-files=all"]
+        return SimpleNamespace(
+            returncode=0,
+            stdout="?? .codex\n M install.sh\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", _fake_run)
+
+    entries = module.dirty_worktree_entries(Path("/tmp/repo"))
+
+    assert entries == (" M install.sh",)
+
+
 def test_dirty_worktree_entries_ignores_excluded_temp_env_prefix(monkeypatch) -> None:
     module = _load_module()
 
