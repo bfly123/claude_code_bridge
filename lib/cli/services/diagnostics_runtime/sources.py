@@ -5,6 +5,8 @@ from pathlib import Path
 
 _TAIL_SUFFIXES = {'.log', '.jsonl', '.txt', '.yaml', '.yml'}
 _COPY_SUFFIXES = {'.json', '.pid'}
+_PROVIDER_STATE_SUFFIXES = _TAIL_SUFFIXES | _COPY_SUFFIXES | {'.toml'}
+_PROVIDER_STATE_SECRET_FILENAMES = {'auth.json'}
 
 
 def project_root_sources(context) -> tuple[tuple[str, Path], ...]:
@@ -49,6 +51,19 @@ def iter_dir_files(category: str, root: Path, *, suffixes: set[str]) -> list[tup
     files: list[tuple[str, Path]] = []
     for path in sorted(root.rglob('*')):
         if not path.is_file() or path.suffix.lower() not in suffixes:
+            continue
+        files.append((category, path))
+    return files
+
+
+def iter_provider_state_files(category: str, root: Path) -> list[tuple[str, Path]]:
+    if not root.exists() or not root.is_dir():
+        return []
+    files: list[tuple[str, Path]] = []
+    for path in sorted(root.rglob('*')):
+        if not path.is_file() or path.suffix.lower() not in _PROVIDER_STATE_SUFFIXES:
+            continue
+        if path.name.lower() in _PROVIDER_STATE_SECRET_FILENAMES:
             continue
         files.append((category, path))
     return files
@@ -118,6 +133,7 @@ def _agent_sources(context, agent_name: str, agent_dir: Path) -> tuple[tuple[str
     ]
     items.extend(iter_dir_files('agent-log', context.paths.agent_logs_dir(agent_name), suffixes=_TAIL_SUFFIXES))
     items.extend(iter_dir_files('agent-runtime', agent_dir / 'provider-runtime', suffixes=_TAIL_SUFFIXES | _COPY_SUFFIXES))
+    items.extend(iter_provider_state_files('agent-provider-state', agent_dir / 'provider-state'))
 
     runtime_path = context.paths.agent_runtime_path(agent_name)
     if runtime_path.exists():

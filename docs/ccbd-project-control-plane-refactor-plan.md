@@ -12,7 +12,7 @@
 - `docs/agent-first-v2-clean-core.md`
 - `docs/current-project-structure.md`
 
-与“项目专属 tmux namespace + `ccb`/`ccb open`/`ccb kill` 生命周期收敛”直接相关的详细实施方案，见：
+与“项目专属 tmux namespace + `ccb`/`ccb kill` 生命周期收敛”直接相关的详细实施方案，见：
 
 - `docs/ccbd-project-namespace-lifecycle-plan.md`
 

@@ -25,8 +25,12 @@ def find_gemini_session_file(
 
 def load_gemini_session_info(*, session_finder: Callable[[], Optional[Path]]):
     if "CCB_SESSION_ID" in os.environ:
-        result = _env_session_result()
         session_file = session_finder()
+        if session_file is not None:
+            data = _load_json(session_file)
+            if _explicitly_inactive_project_session(data):
+                return None
+        result = _env_session_result()
         if session_file:
             _merge_session_file_data(result, session_file)
         return result
@@ -37,7 +41,7 @@ def load_gemini_session_info(*, session_finder: Callable[[], Optional[Path]]):
 def _env_session_result() -> dict[str, object]:
     return {
         "ccb_session_id": os.environ["CCB_SESSION_ID"],
-        "runtime_dir": os.environ["GEMINI_RUNTIME_DIR"],
+        "runtime_dir": os.environ.get("GEMINI_RUNTIME_DIR", ""),
         "terminal": os.environ.get("GEMINI_TERMINAL", "tmux"),
         "tmux_session": os.environ.get("GEMINI_TMUX_SESSION", ""),
         "pane_id": os.environ.get("GEMINI_TMUX_SESSION", ""),
@@ -98,3 +102,7 @@ def _load_json(path: Path) -> dict | None:
 
 def _active_project_session(data: dict | None) -> bool:
     return isinstance(data, dict) and bool(data.get("active", False))
+
+
+def _explicitly_inactive_project_session(data: dict | None) -> bool:
+    return isinstance(data, dict) and data.get('active') is False

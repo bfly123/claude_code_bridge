@@ -7,12 +7,6 @@ def handle_kill(context, command, out, services) -> int:
     return 0
 
 
-def handle_open(context, command, out, services) -> int:
-    summary = services.open_project(context, command)
-    services.write_lines(out, services.render_open(summary))
-    return 0
-
-
 def handle_logs(context, command, out, services) -> int:
     summary = services.agent_logs(context, command)
     services.write_lines(out, services.render_logs(summary))
@@ -60,6 +54,5 @@ __all__ = [
     'handle_fault_list',
     'handle_kill',
     'handle_logs',
-    'handle_open',
     'handle_ps',
 ]

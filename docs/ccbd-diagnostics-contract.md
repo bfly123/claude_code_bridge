@@ -37,6 +37,7 @@ That means the diagnostics surface must answer at least:
 
 - Diagnostics are scoped to one `.ccb` anchor.
 - All project diagnostics records must live under that anchor's `.ccb/ccbd/`, except for provider session files that may live outside the project and are referenced as evidence.
+- Project-local provider state under `.ccb/agents/<agent>/provider-state/` is diagnostics evidence and should be exported when it is relevant to session isolation or binding analysis.
 - Diagnostics export must never merge multiple project anchors into one bundle.
 
 ### 3.2 Startup Report
@@ -162,6 +163,7 @@ The support bundle must include:
 - recent backend event streams such as supervision, namespace lifecycle, and cleanup history
 - backend stdout/stderr logs
 - per-agent runtime authority and recent agent/provider logs
+- non-secret project-local provider-state evidence such as managed Codex homes, session roots, session logs, and config overlays
 - relevant external session files when discoverable from runtime authority
 
 Rules:
@@ -170,6 +172,8 @@ Rules:
 - manifest rows must include original source path, archive path, inclusion status, and truncation status
 - bundle export must not require the backend to be healthy
 - bundle export must be project-local and deterministic enough for support usage
+- provider-state export must exclude credential material such as copied auth tokens
+- Codex managed-home violations must remain visible as diagnostics evidence; bundle export must not hide them by silently replacing the managed reader source with global `~/.codex/sessions`
 
 ### 3.8 Keeper Child Reaping
 

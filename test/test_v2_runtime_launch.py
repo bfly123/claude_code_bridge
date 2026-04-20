@@ -73,26 +73,9 @@ def _assert_caller_env_exports(start_cmd: str, *, actor: str, runtime_dir: Path,
     assert f'CCB_SESSION_ID={shlex.quote(session_id)}' in start_cmd
 
 
-def test_ensure_agent_runtime_reconciles_claude_workspace_before_launch(monkeypatch, tmp_path: Path) -> None:
+def test_ensure_agent_runtime_configures_claude_managed_home_without_touching_workspace(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-claude-hooks'
-    home = tmp_path / 'home'
     (project_root / '.ccb').mkdir(parents=True)
-    monkeypatch.setenv('HOME', str(home))
-    user_settings_path = home / '.claude' / 'settings.json'
-    user_settings_path.parent.mkdir(parents=True, exist_ok=True)
-    user_settings_path.write_text(
-        json.dumps(
-            {
-                'env': {
-                    'ANTHROPIC_AUTH_TOKEN': 'token-system',
-                    'ANTHROPIC_BASE_URL': 'https://api.system.invalid',
-                }
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding='utf-8',
-    )
 
     ctx = _context(project_root, ParsedStartCommand(project=None, agent_names=('agent3',), restore=False, auto_permission=False))
     spec = _spec('agent3', provider='claude')
@@ -114,10 +97,12 @@ def test_ensure_agent_runtime_reconciles_claude_workspace_before_launch(monkeypa
     )
 
     observed: dict[str, object] = {}
+    managed_settings = ctx.paths.agent_provider_state_dir('agent3', 'claude') / 'home' / '.claude' / 'settings.json'
 
     def fake_ensure_impl(*args, **kwargs):
         del args, kwargs
         observed['workspace_settings_exists'] = workspace_settings.exists()
+        observed['managed_settings_exists'] = managed_settings.exists()
         return runtime_launch.RuntimeLaunchResult(launched=False, binding=None)
 
     monkeypatch.setattr(runtime_launch, '_ensure_agent_runtime_impl', fake_ensure_impl)
@@ -125,10 +110,10 @@ def test_ensure_agent_runtime_reconciles_claude_workspace_before_launch(monkeypa
     result = ensure_agent_runtime(ctx, ctx.command, spec, plan, None)
 
     assert result == runtime_launch.RuntimeLaunchResult(launched=False, binding=None)
-    assert observed['workspace_settings_exists'] is False
-    settings_local_path = plan.workspace_path / '.claude' / 'settings.local.json'
-    settings_local = json.loads(settings_local_path.read_text(encoding='utf-8'))
-    assert settings_local['hooks']['Stop'][0]['hooks'][0]['command']
+    assert observed['workspace_settings_exists'] is True
+    assert observed['managed_settings_exists'] is True
+    managed_payload = json.loads(managed_settings.read_text(encoding='utf-8'))
+    assert managed_payload['hooks']['Stop'][0]['hooks'][0]['command']
 
 
 def test_ensure_agent_runtime_launches_named_codex_session(monkeypatch, tmp_path: Path) -> None:
@@ -189,10 +174,14 @@ def test_ensure_agent_runtime_launches_named_codex_session(monkeypatch, tmp_path
     expected_session = project_root / '.ccb' / '.codex-agent1-session'
     assert result.binding.session_ref == str(expected_session)
     payload = json.loads(expected_session.read_text(encoding='utf-8'))
+    expected_codex_home = ctx.paths.agent_provider_state_dir('agent1', 'codex') / 'home'
+    expected_session_root = expected_codex_home / 'sessions'
     assert payload['pane_id'] == '%42'
     assert payload['agent_name'] == 'agent1'
     assert payload['ccb_project_id'] == ctx.project.project_id
     assert payload['completion_artifact_dir'] == str(ctx.paths.agent_dir('agent1') / 'provider-runtime' / 'codex' / 'completion')
+    assert payload['codex_home'] == str(expected_codex_home)
+    assert payload['codex_session_root'] == str(expected_session_root)
     assert payload['pane_title_marker'].startswith('CCB-agent1-')
     assert payload['tmux_socket_name'] == 'sock-agent'
     assert payload['tmux_socket_path'] == '/tmp/ccb-agent.sock'
@@ -201,6 +190,8 @@ def test_ensure_agent_runtime_launches_named_codex_session(monkeypatch, tmp_path
     assert payload['codex_start_cmd'].startswith('export ')
     assert 'disable_paste_burst=true' in payload['codex_start_cmd']
     assert spawned['kwargs']['env']['CCB_SESSION_FILE'] == str(expected_session)
+    assert spawned['kwargs']['env']['CODEX_HOME'] == str(expected_codex_home)
+    assert spawned['kwargs']['env']['CODEX_SESSION_ROOT'] == str(expected_session_root)
     expected_lib_root = str((Path(codex_launcher.__file__).resolve().parents[2]))
     assert expected_lib_root in str(spawned['kwargs']['env']['PYTHONPATH'])
     assert Path(spawned['kwargs']['stdout'].name) == ctx.paths.agent_dir('agent1') / 'provider-runtime' / 'codex' / 'bridge.stdout.log'
@@ -211,6 +202,105 @@ def test_ensure_agent_runtime_launches_named_codex_session(monkeypatch, tmp_path
     assert (ctx.paths.agent_dir('agent1') / 'provider-runtime' / 'codex' / 'codex.pid').read_text(encoding='utf-8').strip() == '4242'
     assert spawned['args'][0] == __import__('sys').executable
     assert spawned['args'][1:4] == ['-m', 'provider_backends.codex.bridge', '--runtime-dir']
+
+
+def test_ensure_agent_runtime_relaunches_provider_identity_mismatch(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-identity-mismatch'
+    (project_root / '.ccb').mkdir(parents=True)
+    ctx = _context(project_root, ParsedStartCommand(project=None, agent_names=('agent1',), restore=True, auto_permission=False))
+    spec = _spec('agent1')
+    plan = WorkspacePlanner().plan(spec, ctx.project)
+    plan.workspace_path.mkdir(parents=True, exist_ok=True)
+
+    class FakeTmuxBackend:
+        _socket_name = 'sock-agent'
+        _socket_path = '/tmp/ccb-agent.sock'
+
+        def is_tmux_pane_alive(self, pane_id: str) -> bool:
+            assert pane_id == '%41'
+            return True
+
+        def kill_tmux_pane(self, pane_id: str) -> None:
+            assert pane_id == '%41'
+
+        def create_pane(self, cmd: str, cwd: str, direction: str = 'right', percent: int = 50, parent_pane: str | None = None) -> str:
+            return '%42'
+
+        def set_pane_title(self, pane_id: str, title: str) -> None:
+            pass
+
+        def set_pane_user_option(self, pane_id: str, name: str, value: str) -> None:
+            pass
+
+        def _tmux_run(self, args, capture=False, timeout=None):
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout='4242\n', stderr='')
+
+    launched: list[tuple[str, str, str]] = []
+
+    def _fake_launch(context, command, spec_arg, plan, launcher, *, assigned_pane_id=None, style_index=0, tmux_socket_path=None):
+        del context, command, plan, launcher, assigned_pane_id, style_index, tmux_socket_path
+        launched.append(('launched', spec_arg.name, spec_arg.provider))
+
+    refreshed = AgentBinding(
+        runtime_ref='tmux:%42',
+        session_ref='bound-session',
+        provider='codex',
+        runtime_root=str(ctx.paths.agent_provider_runtime_dir('agent1', 'codex')),
+        runtime_pid=4242,
+        session_file=str(project_root / '.ccb' / '.codex-agent1-session'),
+        session_id='bound-session',
+        tmux_socket_name='sock-agent',
+        tmux_socket_path='/tmp/ccb-agent.sock',
+        terminal='tmux',
+        pane_id='%42',
+        active_pane_id='%42',
+        pane_title_marker='CCB-agent1',
+        pane_state='alive',
+        provider_identity_state='match',
+    )
+
+    def _resolve_agent_binding(**kwargs):
+        del kwargs
+        return refreshed
+
+    stale = AgentBinding(
+        runtime_ref='tmux:%41',
+        session_ref='bound-session',
+        provider='codex',
+        runtime_root=str(ctx.paths.agent_provider_runtime_dir('agent1', 'codex')),
+        runtime_pid=4141,
+        session_file=str(project_root / '.ccb' / '.codex-agent1-session'),
+        session_id='bound-session',
+        tmux_socket_name='sock-agent',
+        tmux_socket_path='/tmp/ccb-agent.sock',
+        terminal='tmux',
+        pane_id='%41',
+        active_pane_id='%41',
+        pane_title_marker='CCB-agent1',
+        pane_state='alive',
+        provider_identity_state='mismatch',
+        provider_identity_reason='live_codex_process_not_running_bound_resume_session',
+    )
+
+    monkeypatch.setattr('cli.services.runtime_launch.TmuxBackend', FakeTmuxBackend)
+    monkeypatch.setattr('cli.services.runtime_launch.shutil.which', lambda name: f'/usr/bin/{name}')
+    result = runtime_launch._ensure_agent_runtime_impl(
+        ctx,
+        ctx.command,
+        spec,
+        plan,
+        stale,
+        runtime_launch_result_cls=runtime_launch.RuntimeLaunchResult,
+        binding_runtime_alive_fn=runtime_launch._binding_runtime_alive,
+        provider_executable_fn=runtime_launch._provider_executable,
+        cleanup_stale_tmux_binding_fn=runtime_launch._cleanup_stale_tmux_binding,
+        launch_tmux_runtime_fn=_fake_launch,
+        resolve_agent_binding_fn=_resolve_agent_binding,
+    )
+
+    assert result.launched is True
+    assert result.binding is refreshed
+    assert launched == [('launched', 'agent1', 'codex')]
 
 
 def test_ensure_agent_runtime_uses_agent_scoped_session_name_for_codex_agent(monkeypatch, tmp_path: Path) -> None:
@@ -302,6 +392,75 @@ def test_ensure_agent_runtime_passes_profile_codex_home_to_bridge(monkeypatch, t
 
     assert spawned['env']['CODEX_HOME'] == str(profile_home)
     assert spawned['env']['CODEX_SESSION_ROOT'] == str(profile_home / 'sessions')
+
+
+def test_ensure_agent_runtime_rewrites_session_file_without_losing_existing_codex_binding(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-rewrite-preserve'
+    (project_root / '.ccb').mkdir(parents=True)
+    existing_home = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-state' / 'codex' / 'home'
+    existing_root = existing_home / 'sessions'
+    existing_log = existing_root / '2026' / '04' / '19' / 'rollout-existing-session.jsonl'
+    existing_log.parent.mkdir(parents=True, exist_ok=True)
+    existing_log.write_text('', encoding='utf-8')
+    existing_session = project_root / '.ccb' / '.codex-agent1-session'
+    existing_session.write_text(
+        json.dumps(
+            {
+                'codex_home': str(existing_home),
+                'codex_session_root': str(existing_root),
+                'codex_session_id': 'existing-session-id',
+                'codex_session_path': str(existing_log),
+                'start_cmd': 'codex resume existing-session-id',
+                'codex_start_cmd': 'codex resume existing-session-id',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    ctx = _context(project_root, ParsedStartCommand(project=None, agent_names=('agent1',), restore=True, auto_permission=False))
+    spec = _spec('agent1')
+    plan = WorkspacePlanner().plan(spec, ctx.project)
+    plan.workspace_path.mkdir(parents=True, exist_ok=True)
+
+    class FakeTmuxBackend:
+        _socket_name = 'sock-agent'
+        _socket_path = '/tmp/ccb-agent.sock'
+
+        def create_pane(self, cmd: str, cwd: str, direction: str = 'right', percent: int = 50, parent_pane: str | None = None) -> str:
+            self.cmd = cmd
+            return '%90'
+
+        def set_pane_title(self, pane_id: str, title: str) -> None:
+            pass
+
+        def set_pane_user_option(self, pane_id: str, name: str, value: str) -> None:
+            pass
+
+        def _tmux_run(self, args, capture=False, timeout=None):
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout='9090\n', stderr='')
+
+    class FakePopen:
+        def __init__(self, args, **kwargs):
+            self.pid = 7777
+
+    monkeypatch.setattr('cli.services.runtime_launch._inside_tmux', lambda: True)
+    monkeypatch.setattr('cli.services.runtime_launch.shutil.which', lambda name: f'/usr/bin/{name}')
+    monkeypatch.setattr('cli.services.runtime_launch.TmuxBackend', FakeTmuxBackend)
+    monkeypatch.setattr('cli.services.runtime_launch.subprocess.Popen', FakePopen)
+
+    ensure_agent_runtime(ctx, ctx.command, spec, plan, None)
+
+    payload = json.loads(existing_session.read_text(encoding='utf-8'))
+    assert payload['codex_home'] == str(existing_home)
+    assert payload['codex_session_root'] == str(existing_root)
+    assert payload['codex_session_id'] == 'existing-session-id'
+    assert payload['codex_session_path'] == str(existing_log)
+    assert payload['codex_start_cmd'].endswith('resume existing-session-id')
 
 
 def test_binding_runtime_alive_uses_tmux_socket_and_active_pane(monkeypatch) -> None:
@@ -519,15 +678,21 @@ def test_ensure_agent_runtime_launches_named_claude_session(monkeypatch, tmp_pat
     expected_session = project_root / '.ccb' / '.claude-reviewer-session'
     assert result.binding.session_ref == str(expected_session)
     payload = json.loads(expected_session.read_text(encoding='utf-8'))
+    expected_claude_home = ctx.paths.agent_provider_state_dir('reviewer', 'claude') / 'home'
     assert payload['agent_name'] == 'reviewer'
     assert payload['ccb_project_id'] == ctx.project.project_id
     assert payload['completion_artifact_dir'] == str(ctx.paths.agent_dir('reviewer') / 'provider-runtime' / 'claude' / 'completion')
+    assert payload['claude_home'] == str(expected_claude_home)
+    assert payload['claude_projects_root'] == str(expected_claude_home / '.claude' / 'projects')
+    assert payload['claude_session_env_root'] == str(expected_claude_home / '.claude' / 'session-env')
     assert payload['pane_title_marker'].startswith('CCB-reviewer-')
     assert payload['pane_id'] == '%44'
     assert payload['work_dir'] == str(resume_dir)
     assert payload['ccb_session_id'].startswith('ccb-reviewer-')
     assert tmux_state['cwd'] == str(resume_dir)
     assert payload['start_cmd'].startswith('unset ANTHROPIC_BASE_URL; ')
+    assert f'HOME={shlex.quote(str(expected_claude_home))}' in payload['start_cmd']
+    assert f'CLAUDE_PROJECTS_ROOT={shlex.quote(str(expected_claude_home / ".claude" / "projects"))}' in payload['start_cmd']
     _assert_caller_env_exports(
         payload['start_cmd'],
         actor='reviewer',
@@ -1117,11 +1282,32 @@ def test_codex_launcher_build_start_cmd_isolates_invalid_global_codex_config(mon
 
     cmd = codex_launcher.build_start_cmd(command, spec, runtime_dir, 'sess-1')
 
-    isolated_home = runtime_dir / 'codex-home'
+    isolated_home = runtime_dir / 'codex-state' / 'home'
     assert f'CODEX_HOME={shlex.quote(str(isolated_home))}' in cmd
     assert f'CODEX_SESSION_ROOT={shlex.quote(str(isolated_home / "sessions"))}' in cmd
     assert (isolated_home / 'auth.json').is_file()
     assert (isolated_home / 'config.toml').is_file()
+
+
+def test_codex_launcher_build_start_cmd_uses_agent_scoped_session_root_by_default(monkeypatch, tmp_path: Path) -> None:
+    runtime_dir = tmp_path / 'repo' / '.ccb' / 'agents' / 'agent1' / 'provider-runtime' / 'codex'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    source_home = tmp_path / 'source-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    (source_home / 'config.toml').write_text('[model]\nname="gpt-5"\n', encoding='utf-8')
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+
+    spec = _spec('agent1')
+    command = ParsedStartCommand(project=None, agent_names=('agent1',), restore=False, auto_permission=False)
+
+    cmd = codex_launcher.build_start_cmd(command, spec, runtime_dir, 'sess-default')
+
+    codex_home = runtime_dir.parents[1] / 'provider-state' / 'codex' / 'home'
+    session_root = codex_home / 'sessions'
+    assert f'CODEX_HOME={shlex.quote(str(codex_home))}' in cmd
+    assert f'CODEX_SESSION_ROOT={shlex.quote(str(session_root))}' in cmd
+    assert session_root.is_dir()
+    assert codex_home.is_dir()
 
 
 def test_codex_launcher_build_start_cmd_uses_agent_scoped_resume_session(monkeypatch, tmp_path: Path) -> None:
@@ -1223,6 +1409,8 @@ def test_claude_launcher_build_start_cmd_uses_overlay_and_drops_dead_local_user_
     start_cmd = claude_launcher.build_start_cmd(command, spec, runtime_dir, 'claude-sess-1')
 
     assert start_cmd.startswith('unset ANTHROPIC_BASE_URL; ')
+    assert 'HOME=' in start_cmd
+    assert 'CLAUDE_PROJECTS_ROOT=' in start_cmd
     _assert_caller_env_exports(
         start_cmd,
         actor='reviewer',
@@ -1262,6 +1450,68 @@ def test_codex_launcher_build_start_cmd_uses_materialized_profile_home(monkeypat
     assert f'CODEX_SESSION_ROOT={shlex.quote(str(profile_home / "sessions"))}' in cmd
     assert f'OPENAI_API_KEY={shlex.quote("profile-key")}' in cmd
     assert (profile_home / 'sessions').is_dir()
+
+
+def test_codex_launcher_build_start_cmd_reuses_legacy_codex_home_from_persisted_start_cmd(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-codex-legacy-home'
+    runtime_dir = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-runtime' / 'codex'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    legacy_home = tmp_path / 'legacy-codex-home'
+    (legacy_home / 'sessions').mkdir(parents=True, exist_ok=True)
+    ccb_dir = project_root / '.ccb'
+    ccb_dir.mkdir(parents=True, exist_ok=True)
+    (ccb_dir / '.codex-agent1-session').write_text(
+        json.dumps(
+            {
+                'codex_start_cmd': f'export CODEX_HOME={legacy_home}; codex',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    spec = _spec('agent1')
+    command = ParsedStartCommand(project=None, agent_names=('agent1',), restore=False, auto_permission=False)
+
+    cmd = codex_launcher.build_start_cmd(command, spec, runtime_dir, 'sess-legacy-home')
+
+    assert f'CODEX_HOME={shlex.quote(str(legacy_home))}' in cmd
+    assert f'CODEX_SESSION_ROOT={shlex.quote(str(legacy_home / "sessions"))}' in cmd
+
+
+def test_codex_launcher_build_start_cmd_reuses_legacy_session_root_from_persisted_log_path(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-codex-legacy-root'
+    runtime_dir = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-runtime' / 'codex'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    legacy_root = tmp_path / 'legacy-codex-home' / 'sessions'
+    legacy_log = legacy_root / '2026' / '04' / '19' / 'rollout-legacy-session.jsonl'
+    legacy_log.parent.mkdir(parents=True, exist_ok=True)
+    legacy_log.write_text('', encoding='utf-8')
+    ccb_dir = project_root / '.ccb'
+    ccb_dir.mkdir(parents=True, exist_ok=True)
+    (ccb_dir / '.codex-agent1-session').write_text(
+        json.dumps(
+            {
+                'codex_session_path': str(legacy_log),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    spec = _spec('agent1')
+    command = ParsedStartCommand(project=None, agent_names=('agent1',), restore=False, auto_permission=False)
+
+    cmd = codex_launcher.build_start_cmd(command, spec, runtime_dir, 'sess-legacy-root')
+
+    migrated_home = legacy_root.parent / 'home'
+    migrated_root = migrated_home / 'sessions'
+    assert f'CODEX_HOME={shlex.quote(str(migrated_home))}' in cmd
+    assert f'CODEX_SESSION_ROOT={shlex.quote(str(migrated_root))}' in cmd
+    assert migrated_root.is_dir()
+    assert (migrated_root / '2026' / '04' / '19' / 'rollout-legacy-session.jsonl').is_file()
 
 
 def test_claude_launcher_build_start_cmd_uses_isolated_profile_api_env(monkeypatch, tmp_path: Path) -> None:
@@ -1364,6 +1614,39 @@ def test_claude_launcher_build_start_cmd_uses_agent_settings_overlay_when_presen
         f'claude --setting-sources user,project,local --settings {shlex.quote(str(settings_path))}'
     )
     assert json.loads(settings_path.read_text(encoding='utf-8')) == {'model': 'opus'}
+
+
+def test_claude_launcher_build_start_cmd_uses_materialized_profile_home(monkeypatch, tmp_path: Path) -> None:
+    runtime_dir = tmp_path / 'runtime'
+    profile_home = tmp_path / 'claude-profile-home'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    _write_provider_profile(
+        runtime_dir,
+        ResolvedProviderProfile(
+            provider='claude',
+            agent_name='reviewer',
+            mode='isolated',
+            profile_root=str(profile_home),
+            runtime_home=str(profile_home),
+            env={'ANTHROPIC_AUTH_TOKEN': 'profile-token'},
+            inherit_api=False,
+        ),
+    )
+    monkeypatch.setattr(
+        claude_launcher,
+        '_resolve_claude_restore_target',
+        lambda **kwargs: ProviderRestoreTarget(run_cwd=runtime_dir, has_history=False),
+    )
+
+    start_cmd = claude_launcher.build_start_cmd(
+        ParsedStartCommand(project=None, agent_names=('reviewer',), restore=False, auto_permission=False),
+        _spec('reviewer', provider='claude'),
+        runtime_dir,
+        'claude-sess-home',
+    )
+
+    assert f'HOME={shlex.quote(str(profile_home))}' in start_cmd
+    assert f'CLAUDE_PROJECTS_ROOT={shlex.quote(str(profile_home / ".claude" / "projects"))}' in start_cmd
 
 
 def test_gemini_launcher_build_start_cmd_uses_isolated_profile_api_env(tmp_path: Path) -> None:

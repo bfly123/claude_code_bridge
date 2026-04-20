@@ -9,6 +9,8 @@ def ensure_log_reader(comm, *, log_reader_cls) -> None:
         return
     work_dir_hint = comm.session_info.get("work_dir")
     log_work_dir = Path(work_dir_hint) if isinstance(work_dir_hint, str) and work_dir_hint else None
+    projects_root_hint = comm.session_info.get("claude_projects_root")
+    log_root = Path(projects_root_hint).expanduser() if isinstance(projects_root_hint, str) and projects_root_hint else None
     include_subagents = os.environ.get("CLAUDE_LOG_INCLUDE_SUBAGENTS", "").strip().lower() in ("1", "true", "yes")
     include_subagent_user = os.environ.get("CLAUDE_LOG_INCLUDE_SUBAGENT_USER", "").strip().lower() in (
         "1",
@@ -17,6 +19,7 @@ def ensure_log_reader(comm, *, log_reader_cls) -> None:
     )
     subagent_tag = os.environ.get("CLAUDE_LOG_SUBAGENT_TAG", "[subagent]")
     comm._log_reader = log_reader_cls(
+        root=log_root,
         work_dir=log_work_dir,
         include_subagents=include_subagents,
         include_subagent_user=include_subagent_user,

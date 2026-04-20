@@ -19,6 +19,8 @@ class AgentBinding:
     active_pane_id: str | None = None
     pane_title_marker: str | None = None
     pane_state: str | None = None
+    provider_identity_state: str | None = None
+    provider_identity_reason: str | None = None
 
 
 def binding_status(runtime_ref: str | None, session_ref: str | None, workspace_path: str | None) -> str:

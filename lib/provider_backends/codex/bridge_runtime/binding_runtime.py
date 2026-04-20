@@ -8,6 +8,7 @@ import time
 from provider_backends.codex.comm_runtime.binding import extract_session_id
 from provider_backends.codex.comm_runtime.log_reader_facade import CodexLogReader
 from provider_backends.codex.session import CodexProjectSession
+from provider_backends.codex.session_runtime.follow_policy import should_follow_workspace_sessions
 
 from .env import env_float, path_or_none, read_session_data, session_root, session_work_dir
 
@@ -46,7 +47,7 @@ class CodexBindingTracker:
         if context is None:
             return False
 
-        log_path = current_log_path(context["data"])
+        log_path = current_log_path(context["data"], session_file=context["session_file"])
         if log_path is None:
             return False
 
@@ -72,16 +73,21 @@ def refresh_context(session_file: Path | None) -> dict[str, object] | None:
     work_dir = session_work_dir(data)
     if work_dir is None:
         return None
-    return {"data": data, "work_dir": work_dir}
+    return {"data": data, "work_dir": work_dir, "session_file": session_file}
 
 
-def current_log_path(data: dict[str, object]) -> Path | None:
+def current_log_path(data: dict[str, object], *, session_file: Path | None) -> Path | None:
+    work_dir = session_work_dir(data)
     log_reader = CodexLogReader(
         root=session_root(data),
         log_path=path_or_none(data.get("codex_session_path")),
         session_id_filter=str(data.get("codex_session_id") or "").strip() or None,
-        work_dir=session_work_dir(data),
-        follow_workspace_sessions=True,
+        work_dir=work_dir,
+        follow_workspace_sessions=should_follow_workspace_sessions(
+            work_dir=work_dir,
+            session_file=session_file,
+            session_data=data,
+        ),
     )
     log_path = log_reader.current_log_path()
     if log_path is None or not log_path.is_file():

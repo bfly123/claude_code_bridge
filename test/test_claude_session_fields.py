@@ -159,6 +159,35 @@ def test_load_project_session_instance_does_not_fallback_to_primary_session(tmp_
     assert loaded is None
 
 
+def test_load_project_session_exposes_claude_home_fields(tmp_path: Path) -> None:
+    cfg = tmp_path / '.ccb'
+    cfg.mkdir(parents=True, exist_ok=True)
+    claude_home = tmp_path / '.ccb' / 'agents' / 'agent1' / 'provider-state' / 'claude' / 'home'
+    session_file = cfg / '.claude-agent1-session'
+    session_file.write_text(
+        json.dumps(
+            {
+                'active': True,
+                'work_dir': str(tmp_path),
+                'claude_home': str(claude_home),
+                'claude_projects_root': str(claude_home / '.claude' / 'projects'),
+                'claude_session_env_root': str(claude_home / '.claude' / 'session-env'),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    from provider_backends.claude.session import load_project_session
+
+    loaded = load_project_session(tmp_path, 'agent1')
+
+    assert loaded is not None
+    assert loaded.claude_home == str(claude_home)
+    assert loaded.claude_projects_root == str(claude_home / '.claude' / 'projects')
+
+
 def test_resolve_claude_session_uses_explicit_ccb_session_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     project_root = tmp_path / "project"
     project_ccb = project_root / ".ccb"

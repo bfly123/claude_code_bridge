@@ -11,13 +11,16 @@ from workspace.models import WorkspacePlan
 
 from .launcher_runtime import (
     build_gemini_env_prefix as _build_gemini_env_prefix_impl,
+    prepare_gemini_home_overrides as _prepare_gemini_home_overrides_impl,
     build_runtime_launcher as _build_runtime_launcher_impl,
     build_session_payload as _build_session_payload_impl,
     build_start_cmd as _build_start_cmd_impl,
     resolve_gemini_restore_target as _resolve_gemini_restore_target_impl,
+    resolve_gemini_home_layout as _resolve_gemini_home_layout_impl,
     resolve_run_cwd as _resolve_run_cwd_impl,
 )
 from .session import load_project_session
+from provider_profiles import load_resolved_provider_profile
 
 
 def build_runtime_launcher():
@@ -40,6 +43,7 @@ def build_start_cmd(
         runtime_dir,
         launch_session_id,
         resolve_restore_target_fn=_resolve_gemini_restore_target,
+        prepare_home_overrides_fn=_prepare_gemini_home_overrides_impl,
     )
 
 
@@ -72,6 +76,9 @@ def build_session_payload(
     launch_session_id: str,
     prepared_state: dict[str, object],
 ) -> dict[str, object]:
+    profile = load_resolved_provider_profile(Path(runtime_dir))
+    prepared_state = dict(prepared_state or {})
+    prepared_state['gemini_home_layout'] = _resolve_gemini_home_layout_impl(Path(runtime_dir), profile)
     return _build_session_payload_impl(
         context,
         spec,
@@ -99,6 +106,7 @@ def _resolve_gemini_restore_target(
         restore=restore,
         workspace_path=workspace_path,
         load_project_session_fn=load_project_session,
+        load_profile_fn=load_resolved_provider_profile,
     )
 
 

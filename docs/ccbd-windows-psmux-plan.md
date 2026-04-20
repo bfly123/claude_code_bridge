@@ -28,8 +28,7 @@ Windows 版本必须尽量保持与当前 tmux 版本相同的核心语义：
 - 一个 `.ccb` 项目对应一个唯一 `ccbd`
 - 一个项目拥有一个独立的 mux namespace
 - `.ccb/ccb.config` 继续作为唯一配置 authority
-- `ccb` 继续是 ensure backend + ensure namespace + ensure desired agents
-- `ccb open` 继续是纯 attach 行为
+- `ccb` 继续是 ensure backend + ensure namespace + ensure desired agents + interactive foreground attach
 - `ccb kill` 继续是项目级销毁语义
 - pane 死亡后由 daemon supervision 自动恢复
 - namespace 级恢复后，pane 位置回到 `.ccb/ccb.config` 定义的 canonical layout
@@ -691,11 +690,11 @@ Windows 版 diagnostics 应明确包含：
 - destroy namespace
 - layout projection
 - reflow recovery
-- open/kill 接入
+- foreground attach/kill 接入
 
 退出标准：
 
-- `ccb` / `ccb open` / `ccb kill` 在 Windows 下形成闭环
+- `ccb` / `ccb kill` 在 Windows 下形成闭环
 
 ### P5. Supervision 与黑盒稳定性
 
@@ -740,8 +739,7 @@ Windows 版 diagnostics 应明确包含：
 
 - 空项目首次 `ccb`
 - 已存在 backend 的 `ccb`
-- `ccb open`
-- 关闭 terminal 后重新 `ccb open`
+- 关闭 terminal 后重新 `ccb`
 - 两个不同项目并行启动
 
 ### 14.2 恢复与 supervision
@@ -833,8 +831,7 @@ Windows 版 diagnostics 应明确包含：
 
 Windows `psmux` 版只有在以下条件全部成立时，才算达到“接近当前 tmux 版”的目标：
 
-- `ccb` 能 ensure backend、namespace、desired agents
-- `ccb open` 能 attach 到项目 namespace
+- `ccb` 能 ensure backend、namespace、desired agents，并在交互式终端 attach 到项目 namespace
 - `ccb kill` 能结束 backend、namespace、provider 进程树
 - 关闭 terminal 后后台仍存活
 - pane 死亡后 daemon 能自动恢复

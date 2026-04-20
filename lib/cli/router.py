@@ -72,7 +72,7 @@ def print_start_help(*, file=None) -> None:
               ccb watch <agent|job_id>
 
             Advanced diagnostics:
-              ccb open | ccb ps | ccb logs <agent> | ccb doctor
+              ccb ps | ccb logs <agent> | ccb doctor
               ccb version | ccb update | ccb uninstall | ccb reinstall
             """
         ).strip(),
@@ -137,12 +137,6 @@ _COMMAND_HELP = {
 
         Runtime diagnostics:
           ccb logs <agent>   Tail the current runtime/session log for one agent.
-    """,
-    "open": """
-        usage: ccb open
-
-        UI attach:
-          ccb open   Reattach to the current project's tmux namespace/UI.
     """,
     "ps": """
         usage: ccb ps

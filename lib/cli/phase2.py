@@ -13,7 +13,6 @@ from cli.phase2_runtime import (
     dispatch as _dispatch_impl,
     looks_like_config_validate as _looks_like_config_validate_impl,
     resolve_requested_project_root as _resolve_requested_project_root_impl,
-    should_auto_open_after_start as _should_auto_open_after_start_impl,
     stream_is_tty as _stream_is_tty_impl,
 )
 from cli.phase2_services import build_phase2_dispatch_services
@@ -29,7 +28,6 @@ from cli.services.inbox import inbox_target
 from cli.services.daemon import KillSummary
 from cli.services.kill import kill_project
 from cli.services.logs import agent_logs
-from cli.services.open import open_project
 from cli.services.pend import pend_target
 from cli.services.ping import ping_target
 from cli.services.ps import ps_summary
@@ -127,7 +125,6 @@ def _dispatch(context, command, out: TextIO) -> int:
 
 def _dispatch_services():
     return build_phase2_dispatch_services(
-        should_auto_open_after_start=_should_auto_open_after_start,
         ack_reply=ack_reply,
         agent_logs=agent_logs,
         arm_fault_rule=arm_fault_rule,
@@ -139,7 +136,6 @@ def _dispatch_services():
         inbox_target=inbox_target,
         kill_project=kill_project,
         list_fault_rules=list_fault_rules,
-        open_project=open_project,
         pend_target=pend_target,
         ping_target=ping_target,
         ps_summary=ps_summary,
@@ -159,11 +155,6 @@ def _dispatch_services():
 
 def _looks_like_config_validate(argv: Sequence[str]) -> bool:
     return _looks_like_config_validate_impl(argv)
-
-
-def _should_auto_open_after_start(command, *, out: TextIO) -> bool:
-    return _should_auto_open_after_start_impl(command, out=out, stdin=sys.stdin)
-
 
 def _stream_is_tty(stream: object) -> bool:
     return _stream_is_tty_impl(stream)

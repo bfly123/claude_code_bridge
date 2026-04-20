@@ -10,7 +10,8 @@ def cleanup_stale_tmux_binding(binding, *, tmux_backend_cls, kill_tmux_pane_fn) 
     if not runtime_ref.startswith('tmux:'):
         return
     pane_state = str(binding.pane_state or '').strip().lower()
-    if pane_state not in {'dead', 'missing'}:
+    identity_state = str(getattr(binding, 'provider_identity_state', None) or '').strip().lower()
+    if pane_state not in {'dead', 'missing'} and identity_state not in {'mismatch', 'unknown'}:
         return
     pane_id = str(binding.pane_id or binding.active_pane_id or '').strip()
     if not pane_id.startswith('%'):

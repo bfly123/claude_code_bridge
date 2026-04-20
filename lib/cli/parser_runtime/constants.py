@@ -4,7 +4,6 @@ SUBCOMMANDS = {
     'ask',
     'cancel',
     'kill',
-    'open',
     'ps',
     'ping',
     'watch',

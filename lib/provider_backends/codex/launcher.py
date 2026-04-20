@@ -6,10 +6,12 @@ from agents.models import AgentSpec
 from cli.context import CliContext
 from cli.models import ParsedStartCommand
 from provider_core.contracts import ProviderRuntimeLauncher
+from provider_profiles import load_resolved_provider_profile
 from workspace.models import WorkspacePlan
 from .launcher_runtime import build_start_cmd as _build_start_cmd_impl
 from .launcher_runtime import post_launch as _post_launch_impl
 from .launcher_runtime import prepare_runtime as _prepare_runtime_impl
+from .launcher_runtime import resolve_codex_home_layout as _resolve_codex_home_layout_impl
 
 
 def build_runtime_launcher() -> ProviderRuntimeLauncher:
@@ -45,7 +47,8 @@ def build_session_payload(
 ) -> dict[str, object]:
     input_fifo = Path(prepared_state['input_fifo'])
     output_fifo = Path(prepared_state['output_fifo'])
-    return {
+    layout = _resolve_codex_home_layout_impl(runtime_dir, load_resolved_provider_profile(runtime_dir))
+    payload = {
         'ccb_session_id': launch_session_id,
         'agent_name': spec.name,
         'ccb_project_id': context.project.project_id,
@@ -64,6 +67,10 @@ def build_session_payload(
         'codex_start_cmd': start_cmd,
         'start_cmd': start_cmd,
     }
+    payload['codex_session_root'] = str(layout.session_root)
+    if layout.codex_home is not None:
+        payload['codex_home'] = str(layout.codex_home)
+    return payload
 
 
 def post_launch(backend: object, pane_id: str, runtime_dir: Path, launch_session_id: str, prepared_state: dict[str, object]) -> None:

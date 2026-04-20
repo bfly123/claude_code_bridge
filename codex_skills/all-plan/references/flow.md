@@ -217,7 +217,7 @@ Send the design brief to `inspiration` for creative input. The `inspiration` pro
 
 **2.1 Request Inspiration**
 
-Send to `inspiration` (via `/ask`):
+Send to `inspiration` (via `$ask`):
 
 ```
 You are a creative brainstorming partner. Based on this design brief, provide INSPIRATION and CREATIVE IDEAS — not a full implementation plan.
@@ -318,7 +318,7 @@ Submit the plan to `reviewer` for scored review using Rubric A (defined in CLAUD
 
 **4.1 Submit Plan for Review**
 
-Send to `reviewer` (via `/ask`):
+Send to `reviewer` (via `$ask`):
 
 ```
 [PLAN REVIEW REQUEST]
@@ -388,7 +388,7 @@ WHILE result == FAIL AND iteration <= 3:
   2. Read critical_issues list
   3. Revise plan_draft to address ALL issues
   4. Save as plan_draft_v{iteration+1}
-  5. Re-submit to `reviewer` via /ask (same template)
+  5. Re-submit to `reviewer` via $ask (same template)
   6. iteration += 1
   7. Re-check PASS/FAIL
 
@@ -610,7 +610,7 @@ Next: Review the plan and proceed with implementation when ready.
 
 - This skill is designed for complex features or architectural decisions
 - For simple tasks, use direct implementation instead
-- Resolve `inspiration` and `reviewer` to providers via CLAUDE.md Role Assignment, then use `/ask <provider>`
+- Resolve `inspiration` and `reviewer` to providers via CLAUDE.md Role Assignment, then use `$ask <provider>`
 - If `inspiration` provider is not available, skip Phase 2 and proceed directly to Phase 3
 - If `reviewer` provider is not available, skip Phase 4 and present the plan directly to user
 - Plans are saved to `plans/` directory with descriptive filenames

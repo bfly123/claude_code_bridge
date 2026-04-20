@@ -14,11 +14,18 @@ from .manifests import ProviderManifest
 
 
 @dataclass(frozen=True)
+class ProviderRuntimeIdentity:
+    state: str
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
 class ProviderSessionBinding:
     provider: str
     load_session: Callable[[Path, str | None], object | None]
     session_id_attr: str
     session_path_attr: str
+    live_runtime_identity: Callable[[object], ProviderRuntimeIdentity | None] | None = None
 
     def __post_init__(self) -> None:
         provider = str(self.provider or '').strip().lower()
@@ -56,4 +63,4 @@ class ProviderBackend:
         return self.manifest.provider
 
 
-__all__ = ['ProviderBackend', 'ProviderRuntimeLauncher', 'ProviderSessionBinding']
+__all__ = ['ProviderBackend', 'ProviderRuntimeIdentity', 'ProviderRuntimeLauncher', 'ProviderSessionBinding']

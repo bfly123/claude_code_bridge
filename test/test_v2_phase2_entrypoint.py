@@ -197,8 +197,8 @@ def test_ccb_kill_succeeds_with_persisted_state_without_config(tmp_path: Path) -
     assert 'state: unmounted' in result.stdout
 
 
-def test_phase2_interactive_start_auto_opens_namespace(monkeypatch, tmp_path: Path) -> None:
-    project_root = tmp_path / 'repo-auto-open'
+def test_phase2_interactive_start_attaches_namespace(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-attach'
     project_root.mkdir()
     events: list[str] = []
 
@@ -213,17 +213,17 @@ def test_phase2_interactive_start_auto_opens_namespace(monkeypatch, tmp_path: Pa
             socket_path=str(project_root / '.ccb' / 'ccbd' / 'ccbd.sock'),
         )
 
-    def _fake_open(context, command):
-        del context, command
-        events.append('open')
+    def _fake_attach(context):
+        del context
+        events.append('attach')
         return SimpleNamespace(
             project_id='proj-1',
             tmux_socket_path=str(project_root / '.ccb' / 'ccbd' / 'tmux.sock'),
-            tmux_session_name='ccb-repo-auto-open-proj1',
+            tmux_session_name='ccb-repo-attach-proj1',
         )
 
     monkeypatch.setattr(phase2_module, 'start_agents', _fake_start)
-    monkeypatch.setattr(phase2_module, 'open_project', _fake_open)
+    monkeypatch.setattr('cli.phase2_runtime.handlers_start.attach_started_project_namespace', _fake_attach)
     monkeypatch.setattr(sys.stdin, 'isatty', lambda: True)
 
     stdout = _TtyStringIO()
@@ -231,8 +231,8 @@ def test_phase2_interactive_start_auto_opens_namespace(monkeypatch, tmp_path: Pa
     code = maybe_handle_phase2([], cwd=project_root, stdout=stdout, stderr=stderr)
 
     assert code == 0, stderr.getvalue()
-    assert events == ['start', 'open']
-    assert 'open_status: ok' in stdout.getvalue()
+    assert events == ['start', 'attach']
+    assert stdout.getvalue() == ''
     assert 'start_status: ok' not in stdout.getvalue()
 
 
@@ -252,13 +252,13 @@ def test_phase2_noninteractive_start_keeps_start_output(monkeypatch, tmp_path: P
             socket_path=str(project_root / '.ccb' / 'ccbd' / 'ccbd.sock'),
         )
 
-    def _fake_open(context, command):
-        del context, command
-        events.append('open')
-        raise AssertionError('open should not be called in noninteractive mode')
+    def _fake_attach(context):
+        del context
+        events.append('attach')
+        raise AssertionError('attach should not be called in noninteractive mode')
 
     monkeypatch.setattr(phase2_module, 'start_agents', _fake_start)
-    monkeypatch.setattr(phase2_module, 'open_project', _fake_open)
+    monkeypatch.setattr('cli.phase2_runtime.handlers_start.attach_started_project_namespace', _fake_attach)
     monkeypatch.setattr(sys.stdin, 'isatty', lambda: False)
 
     stdout = StringIO()
@@ -407,19 +407,37 @@ def test_phase2_reports_subprocess_failure_without_traceback(monkeypatch, tmp_pa
     project_root = tmp_path / 'repo-subprocess'
     _write(project_root / '.ccb' / 'ccb.config', 'agent1:codex\n')
 
-    def _raise_subprocess_error(context, command):
-        del context, command
+    def _raise_subprocess_error(context):
+        del context
         raise subprocess.CalledProcessError(1, ['tmux', 'attach-session'])
 
-    monkeypatch.setattr(phase2_module, 'open_project', _raise_subprocess_error)
+    monkeypatch.setattr('cli.phase2_runtime.handlers_start.attach_started_project_namespace', _raise_subprocess_error)
+    monkeypatch.setattr(sys.stdin, 'isatty', lambda: True)
 
-    code, stdout, stderr = _run_phase2_local(['open'], cwd=project_root)
+    stdout = _TtyStringIO()
+    stderr_io = StringIO()
+    code = maybe_handle_phase2([], cwd=project_root, stdout=stdout, stderr=stderr_io)
+    stderr = stderr_io.getvalue()
 
     assert code == 1
-    assert stdout == ''
+    assert stdout.getvalue() == ''
     assert 'command_status: failed' in stderr
     assert 'returned non-zero exit status 1' in stderr
     assert 'Traceback' not in stderr
+
+
+def test_phase2_removed_attach_command_reports_guidance(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-removed-attach'
+    project_root.mkdir()
+
+    removed_command = ''.join(('op', 'en'))
+    result = _run_ccb([removed_command], cwd=project_root)
+
+    assert result.returncode == 2
+    assert result.stdout == ''
+    assert 'has been removed' in result.stderr
+    assert 'Use: ccb' in result.stderr
+    assert not (project_root / '.ccb').exists()
 
 
 def test_phase2_trace_renders_control_plane_payload(monkeypatch, tmp_path: Path) -> None:

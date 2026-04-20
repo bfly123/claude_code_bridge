@@ -7,7 +7,7 @@ This document defines the non-drifting contract for project-scoped startup, back
 It is the authoritative design anchor for:
 
 - `ccb` startup behavior
-- `ccb open` attach behavior
+- `ccb` foreground attach behavior
 - `ccbd` daemon lifecycle
 - project-scoped runtime ownership
 - configured-agent mounting
@@ -23,6 +23,10 @@ Module/function-level redesign for the project-scoped tmux namespace model lives
 Detailed redesign for pane recovery layering and continuous foreground attach lives in [docs/ccbd-pane-recovery-continuous-attach-plan.md](/home/bfly/yunwei/ccb_source/docs/ccbd-pane-recovery-continuous-attach-plan.md).
 
 User-facing config and tmux layout rules live in [docs/ccb-config-layout-contract.md](/home/bfly/yunwei/ccb_source/docs/ccb-config-layout-contract.md). Startup behavior must honor that layout contract rather than inventing its own pane topology.
+
+Managed Codex conversation isolation rules live in [docs/codex-session-isolation-contract.md](/home/bfly/yunwei/ccb_source/docs/codex-session-isolation-contract.md). Startup behavior must honor that provider-state contract rather than inferring Codex identity from shared `work_dir`.
+
+Managed Claude conversation isolation rules live in [docs/claude-session-isolation-contract.md](/home/bfly/yunwei/ccb_source/docs/claude-session-isolation-contract.md). Startup behavior must honor that provider-state contract rather than inferring Claude identity from shared `work_dir` or global `~/.claude`.
 
 ## 2. Problem Statement
 
@@ -142,6 +146,33 @@ Rules:
 - neither evidence nor residue may silently redefine authority
 - runtime pid loss is evidence only; for pane-backed runtime it must not preempt pane/session-based recovery checks
 
+Managed Codex session authority rules:
+
+- for a configured Codex agent, the effective managed `CODEX_HOME` belongs to that agent identity, not to the shared `work_dir`
+- absent an explicit validated provider-profile runtime home, the default managed Codex home is `.ccb/agents/<agent>/provider-state/codex/home/`
+- the effective managed Codex session root is derived from that home as `<codex_home>/sessions`
+- startup must set and persist both `CODEX_HOME` and `CODEX_SESSION_ROOT`; `CODEX_SESSION_ROOT` alone is not sufficient managed-provider authority
+- provider-base workspace files such as `.codex-session` remain unscoped evidence only unless no explicit configured-agent binding exists
+- startup and restore must persist and reuse the effective managed `codex_home` and derived `codex_session_root` when available
+- restore must not scan or adopt global `~/.codex/sessions` merely because a manual Codex conversation shares the same `work_dir`
+
+Managed Claude session authority rules:
+
+- for a configured Claude agent, the effective managed `HOME` belongs to that agent identity, not to the shared `work_dir`
+- absent an explicit validated provider-profile runtime home, the default managed Claude home is `.ccb/agents/<agent>/provider-state/claude/home/`
+- the effective managed Claude projects root is derived from that home as `<claude_home>/.claude/projects`
+- the effective managed Claude session-env root is derived from that home as `<claude_home>/.claude/session-env`
+- startup must set and persist `HOME`, `claude_home`, `claude_projects_root`, and `claude_session_env_root`
+- provider-base workspace files such as `.claude-session` remain unscoped evidence only unless no explicit configured-agent binding exists
+- startup and restore must persist and reuse the effective managed Claude home and derived roots when available
+- restore must not scan or adopt global `~/.claude/projects` merely because a manual Claude conversation shares the same `work_dir`
+
+Managed provider startup mutation rules:
+
+- startup preparation must not create, delete, or rewrite project-level provider dotfiles such as `.claude/settings.json`, `.claude/settings.local.json`, `.gemini/settings.json`, `.codex/*`, or equivalent provider-owned workspace config
+- provider bootstrap config needed for managed launches must live under `.ccb/agents/<agent>/provider-state/<provider>/` or an explicit validated provider-profile runtime home
+- agent workspaces may still be created or reconciled as workspace mounts, but provider configuration/trust state must remain inside the managed provider boundary rather than the project worktree
+
 Missing-config recovery rules:
 
 - if `.ccb/ccb.config` is missing and the anchor is otherwise empty, bootstrap may write the default config
@@ -205,7 +236,9 @@ Foreground command split:
   - ensures the project tmux namespace
   - ensures desired agents are mounted
   - plain `ccb` is the default interactive start path and implicitly includes `-a -r`
-  - does not itself define UI attachment success
+  - in an interactive terminal, attaches the foreground to the project namespace after the start transaction succeeds
+  - in a non-interactive terminal, reports the start transaction without attaching to tmux
+  - startup success and foreground attach success are distinct outcomes; foreground attach failure must not rewrite a successful startup report as failed
 - `ccb -n`
   - is an explicit destructive project reset before start
   - must require interactive confirmation
@@ -215,11 +248,10 @@ Foreground command split:
   - the same invocation must then continue through the normal `ccb` start transaction rather than using a separate startup implementation
   - that first post-reset startup must force `restore=false` so provider-global history cannot silently reattach old conversations
   - after the fresh post-reset startup completes, later ordinary `ccb` runs return to the default `-a -r` semantics
-- `ccb open`
-  - attaches to the existing project namespace only
-  - must select the authoritative workspace window inside that session before attach completes
-  - must not create a new daemon, namespace, or desired-agent plan
-  - must fail clearly when namespace authority is absent
+- removed attach-only commands
+  - the foreground attach stage belongs to `ccb`
+  - no public command may attach to the namespace without first running the normal `ccb` startup transaction
+  - removed command shims may print guidance, but must not enter parser, dispatch, daemon connection, namespace creation, or provider runtime paths
 
 Project namespace compatibility:
 
@@ -231,11 +263,15 @@ Project namespace compatibility:
 - for a fresh namespace, the `cmd` pane bootstrap happens only after layout finalization and must replace that silent placeholder in place
 - startup must not rely on "real shell first, respawn later" behavior for the `cmd` pane, because that leaves stale prompt residue and can surface zsh no-newline `%` markers
 - `cmd`-anchored projects must treat exact project-namespace pane membership as the reuse gate for pane-backed bindings
+- provider-specific live runtime identity proof may further narrow that reuse gate
 - for project-namespace reuse, exact membership means:
   - same project-owned tmux socket
   - same authoritative tmux session
   - same logical `slot_key`
   - same current authoritative workspace `window_id`
+- for managed Codex agents with a bound `codex_session_id`, exact namespace membership is still not sufficient:
+  - startup must also prove that the live pane process is running the bound `resume <codex_session_id>` conversation
+  - if that proof is unavailable or negative, startup must reject pane reuse and relaunch through the managed start command
 - agent-only legacy layouts with `cmd` disabled may reuse instance-scoped provider session evidence when that session file does not explicitly declare a conflicting tmux socket
 - that legacy reuse exception is narrow:
   - if the session file explicitly declares a tmux socket and it is not the project socket, startup must reject it

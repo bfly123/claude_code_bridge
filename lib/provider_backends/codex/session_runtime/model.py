@@ -11,6 +11,14 @@ from .binding import update_codex_log_binding as _update_codex_log_binding_impl
 @dataclass
 class CodexProjectSession(PaneLogProjectSessionBase):
     @property
+    def codex_home(self) -> str:
+        return str(self.data.get("codex_home") or "").strip()
+
+    @property
+    def codex_session_root(self) -> str:
+        return str(self.data.get("codex_session_root") or "").strip()
+
+    @property
     def codex_session_path(self) -> str:
         return str(self.data.get("codex_session_path") or "").strip()
 

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v6.0.5 (2026-04-20)
+
+### 🔒 Agent Isolation Stability
+
+- **Agent Isolation Stability**: strengthened managed agent isolation so Codex, Claude, and Gemini agent sessions stay bound to their own project-scoped provider state under `.ccb`
+- **Provider Home Boundaries**: Claude and Gemini startup now reject stale persisted provider homes that point outside the current agent's managed state unless an explicit validated provider profile owns that home
+- **Restart Inheritance Safety**: fresh managed Gemini starts no longer adopt ambient `GEMINI_ROOT` or global `~/.gemini` history just because the same work directory was used manually
+- **Project Dotfile Protection**: managed startup keeps provider hook/trust state inside agent provider-state homes and does not rewrite project-level `.claude`, `.gemini`, or `.codex` provider dotfiles
+
 ## v6.0.4 (2026-04-17)
 
 ### 🔁 Legacy Update Compatibility

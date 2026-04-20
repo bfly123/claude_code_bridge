@@ -21,21 +21,21 @@ from . import (
     read_since as _read_since_impl,
     scan_latest as _scan_latest_impl,
 )
-from .paths import SESSION_ROOT
+from .paths import current_session_root
 
 
 class CodexLogReader:
-    """Reads Codex official logs from ~/.codex/sessions."""
+    """Reads Codex official logs from the effective Codex session root."""
 
     def __init__(
         self,
-        root: Path = SESSION_ROOT,
+        root: Path | None = None,
         log_path: Path | None = None,
         session_id_filter: str | None = None,
         work_dir: Path | None = None,
         follow_workspace_sessions: bool = False,
     ):
-        self.root = Path(root).expanduser()
+        self.root = current_session_root() if root is None else Path(root).expanduser()
         self._preferred_log = self._normalize_path(log_path)
         self._session_id_filter = session_id_filter
         self._work_dir = self._normalize_work_dir(work_dir)

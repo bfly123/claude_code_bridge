@@ -13,13 +13,6 @@ def looks_like_config_validate(argv: Sequence[str]) -> bool:
     return bool(remaining) and remaining[0] == 'config'
 
 
-def should_auto_open_after_start(command, *, out, stdin) -> bool:
-    del command
-    if env_truthy('CCB_NO_AUTO_OPEN'):
-        return False
-    return stream_is_tty(stdin) and stream_is_tty(out)
-
-
 def stream_is_tty(stream: object) -> bool:
     checker = getattr(stream, 'isatty', None)
     if not callable(checker):
@@ -35,4 +28,4 @@ def env_truthy(name: str) -> bool:
     return value in {'1', 'true', 'yes', 'on'}
 
 
-__all__ = ['env_truthy', 'looks_like_config_validate', 'should_auto_open_after_start', 'stream_is_tty']
+__all__ = ['env_truthy', 'looks_like_config_validate', 'stream_is_tty']

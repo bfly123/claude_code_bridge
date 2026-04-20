@@ -44,7 +44,13 @@ def materialize_provider_profile(
             profile_spec=profile_spec,
             profile_root=profile_root,
         )
-    elif spec.provider in {'claude', 'gemini'}:
+    elif spec.provider == 'claude':
+        profile = _materialize_claude_profile(
+            spec=spec,
+            profile_spec=profile_spec,
+            profile_root=profile_root,
+        )
+    elif spec.provider == 'gemini':
         profile = _materialize_api_profile(
             spec=spec,
             profile_spec=profile_spec,
@@ -136,12 +142,48 @@ def _materialize_api_profile(
 ) -> ResolvedProviderProfile:
     api_keys = provider_api_env_keys(spec.provider)
     env = {key: value for key, value in profile_spec.env.items() if key in api_keys or profile_spec.mode != 'inherit'}
+    runtime_home = None
+    if spec.provider == 'gemini' and profile_spec.home is not None:
+        runtime_home = profile_root
+        runtime_home.mkdir(parents=True, exist_ok=True)
+        (runtime_home / '.gemini' / 'tmp').mkdir(parents=True, exist_ok=True)
     return ResolvedProviderProfile(
         provider=spec.provider,
         agent_name=spec.name,
         mode=profile_spec.mode,
         profile_root=str(profile_root),
-        runtime_home=None,
+        runtime_home=str(runtime_home) if runtime_home is not None else None,
+        env=env,
+        inherit_api=profile_spec.inherit_api,
+        inherit_auth=profile_spec.inherit_auth,
+        inherit_config=profile_spec.inherit_config,
+        inherit_skills=profile_spec.inherit_skills,
+        inherit_commands=profile_spec.inherit_commands,
+    )
+
+
+def _materialize_claude_profile(
+    *,
+    spec: 'AgentSpec',
+    profile_spec: ProviderProfileSpec,
+    profile_root: Path,
+) -> ResolvedProviderProfile:
+    needs_runtime_home = profile_spec.mode != 'inherit' or profile_spec.home is not None
+    runtime_home = None
+    if needs_runtime_home:
+        runtime_home = profile_root
+        runtime_home.mkdir(parents=True, exist_ok=True)
+    env = {
+        key: value
+        for key, value in profile_spec.env.items()
+        if key in provider_api_env_keys('claude') or profile_spec.mode != 'inherit'
+    }
+    return ResolvedProviderProfile(
+        provider=spec.provider,
+        agent_name=spec.name,
+        mode=profile_spec.mode,
+        profile_root=str(profile_root),
+        runtime_home=str(runtime_home) if runtime_home is not None else None,
         env=env,
         inherit_api=profile_spec.inherit_api,
         inherit_auth=profile_spec.inherit_auth,

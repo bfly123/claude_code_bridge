@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import os
-from pathlib import Path
+from ..home_layout import current_gemini_tmp_root
 
-GEMINI_ROOT = Path(os.environ.get("GEMINI_ROOT") or (Path.home() / ".gemini" / "tmp")).expanduser()
+GEMINI_ROOT = current_gemini_tmp_root()
 
 __all__ = ["GEMINI_ROOT"]

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .common import env_truthy, looks_like_config_validate, should_auto_open_after_start, stream_is_tty
+from .common import env_truthy, looks_like_config_validate, stream_is_tty
 from .context import (
     build_context,
     build_reset_start_context,
@@ -19,6 +19,5 @@ __all__ = [
     'looks_like_config_validate',
     'resolve_existing_context',
     'resolve_requested_project_root',
-    'should_auto_open_after_start',
     'stream_is_tty',
 ]

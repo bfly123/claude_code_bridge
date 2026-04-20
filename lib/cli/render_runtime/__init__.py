@@ -17,7 +17,6 @@ from .ops_views import (
     render_doctor_bundle,
     render_kill,
     render_logs,
-    render_open,
     render_ps,
     render_start,
 )
@@ -36,7 +35,6 @@ __all__ = [
     'render_kill',
     'render_logs',
     'render_mapping',
-    'render_open',
     'render_pend',
     'render_ps',
     'render_queue',

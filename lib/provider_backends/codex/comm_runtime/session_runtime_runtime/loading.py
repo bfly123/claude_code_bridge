@@ -26,6 +26,7 @@ def _load_env_session_info(*, session_finder: Callable[[], Path | None]):
         "pane_id": os.environ.get("CODEX_TMUX_SESSION", ""),
         "_session_file": None,
     }
+    _merge_env_root_fields(result)
     session_file = session_finder()
     return _merge_project_binding(result, session_file=session_file)
 
@@ -54,8 +55,21 @@ def _merge_project_binding(result: dict[str, object], *, session_file: Path | No
         return result
     result["codex_session_path"] = file_data.get("codex_session_path")
     result["codex_session_id"] = file_data.get("codex_session_id")
+    if file_data.get("codex_session_root"):
+        result["codex_session_root"] = file_data.get("codex_session_root")
+    if file_data.get("codex_home"):
+        result["codex_home"] = file_data.get("codex_home")
     result["_session_file"] = str(session_file)
     return result
+
+
+def _merge_env_root_fields(result: dict[str, object]) -> None:
+    session_root = str(os.environ.get("CODEX_SESSION_ROOT") or "").strip()
+    if session_root:
+        result["codex_session_root"] = session_root
+    codex_home = str(os.environ.get("CODEX_HOME") or "").strip()
+    if codex_home:
+        result["codex_home"] = codex_home
 
 
 def _load_session_file(session_file: Path) -> dict | None:

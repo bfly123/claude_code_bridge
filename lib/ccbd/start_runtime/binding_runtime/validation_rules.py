@@ -7,6 +7,7 @@ from .validation_context import (
     binding_matches_project_socket,
     binding_pane_state,
     declares_current_project_socket,
+    has_acceptable_provider_runtime_identity,
     has_project_tmux_session_name,
     has_reusable_tmux_pane,
     is_live_tmux_binding,
@@ -15,6 +16,8 @@ from .validation_context import (
 
 def usable_project_namespace_binding_for_context(binding, *, context: BindingValidationContext):
     if not is_live_tmux_binding(binding):
+        return None
+    if not has_acceptable_provider_runtime_identity(binding):
         return None
     if not binding_matches_project_socket(binding, context=context):
         return None
@@ -25,6 +28,8 @@ def usable_project_namespace_binding_for_context(binding, *, context: BindingVal
 
 def usable_agent_only_project_binding_for_context(binding, *, context: BindingValidationContext):
     if not has_reusable_tmux_pane(binding):
+        return None
+    if not has_acceptable_provider_runtime_identity(binding):
         return None
 
     pane_state = binding_pane_state(binding)

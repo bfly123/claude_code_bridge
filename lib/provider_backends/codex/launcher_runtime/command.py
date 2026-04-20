@@ -8,6 +8,7 @@ from provider_profiles import load_resolved_provider_profile, provider_api_env_k
 from .command_runtime import build_codex_shell_prefix as _build_codex_shell_prefix_impl
 from .command_runtime import build_start_cmd as _build_start_cmd_impl
 from .command_runtime import prepare_codex_home_overrides as _prepare_codex_home_overrides_impl
+from .command_runtime import resolve_codex_home_layout as _resolve_codex_home_layout_impl
 from .session_paths import load_resume_session_id
 
 
@@ -33,4 +34,8 @@ def prepare_codex_home_overrides(runtime_dir: Path, profile) -> dict[str, str]:
     return _prepare_codex_home_overrides_impl(runtime_dir, profile)
 
 
-__all__ = ['build_codex_shell_prefix', 'build_start_cmd']
+def resolve_codex_home_layout(runtime_dir: Path, profile):
+    return _resolve_codex_home_layout_impl(runtime_dir, profile)
+
+
+__all__ = ['build_codex_shell_prefix', 'build_start_cmd', 'prepare_codex_home_overrides', 'resolve_codex_home_layout']

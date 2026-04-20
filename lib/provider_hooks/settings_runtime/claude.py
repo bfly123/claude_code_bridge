@@ -2,16 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from provider_profiles import ResolvedProviderProfile
+from provider_backends.claude.home_layout import ClaudeHomeLayout, claude_layout_for_home
 
 from .common import load_json, save_json, workspace_key
 
 
-def install_claude_hooks(*, workspace_path: Path, command: str) -> Path:
-    settings_path = _workspace_settings_path(
-        workspace_path,
-        filename='settings.local.json',
-    )
+def install_claude_hooks(*, home_root: Path, command: str) -> Path:
+    settings_path = claude_layout_for_home(Path(home_root).expanduser()).settings_path
     data = _load_settings(settings_path)
     hooks = _hooks_payload(data)
     groups = _event_groups(hooks, event_name='Stop')
@@ -21,31 +18,21 @@ def install_claude_hooks(*, workspace_path: Path, command: str) -> Path:
     return save_json(settings_path, data)
 
 
-def reconcile_claude_workspace_settings(
-    *,
-    workspace_path: Path,
-    resolved_profile: ResolvedProviderProfile | None = None,
-) -> Path | None:
-    settings_path = _workspace_settings_path(workspace_path, filename='settings.json')
-    del resolved_profile
-    try:
-        settings_path.unlink()
-    except FileNotFoundError:
-        pass
-    return None
-
-
-def trust_claude_workspace(*, workspace_path: Path) -> Path:
-    trust_path = Path.home() / '.claude.json'
-    data = _load_settings(trust_path)
+def trust_claude_workspace(*, home_root: Path, workspace_path: Path) -> Path:
+    layout = claude_layout_for_home(Path(home_root).expanduser())
+    data = _load_settings(layout.trust_path)
     key = workspace_key(workspace_path)
     record = data.get(key)
     if not isinstance(record, dict):
         record = {}
     record['hasTrustDialogAccepted'] = True
     data[key] = record
-    save_json(trust_path, data)
-    return trust_path
+    save_json(layout.trust_path, data)
+    return layout.trust_path
+
+
+def claude_hook_home_layout(home_root: Path) -> ClaudeHomeLayout:
+    return claude_layout_for_home(Path(home_root).expanduser())
 
 
 def claude_event_has_command(groups: list[object], command: str) -> bool:
@@ -63,10 +50,6 @@ def claude_event_has_command(groups: list[object], command: str) -> bool:
             if str(hook.get('command') or '').strip() == command:
                 return True
     return False
-
-
-def _workspace_settings_path(workspace_path: Path, *, filename: str) -> Path:
-    return Path(workspace_path).expanduser() / '.claude' / filename
 
 
 def _load_settings(path: Path) -> dict[str, object]:
@@ -102,7 +85,8 @@ def _command_hook_group(command: str) -> dict[str, list[dict[str, str]]]:
 
 
 __all__ = [
+    'claude_event_has_command',
+    'claude_hook_home_layout',
     'install_claude_hooks',
-    'reconcile_claude_workspace_settings',
     'trust_claude_workspace',
 ]

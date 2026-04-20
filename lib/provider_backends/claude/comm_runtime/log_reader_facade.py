@@ -36,7 +36,7 @@ class ClaudeLogReader:
 
     def __init__(
         self,
-        root: Path = CLAUDE_PROJECTS_ROOT,
+        root: Path | None = None,
         work_dir: Path | None = None,
         *,
         use_sessions_index: bool = True,
@@ -46,7 +46,7 @@ class ClaudeLogReader:
     ):
         _initialize_reader(
             self,
-            root=root,
+            root=CLAUDE_PROJECTS_ROOT if root is None else root,
             work_dir=work_dir,
             use_sessions_index=use_sessions_index,
             include_subagents=include_subagents,

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from cli.models import ParsedOpenCommand
 from cli.render import (
     render_ack,
     render_ask,
@@ -17,7 +16,6 @@ from cli.render import (
     render_kill,
     render_logs,
     render_mapping,
-    render_open,
     render_pend,
     render_ps,
     render_queue,
@@ -39,7 +37,6 @@ from cli.services.fault import arm_fault_rule, clear_fault_rule, list_fault_rule
 from cli.services.inbox import inbox_target
 from cli.services.kill import kill_project
 from cli.services.logs import agent_logs
-from cli.services.open import open_project
 from cli.services.pend import pend_target
 from cli.services.ping import ping_target
 from cli.services.ps import ps_summary
@@ -52,13 +49,8 @@ from cli.services.wait import wait_for_replies
 from cli.services.watch import watch_target
 
 
-def build_phase2_dispatch_services(
-    *,
-    should_auto_open_after_start,
-    **overrides,
-):
+def build_phase2_dispatch_services(**overrides):
     payload = dict(
-        ParsedOpenCommand=ParsedOpenCommand,
         ack_reply=ack_reply,
         agent_logs=agent_logs,
         arm_fault_rule=arm_fault_rule,
@@ -70,7 +62,6 @@ def build_phase2_dispatch_services(
         inbox_target=inbox_target,
         kill_project=kill_project,
         list_fault_rules=list_fault_rules,
-        open_project=open_project,
         pend_target=pend_target,
         ping_target=ping_target,
         ps_summary=ps_summary,
@@ -88,7 +79,6 @@ def build_phase2_dispatch_services(
         render_kill=render_kill,
         render_logs=render_logs,
         render_mapping=render_mapping,
-        render_open=render_open,
         render_pend=render_pend,
         render_ps=render_ps,
         render_queue=render_queue,
@@ -100,7 +90,6 @@ def build_phase2_dispatch_services(
         render_watch_batch=render_watch_batch,
         resubmit_message=resubmit_message,
         retry_attempt=retry_attempt,
-        should_auto_open_after_start=should_auto_open_after_start,
         start_agents=start_agents,
         submit_ask=submit_ask,
         trace_target=trace_target,

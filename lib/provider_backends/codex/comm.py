@@ -1,6 +1,6 @@
 """
 Codex communication module (log-driven version)
-Sends requests via FIFO and parses replies from ~/.codex/sessions logs.
+Sends requests via FIFO and parses replies from the effective Codex session root.
 """
 
 from __future__ import annotations
@@ -13,8 +13,8 @@ from provider_sessions.watch import HAS_WATCHDOG, SessionFileWatcher
 from terminal_runtime.backend_env import apply_backend_env
 from .comm_runtime import (
     SESSION_ID_PATTERN,
-    SESSION_ROOT,
     ensure_codex_watchdog_started as _ensure_watchdog_started,
+    current_session_root,
     extract_cwd_from_log_file as _extract_cwd_from_log_file,
     extract_cwd_from_log as _extract_cwd_from_log_impl,
     extract_session_id as _extract_session_id,
@@ -50,7 +50,7 @@ def _handle_codex_log_event(path: Path) -> None:
     _handle_watchdog_event(
         path,
         cwd_extractor=_extract_cwd_from_log_file,
-        session_resolver=_resolve_unique_codex_session_target,
+        session_resolver=lambda work_dir: _resolve_unique_codex_session_target(work_dir, log_path=path),
         session_loader=load_project_session,
         session_id_extractor=CodexCommunicator._extract_session_id,
     )
@@ -62,7 +62,7 @@ def _ensure_codex_watchdog_started() -> None:
         has_watchdog=HAS_WATCHDOG,
         started=_CODEX_WATCH_STARTED,
         lock=_CODEX_WATCH_LOCK,
-        session_root=SESSION_ROOT,
+        session_root=current_session_root(),
         watcher_factory=SessionFileWatcher,
         event_handler=_handle_codex_log_event,
         watcher=_CODEX_WATCHER,

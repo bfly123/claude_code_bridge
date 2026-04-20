@@ -1,14 +1,9 @@
 from __future__ import annotations
 
-import os
-from pathlib import Path
+from ..home_layout import current_claude_projects_root
 
 
-CLAUDE_PROJECTS_ROOT = Path(
-    os.environ.get("CLAUDE_PROJECTS_ROOT")
-    or os.environ.get("CLAUDE_PROJECT_ROOT")
-    or (Path.home() / ".claude" / "projects")
-).expanduser()
+CLAUDE_PROJECTS_ROOT = current_claude_projects_root()
 
 
-__all__ = ["CLAUDE_PROJECTS_ROOT"]
+__all__ = ["CLAUDE_PROJECTS_ROOT", "current_claude_projects_root"]

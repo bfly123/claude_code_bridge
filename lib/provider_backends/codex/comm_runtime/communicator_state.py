@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 from provider_core.runtime_specs import provider_marker_prefix
+from provider_backends.codex.session_runtime.follow_policy import codex_session_root_path, should_follow_workspace_sessions
 
 
 def initialize_state(
@@ -112,12 +113,22 @@ def _terminal_name(session_info: dict) -> str:
 
 
 def _log_reader_kwargs(comm) -> dict[str, object]:
-    return {
+    session_info = comm.session_info
+    work_dir = _work_dir_path(comm.session_info)
+    kwargs: dict[str, object] = {
         "log_path": comm.session_info.get("codex_session_path"),
         "session_id_filter": comm.session_info.get("codex_session_id"),
-        "work_dir": _work_dir_path(comm.session_info),
-        "follow_workspace_sessions": True,
+        "work_dir": work_dir,
+        "follow_workspace_sessions": should_follow_workspace_sessions(
+            work_dir=work_dir,
+            session_file=_session_file_path(session_info),
+            session_data=session_info,
+        ),
     }
+    session_root = _session_root_path(session_info)
+    if session_root is not None:
+        kwargs["root"] = session_root
+    return kwargs
 
 
 def _work_dir_path(session_info: dict) -> Path | None:
@@ -125,6 +136,17 @@ def _work_dir_path(session_info: dict) -> Path | None:
     if not work_dir_raw:
         return None
     return Path(work_dir_raw).expanduser()
+
+
+def _session_file_path(session_info: dict) -> Path | None:
+    session_file_raw = str(session_info.get("_session_file") or "").strip()
+    if not session_file_raw:
+        return None
+    return Path(session_file_raw).expanduser()
+
+
+def _session_root_path(session_info: dict) -> Path | None:
+    return codex_session_root_path(session_info)
 
 
 def _log_path_object(log_path: Path | str | None) -> Path | None:

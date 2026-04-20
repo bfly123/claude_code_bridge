@@ -115,7 +115,7 @@ project .ccb
 
 ### 5.3 当前 attach 必须锚到 session，而不是具体 pane/window
 
-`ccb` / `ccb open` 的前台连续性必须建立在：
+`ccb` 前台 attach 阶段的连续性必须建立在：
 
 - session 不消失
 - attach 不依赖某个具体 pane id
@@ -298,9 +298,9 @@ project .ccb
 - session 至少始终保留一个 control window
 - workspace window 可被替换、重建、切换
 
-### 8.3 open / attach 语义
+### 8.3 foreground attach 语义
 
-`ccb open` / `ccb` attach 逻辑固定为：
+`ccb` 的 foreground attach 逻辑固定为：
 
 1. attach 到 session
 2. select 到当前 `workspace_window_name`
@@ -382,7 +382,7 @@ project .ccb
 - 新增 window 级操作封装
 - 禁止把 `kill_server()` 当作普通恢复工具
 
-`lib/cli/services/open.py`
+`lib/cli/services/start_foreground.py`
 
 - attach 后显式 select 当前 workspace window
 - 对 workspace epoch 切换保持兼容
@@ -445,7 +445,7 @@ project .ccb
 
 目标：
 
-- `ccb` / `ccb open` 对 workspace reflow 透明
+- `ccb` foreground attach 对 workspace reflow 透明
 
 动作：
 

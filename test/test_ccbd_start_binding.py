@@ -128,3 +128,49 @@ def test_usable_project_namespace_binding_rejects_old_workspace_window() -> None
     )
 
     assert usable is None
+
+
+def test_usable_project_namespace_binding_rejects_provider_identity_mismatch() -> None:
+    binding = _binding(
+        provider='codex',
+        provider_identity_state='mismatch',
+        provider_identity_reason='live_codex_process_not_running_bound_resume_session',
+    )
+    record = SimpleNamespace(matches=lambda **kwargs: True)
+
+    usable = usable_project_namespace_binding(
+        binding,
+        tmux_socket_path='/tmp/ccb.sock',
+        tmux_session_name='ccb-demo',
+        workspace_window_id='@2',
+        agent_name='agent1',
+        project_id='proj-1',
+        tmux_backend_factory=lambda socket_path=None: SimpleNamespace(socket_path=socket_path),
+        inspect_project_namespace_pane_fn=lambda backend, pane_id: record,
+        same_tmux_socket_path_fn=lambda left, right: str(left or '') == str(right or ''),
+    )
+
+    assert usable is None
+
+
+def test_usable_project_namespace_binding_rejects_unproven_provider_identity() -> None:
+    binding = _binding(
+        provider='codex',
+        provider_identity_state='unknown',
+        provider_identity_reason='pane_pid_unavailable',
+    )
+    record = SimpleNamespace(matches=lambda **kwargs: True)
+
+    usable = usable_project_namespace_binding(
+        binding,
+        tmux_socket_path='/tmp/ccb.sock',
+        tmux_session_name='ccb-demo',
+        workspace_window_id='@2',
+        agent_name='agent1',
+        project_id='proj-1',
+        tmux_backend_factory=lambda socket_path=None: SimpleNamespace(socket_path=socket_path),
+        inspect_project_namespace_pane_fn=lambda backend, pane_id: record,
+        same_tmux_socket_path_fn=lambda left, right: str(left or '') == str(right or ''),
+    )
+
+    assert usable is None

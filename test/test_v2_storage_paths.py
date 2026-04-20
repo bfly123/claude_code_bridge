@@ -32,6 +32,7 @@ def test_path_layout_uses_project_scoped_locations(tmp_path: Path) -> None:
     assert layout.mailbox_lease_path('Agent1') == layout.ccb_dir / 'ccbd' / 'leases' / 'agent1.json'
     assert layout.provider_health_path('job-1') == layout.ccb_dir / 'ccbd' / 'provider-health' / 'job-1.jsonl'
     assert layout.agent_runtime_path('Agent1') == layout.ccb_dir / 'agents' / 'agent1' / 'runtime.json'
+    assert layout.agent_provider_state_dir('Agent1', 'CoDeX') == layout.ccb_dir / 'agents' / 'agent1' / 'provider-state' / 'codex'
     assert layout.snapshot_path('job-1') == layout.ccb_dir / 'ccbd' / 'snapshots' / 'job-1.json'
     assert layout.cursor_path('job-1') == layout.ccb_dir / 'ccbd' / 'cursors' / 'job-1.json'
     assert layout.support_bundle_path('bundle-1') == layout.ccb_dir / 'ccbd' / 'support' / 'bundle-1.tar.gz'

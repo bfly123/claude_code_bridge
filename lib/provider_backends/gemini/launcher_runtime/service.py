@@ -37,9 +37,11 @@ def build_start_cmd(
     launch_session_id: str,
     *,
     resolve_restore_target_fn,
+    prepare_home_overrides_fn,
 ) -> str:
     runtime_dir = Path(runtime_dir)
     profile = load_resolved_provider_profile(runtime_dir)
+    home_overrides = prepare_home_overrides_fn(runtime_dir, profile)
     restore_target = resolve_restore_target_fn(
         spec=spec,
         runtime_dir=runtime_dir,
@@ -54,6 +56,7 @@ def build_start_cmd(
     cmd = " ".join(shlex.quote(str(part)) for part in cmd_parts)
     env_prefix = join_env_prefix(
         build_gemini_env_prefix(profile=profile, extra_env=spec.env),
+        export_env_clause(home_overrides),
         export_env_clause(caller_context_env(actor=spec.name, runtime_dir=runtime_dir, launch_session_id=launch_session_id)),
     )
     if env_prefix:
@@ -91,9 +94,8 @@ def build_session_payload(
     launch_session_id: str,
     prepared_state: dict[str, object],
 ) -> dict[str, object]:
-    del prepared_state
     runtime_dir = Path(runtime_dir)
-    return {
+    payload = {
         "ccb_session_id": launch_session_id,
         "agent_name": spec.name,
         "ccb_project_id": context.project.project_id,
@@ -108,6 +110,11 @@ def build_session_payload(
         "start_dir": str(context.project.project_root),
         "start_cmd": start_cmd,
     }
+    layout = prepared_state.get('gemini_home_layout')
+    if layout is not None:
+        payload['gemini_home'] = str(layout.home_root)
+        payload['gemini_root'] = str(layout.tmp_root)
+    return payload
 
 
 __all__ = [

@@ -14,6 +14,7 @@ from .session_runtime import (
     find_project_session_file as _find_project_session_file_impl,
     load_project_session as _load_project_session_impl,
 )
+from .session_runtime.live_identity import live_runtime_identity
 
 apply_backend_env()
 
@@ -31,7 +32,14 @@ def compute_session_key(session: CodexProjectSession, instance: Optional[str] = 
 
 
 def build_session_binding() -> ProviderSessionBinding:
-    return build_session_binding_for_provider(provider="codex", load_session=load_project_session)
+    binding = build_session_binding_for_provider(provider="codex", load_session=load_project_session)
+    return ProviderSessionBinding(
+        provider=binding.provider,
+        load_session=binding.load_session,
+        session_id_attr=binding.session_id_attr,
+        session_path_attr=binding.session_path_attr,
+        live_runtime_identity=live_runtime_identity,
+    )
 
 
 __all__ = [

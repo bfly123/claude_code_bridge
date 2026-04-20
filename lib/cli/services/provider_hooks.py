@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
+from provider_backends.claude.launcher_runtime import resolve_claude_home_layout
 from provider_hooks.settings import build_hook_command, install_workspace_completion_hooks
 from provider_profiles import (
     ResolvedProviderProfile,
@@ -17,6 +18,7 @@ def prepare_workspace_provider_hooks(
     workspace_path: Path,
     completion_dir: Path,
     agent_name: str,
+    home_root: Path | None,
     resolved_profile: ResolvedProviderProfile | None = None,
 ) -> Path | None:
     normalized = str(provider or '').strip().lower()
@@ -33,6 +35,7 @@ def prepare_workspace_provider_hooks(
     return install_workspace_completion_hooks(
         provider=normalized,
         workspace_path=workspace_path,
+        home_root=home_root,
         command=command,
         resolved_profile=resolved_profile,
     )
@@ -68,6 +71,45 @@ def prepare_provider_workspace(
         workspace_path=workspace_path,
         completion_dir=completion_dir,
         agent_name=agent_name,
+        home_root=provider_hook_home_root(
+            layout=layout,
+            spec=spec,
+            runtime_dir=runtime_dir,
+            resolved_profile=resolved_profile,
+        ),
         resolved_profile=resolved_profile,
     )
     return resolved_profile
+
+
+def provider_hook_home_root(
+    *,
+    layout,
+    spec,
+    runtime_dir: Path,
+    resolved_profile: ResolvedProviderProfile | None,
+) -> Path | None:
+    provider = str(spec.provider or '').strip().lower()
+    if provider == 'claude':
+        return resolve_claude_home_layout(runtime_dir, resolved_profile).home_root
+    if provider == 'gemini':
+        return resolve_gemini_home_root(
+            layout=layout,
+            agent_name=spec.name,
+            resolved_profile=resolved_profile,
+        )
+    return None
+
+
+def resolve_gemini_home_root(*, layout, agent_name: str, resolved_profile: ResolvedProviderProfile | None) -> Path:
+    if resolved_profile is not None and resolved_profile.runtime_home_path is not None:
+        return resolved_profile.runtime_home_path
+    return layout.agent_provider_state_dir(agent_name, 'gemini') / 'home'
+
+
+__all__ = [
+    'prepare_provider_workspace',
+    'prepare_workspace_provider_hooks',
+    'provider_hook_home_root',
+    'resolve_gemini_home_root',
+]

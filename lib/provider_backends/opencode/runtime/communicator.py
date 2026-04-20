@@ -13,7 +13,7 @@ def _required_session_info(comm):
     session_info = comm._load_session_info()
     if session_info:
         return session_info
-    raise RuntimeError("❌ No active OpenCode session found. Run 'ccb opencode' (or add opencode to ccb.config) first")
+    raise RuntimeError("❌ No active OpenCode session found. Add opencode to ccb.config and run `ccb` first")
 
 
 def _log_reader(comm, *, log_reader_cls):

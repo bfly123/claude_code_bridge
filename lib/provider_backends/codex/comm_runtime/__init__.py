@@ -39,7 +39,7 @@ from .log_reader import (
     read_since,
     scan_latest,
 )
-from .paths import SESSION_ROOT
+from .paths import SESSION_ROOT, current_session_root
 from .session_runtime import check_tmux_runtime_health, find_codex_session_file, load_codex_session_info
 from .watchdog import ensure_codex_watchdog_started, handle_codex_log_event
 
@@ -86,6 +86,7 @@ __all__ = [
     'resolve_unique_codex_session_target',
     'scan_latest',
     'SESSION_ROOT',
+    'current_session_root',
     'send_message',
     'update_project_session_binding',
 ]

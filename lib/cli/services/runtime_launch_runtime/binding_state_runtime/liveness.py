@@ -4,6 +4,9 @@ from .common import build_tmux_backend, tmux_target_pane_id
 
 
 def binding_runtime_alive(binding, *, tmux_backend_cls) -> bool:
+    identity_state = str(getattr(binding, 'provider_identity_state', None) or '').strip().lower()
+    if identity_state and identity_state != 'match':
+        return False
     runtime_ref = str(binding.runtime_ref or '').strip()
     if not runtime_ref:
         return False

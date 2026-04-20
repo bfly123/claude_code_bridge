@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
-CLAUDE_PROJECTS_ROOT = Path(
-    os.environ.get("CLAUDE_PROJECTS_ROOT")
-    or os.environ.get("CLAUDE_PROJECT_ROOT")
-    or (Path.home() / ".claude" / "projects")
-).expanduser()
+from ..home_layout import current_claude_projects_root
+
+CLAUDE_PROJECTS_ROOT = current_claude_projects_root()
 
 
 @dataclass
@@ -19,4 +16,4 @@ class ClaudeSessionResolution:
     source: str
 
 
-__all__ = ["CLAUDE_PROJECTS_ROOT", "ClaudeSessionResolution"]
+__all__ = ["CLAUDE_PROJECTS_ROOT", "ClaudeSessionResolution", "current_claude_projects_root"]

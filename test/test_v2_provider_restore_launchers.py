@@ -27,29 +27,63 @@ def _spec(name: str, provider: str) -> AgentSpec:
 
 
 def test_claude_restore_prefers_project_session_work_dir(monkeypatch, tmp_path: Path) -> None:
-    home_dir = tmp_path / 'home'
     project_root = tmp_path / 'repo'
     runtime_dir = project_root / '.ccb' / 'agents' / 'reviewer' / 'provider-runtime' / 'claude'
     workspace_path = project_root / '.ccb' / 'workspaces' / 'reviewer'
     runtime_dir.mkdir(parents=True)
     workspace_path.mkdir(parents=True)
+    managed_home = project_root / '.ccb' / 'agents' / 'reviewer' / 'provider-state' / 'claude' / 'home'
 
     session_path = project_root / '.ccb' / '.claude-reviewer-session'
     session_path.parent.mkdir(parents=True, exist_ok=True)
     session_path.write_text(
-        json.dumps({'work_dir': str(workspace_path), 'claude_session_id': 'claude-sess-1'}, ensure_ascii=False),
+        json.dumps(
+            {
+                'work_dir': str(workspace_path),
+                'claude_session_id': 'claude-sess-1',
+                'claude_home': str(managed_home),
+            },
+            ensure_ascii=False,
+        ),
         encoding='utf-8',
     )
 
-    project_dir = home_dir / '.claude' / 'projects' / ''.join(ch if ch.isalnum() else '-' for ch in str(workspace_path))
-    session_env_root = home_dir / '.claude' / 'session-env'
+    project_dir = managed_home / '.claude' / 'projects' / ''.join(ch if ch.isalnum() else '-' for ch in str(workspace_path))
+    session_env_root = managed_home / '.claude' / 'session-env'
     project_dir.mkdir(parents=True)
     session_env_root.mkdir(parents=True)
     session_id = str(uuid.uuid4())
     (project_dir / f'{session_id}.jsonl').write_text('history\n', encoding='utf-8')
     (session_env_root / session_id).mkdir()
 
-    monkeypatch.setattr(claude_launcher.Path, 'home', lambda: home_dir)
+    monkeypatch.setattr(claude_launcher.Path, 'home', lambda: tmp_path / 'ignored-home')
+
+    target = claude_launcher._resolve_claude_restore_target(
+        spec=_spec('reviewer', 'claude'),
+        runtime_dir=runtime_dir,
+        workspace_path=workspace_path,
+        restore=True,
+    )
+
+    assert target.has_history is True
+    assert target.run_cwd == workspace_path
+
+
+def test_claude_restore_uses_runtime_managed_home_for_fresh_agent(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    runtime_dir = project_root / '.ccb' / 'agents' / 'reviewer' / 'provider-runtime' / 'claude'
+    workspace_path = project_root / '.ccb' / 'workspaces' / 'reviewer'
+    runtime_dir.mkdir(parents=True)
+    workspace_path.mkdir(parents=True)
+    managed_home = project_root / '.ccb' / 'agents' / 'reviewer' / 'provider-state' / 'claude' / 'home'
+    project_dir = managed_home / '.claude' / 'projects' / ''.join(ch if ch.isalnum() else '-' for ch in str(workspace_path))
+    session_env_root = managed_home / '.claude' / 'session-env'
+    project_dir.mkdir(parents=True)
+    session_env_root.mkdir(parents=True)
+    session_id = str(uuid.uuid4())
+    (project_dir / f'{session_id}.jsonl').write_text('history\n', encoding='utf-8')
+    (session_env_root / session_id).mkdir()
+    monkeypatch.setattr(claude_launcher.Path, 'home', lambda: tmp_path / 'ignored-home')
 
     target = claude_launcher._resolve_claude_restore_target(
         spec=_spec('reviewer', 'claude'),
@@ -68,20 +102,54 @@ def test_gemini_restore_prefers_project_session_work_dir(monkeypatch, tmp_path: 
     workspace_path = project_root / '.ccb' / 'workspaces' / 'reviewer'
     runtime_dir.mkdir(parents=True)
     workspace_path.mkdir(parents=True)
+    managed_home = project_root / '.ccb' / 'agents' / 'reviewer' / 'provider-state' / 'gemini' / 'home'
+    managed_root = managed_home / '.gemini' / 'tmp'
 
     session_path = project_root / '.ccb' / '.gemini-reviewer-session'
     session_path.parent.mkdir(parents=True, exist_ok=True)
     session_path.write_text(
-        json.dumps({'work_dir': str(workspace_path), 'gemini_session_id': 'gemini-sess-1'}, ensure_ascii=False),
+        json.dumps(
+            {
+                'work_dir': str(workspace_path),
+                'gemini_session_id': 'gemini-sess-1',
+                'gemini_home': str(managed_home),
+                'gemini_root': str(managed_root),
+            },
+            ensure_ascii=False,
+        ),
         encoding='utf-8',
     )
 
-    gemini_root = tmp_path / 'gemini-root'
     project_hash = hashlib.sha256(str(workspace_path).encode()).hexdigest()
-    chats_dir = gemini_root / project_hash / 'chats'
+    chats_dir = managed_root / project_hash / 'chats'
     chats_dir.mkdir(parents=True)
     (chats_dir / 'session-1.json').write_text('{}', encoding='utf-8')
-    monkeypatch.setenv('GEMINI_ROOT', str(gemini_root))
+    monkeypatch.setenv('GEMINI_ROOT', str(tmp_path / 'ignored-root'))
+
+    target = gemini_launcher._resolve_gemini_restore_target(
+        spec=_spec('reviewer', 'gemini'),
+        runtime_dir=runtime_dir,
+        workspace_path=workspace_path,
+        restore=True,
+    )
+
+    assert target.has_history is True
+    assert target.run_cwd == workspace_path
+
+
+def test_gemini_restore_uses_runtime_managed_home_for_fresh_agent(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    runtime_dir = project_root / '.ccb' / 'agents' / 'reviewer' / 'provider-runtime' / 'gemini'
+    workspace_path = project_root / '.ccb' / 'workspaces' / 'reviewer'
+    runtime_dir.mkdir(parents=True)
+    workspace_path.mkdir(parents=True)
+    managed_home = project_root / '.ccb' / 'agents' / 'reviewer' / 'provider-state' / 'gemini' / 'home'
+    managed_root = managed_home / '.gemini' / 'tmp'
+    project_hash = hashlib.sha256(str(workspace_path).encode()).hexdigest()
+    chats_dir = managed_root / project_hash / 'chats'
+    chats_dir.mkdir(parents=True)
+    (chats_dir / 'session-1.json').write_text('{}', encoding='utf-8')
+    monkeypatch.setenv('GEMINI_ROOT', str(tmp_path / 'ignored-root'))
 
     target = gemini_launcher._resolve_gemini_restore_target(
         spec=_spec('reviewer', 'gemini'),
@@ -122,6 +190,100 @@ def test_gemini_build_start_cmd_skips_resume_without_history(tmp_path: Path) -> 
     )
 
     assert '--resume latest' not in cmd
+
+
+def test_gemini_build_start_cmd_ignores_ambient_global_history_for_fresh_agent(monkeypatch, tmp_path: Path) -> None:
+    runtime_dir = tmp_path / 'repo' / '.ccb' / 'agents' / 'reviewer' / 'provider-runtime' / 'gemini'
+    runtime_dir.mkdir(parents=True)
+    workspace_path = tmp_path / 'repo' / '.ccb' / 'workspaces' / 'reviewer'
+    workspace_path.mkdir(parents=True)
+
+    ambient_root = tmp_path / 'ambient-gemini-root'
+    project_hash = hashlib.sha256(str(workspace_path).encode()).hexdigest()
+    chats_dir = ambient_root / project_hash / 'chats'
+    chats_dir.mkdir(parents=True)
+    (chats_dir / 'session-ambient.json').write_text('{}', encoding='utf-8')
+    monkeypatch.setenv('GEMINI_ROOT', str(ambient_root))
+
+    cmd = gemini_launcher.build_start_cmd(
+        ParsedStartCommand(project=None, agent_names=('reviewer',), restore=True, auto_permission=False),
+        _spec('reviewer', 'gemini'),
+        runtime_dir,
+        'launch-1',
+    )
+
+    assert '--resume latest' not in cmd
+
+
+def test_claude_build_start_cmd_ignores_non_managed_persisted_home(monkeypatch, tmp_path: Path) -> None:
+    runtime_dir = tmp_path / 'repo' / '.ccb' / 'agents' / 'reviewer' / 'provider-runtime' / 'claude'
+    runtime_dir.mkdir(parents=True)
+    session_path = tmp_path / 'repo' / '.ccb' / '.claude-reviewer-session'
+    legacy_home = tmp_path / 'legacy-home'
+    session_path.parent.mkdir(parents=True, exist_ok=True)
+    session_path.write_text(
+        json.dumps(
+            {
+                'claude_home': str(legacy_home),
+                'claude_projects_root': str(legacy_home / '.claude' / 'projects'),
+                'claude_session_env_root': str(legacy_home / '.claude' / 'session-env'),
+            },
+            ensure_ascii=False,
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(claude_launcher.Path, 'home', lambda: tmp_path / 'ignored-home')
+
+    cmd = claude_launcher.build_start_cmd(
+        ParsedStartCommand(project=None, agent_names=('reviewer',), restore=False, auto_permission=False),
+        _spec('reviewer', 'claude'),
+        runtime_dir,
+        'launch-1',
+    )
+
+    expected_home = tmp_path / 'repo' / '.ccb' / 'agents' / 'reviewer' / 'provider-state' / 'claude' / 'home'
+    assert f'HOME={expected_home}' in cmd
+
+
+def test_claude_restore_ignores_non_managed_project_session_home(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    runtime_dir = project_root / '.ccb' / 'agents' / 'reviewer' / 'provider-runtime' / 'claude'
+    workspace_path = project_root / '.ccb' / 'workspaces' / 'reviewer'
+    runtime_dir.mkdir(parents=True)
+    workspace_path.mkdir(parents=True)
+    legacy_home = tmp_path / 'legacy-home'
+
+    session_path = project_root / '.ccb' / '.claude-reviewer-session'
+    session_path.parent.mkdir(parents=True, exist_ok=True)
+    session_path.write_text(
+        json.dumps(
+            {
+                'work_dir': str(workspace_path),
+                'claude_session_id': 'claude-sess-1',
+                'claude_home': str(legacy_home),
+            },
+            ensure_ascii=False,
+        ),
+        encoding='utf-8',
+    )
+
+    project_dir = legacy_home / '.claude' / 'projects' / ''.join(ch if ch.isalnum() else '-' for ch in str(workspace_path))
+    session_env_root = legacy_home / '.claude' / 'session-env'
+    project_dir.mkdir(parents=True)
+    session_env_root.mkdir(parents=True)
+    session_id = str(uuid.uuid4())
+    (project_dir / f'{session_id}.jsonl').write_text('history\n', encoding='utf-8')
+    (session_env_root / session_id).mkdir()
+    monkeypatch.setattr(claude_launcher.Path, 'home', lambda: tmp_path / 'ignored-home')
+
+    target = claude_launcher._resolve_claude_restore_target(
+        spec=_spec('reviewer', 'claude'),
+        runtime_dir=runtime_dir,
+        workspace_path=workspace_path,
+        restore=True,
+    )
+
+    assert target.has_history is False
 
 
 def test_claude_build_start_cmd_skips_continue_when_restore_disabled_even_with_history(monkeypatch, tmp_path: Path) -> None:

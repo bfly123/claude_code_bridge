@@ -47,6 +47,20 @@ def session_file_for_runtime_dir(runtime_dir: Path) -> Path | None:
     return ccb_dir / session_filename_for_agent('codex', agent_name)
 
 
+def state_dir_for_runtime_dir(runtime_dir: Path) -> Path | None:
+    current = Path(runtime_dir)
+    normalized_provider = str(current.name or '').strip().lower()
+    if not normalized_provider:
+        return None
+    parent = current.parent
+    if parent.name != 'provider-runtime':
+        return None
+    agent_dir = parent.parent
+    if not agent_dir.name:
+        return None
+    return agent_dir / 'provider-state' / normalized_provider
+
+
 def preferred_session_path(spec, runtime_dir: Path) -> Path | None:
     candidates = (agent_session_path(spec, runtime_dir),)
     for session_path in candidates:
@@ -73,4 +87,4 @@ def payload_resume_session_id(data: dict) -> str | None:
     return extract_resume_session_id(start_cmd)
 
 
-__all__ = ['load_resume_session_id', 'session_file_for_runtime_dir']
+__all__ = ['load_resume_session_id', 'session_file_for_runtime_dir', 'state_dir_for_runtime_dir']

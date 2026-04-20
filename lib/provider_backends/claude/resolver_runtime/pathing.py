@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from ..home_layout import claude_layout_from_session_data
 from .models import CLAUDE_PROJECTS_ROOT
 
 
@@ -23,11 +24,18 @@ def candidate_project_dirs(root: Path, work_dir: Path, *, include_env_pwd: bool 
     return out
 
 
-def session_path_from_id(session_id: str, work_dir: Path, *, include_env_pwd: bool = True) -> Path | None:
+def session_path_from_id(
+    session_id: str,
+    work_dir: Path,
+    *,
+    include_env_pwd: bool = True,
+    projects_root: Path | None = None,
+) -> Path | None:
     sid = str(session_id or "").strip()
     if not sid:
         return None
-    for project_dir in candidate_project_dirs(CLAUDE_PROJECTS_ROOT, work_dir, include_env_pwd=include_env_pwd):
+    root = Path(projects_root).expanduser() if projects_root is not None else CLAUDE_PROJECTS_ROOT
+    for project_dir in candidate_project_dirs(root, work_dir, include_env_pwd=include_env_pwd):
         candidate = project_dir / f"{sid}.jsonl"
         if candidate.exists():
             return candidate
@@ -39,11 +47,12 @@ def normalize_session_binding(data: dict, work_dir: Path) -> None:
         return
     sid = str(data.get("claude_session_id") or "").strip()
     path = binding_path(data)
+    projects_root = binding_projects_root(data)
     if existing_binding_path(path):
-        synchronize_existing_binding(data, sid=sid, path=path, work_dir=work_dir)
+        synchronize_existing_binding(data, sid=sid, path=path, work_dir=work_dir, projects_root=projects_root)
         return
     if sid:
-        adopt_session_path_if_present(data, sid=sid, work_dir=work_dir)
+        adopt_session_path_if_present(data, sid=sid, work_dir=work_dir, projects_root=projects_root)
 
 
 def candidate_work_dirs(work_dir: Path, *, include_env_pwd: bool = True) -> list[Path]:
@@ -75,6 +84,13 @@ def binding_path(data: dict) -> Path | None:
         return None
 
 
+def binding_projects_root(data: dict) -> Path | None:
+    layout = claude_layout_from_session_data(data)
+    if layout is None:
+        return None
+    return layout.projects_root
+
+
 def existing_binding_path(path: Path | None) -> bool:
     return bool(path and path.exists())
 
@@ -85,9 +101,10 @@ def synchronize_existing_binding(
     sid: str,
     path: Path,
     work_dir: Path,
+    projects_root: Path | None,
 ) -> None:
     if sid and path.stem != sid:
-        candidate = session_path_from_id(sid, work_dir)
+        candidate = session_path_from_id(sid, work_dir, projects_root=projects_root)
         if candidate and candidate.exists():
             data["claude_session_path"] = str(candidate)
             return
@@ -97,8 +114,14 @@ def synchronize_existing_binding(
         data["claude_session_id"] = path.stem
 
 
-def adopt_session_path_if_present(data: dict, *, sid: str, work_dir: Path) -> None:
-    candidate = session_path_from_id(sid, work_dir)
+def adopt_session_path_if_present(
+    data: dict,
+    *,
+    sid: str,
+    work_dir: Path,
+    projects_root: Path | None,
+) -> None:
+    candidate = session_path_from_id(sid, work_dir, projects_root=projects_root)
     if candidate and candidate.exists():
         data["claude_session_path"] = str(candidate)
 

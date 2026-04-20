@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Every_Model_Controllable-CF1322?style=for-the-badge" alt="Every Model Controllable">
 </p>
 
-[![Version](https://img.shields.io/badge/version-6.0.4-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-6.0.5-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 **English** | [Chinese](README_zh.md)
@@ -41,7 +41,7 @@ CCB provides the runtime foundation for stable agent-to-agent communication and 
 
 ## 🚀 User Commands
 
-- `ccb` open CCB in the project directory from the terminal
+- `ccb` start, restore, and attach CCB in the project directory from the terminal
 - `ccb -s` safe mode
 - `ccb -n` rebuild the project `.ccb` state
 - `ccb kill` close CCB
@@ -92,6 +92,15 @@ This layout means:
 Historical note: older release notes below may mention `askd`, legacy flags, or removed commands. Those references are kept only as changelog history and do not redefine the current CLI surface.
 
 <details open>
+<summary><b>v6.0.5</b> - Agent Isolation Stability</summary>
+
+- **Agent Isolation Stability**: Codex, Claude, and Gemini managed agents keep their session state under project-scoped `.ccb/agents/<agent>/provider-state/...`
+- **Restart Inheritance Safety**: restarts restore only the matching managed agent history instead of adopting manual provider conversations from the same working directory
+- **Project Dotfile Protection**: managed startup no longer rewrites project-level `.claude`, `.gemini`, or `.codex` provider dotfiles
+
+</details>
+
+<details>
 <summary><b>v6.0.4</b> - Legacy Update Compatibility Hotfix</summary>
 
 - **Backward-Compatible Release Assets**: Linux release tarballs now include a compatibility alias so older 6.x updaters can still find the extracted installer path
@@ -567,7 +576,7 @@ CCB v6 currently supports `ccb update` only on Linux/WSL. A major upgrade fully 
 ccb update              # Update to the latest stable release
 ccb update 6            # Update to the highest v6.x.x version
 ccb update 6.0          # Update to the highest v6.0.x version
-ccb update 6.0.4        # Update to a specific version
+ccb update 6.0.5        # Update to a specific version
 ccb uninstall           # Uninstall ccb and clean configs
 ccb reinstall           # Clean then reinstall ccb
 ```

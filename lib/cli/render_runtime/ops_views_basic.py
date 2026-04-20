@@ -80,15 +80,6 @@ def render_kill(summary) -> tuple[str, ...]:
     return tuple(lines)
 
 
-def render_open(summary) -> tuple[str, ...]:
-    return (
-        'open_status: ok',
-        f'project_id: {summary.project_id}',
-        f'tmux_socket_path: {summary.tmux_socket_path}',
-        f'tmux_session_name: {summary.tmux_session_name}',
-    )
-
-
 def render_ps(payload: Mapping[str, object]) -> tuple[str, ...]:
     lines = [
         f'project_id: {payload["project_id"]}',
@@ -107,7 +98,6 @@ __all__ = [
     'render_doctor_bundle',
     'render_kill',
     'render_logs',
-    'render_open',
     'render_ps',
     'render_start',
 ]

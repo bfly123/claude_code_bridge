@@ -129,13 +129,14 @@ def test_codex_log_reader_replays_first_entries_when_log_appears_after_capture(t
     assert next_state["log_path"] == log_path
 
 
-def test_codex_execution_reader_factory_enables_workspace_follow(
+def test_codex_execution_reader_factory_uses_bound_root_and_disables_workspace_follow(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
     from provider_execution import codex as codex_adapter_module
 
     captured: dict[str, object] = {}
+    session_root = tmp_path / ".codex" / "sessions"
 
     class _Reader:
         def __init__(self, **kwargs) -> None:
@@ -144,15 +145,80 @@ def test_codex_execution_reader_factory_enables_workspace_follow(
     class _Session:
         codex_session_path = str(tmp_path / "session.jsonl")
         codex_session_id = "session-old"
+        codex_session_root = str(session_root)
         work_dir = str(tmp_path / "repo")
+        data = {"codex_session_root": str(session_root), "codex_session_id": "session-old"}
 
     monkeypatch.setattr(codex_adapter_module, "CodexLogReader", _Reader)
 
     codex_adapter_module._reader_factory(_Session(), None)
 
+    assert captured["root"] == session_root
     assert captured["log_path"] == tmp_path / "session.jsonl"
     assert captured["session_id_filter"] == "session-old"
     assert captured["work_dir"] == tmp_path / "repo"
+    assert captured["follow_workspace_sessions"] is False
+
+
+def test_codex_execution_reader_factory_disables_workspace_follow_for_ambiguous_inplace_agents(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from provider_execution import codex as codex_adapter_module
+
+    captured: dict[str, object] = {}
+    work_dir = tmp_path / "repo"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    session_dir = work_dir / ".ccb"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    session_file = session_dir / ".codex-agent1-session"
+    session_file.write_text(json.dumps({"work_dir": str(work_dir)}), encoding="utf-8")
+    (session_dir / ".codex-agent2-session").write_text(json.dumps({"work_dir": str(work_dir)}), encoding="utf-8")
+
+    class _Reader:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+    class _Session:
+        codex_session_path = str(tmp_path / "session.jsonl")
+        codex_session_id = "session-old"
+        data = {"codex_session_id": "session-old"}
+
+    _Session.work_dir = str(work_dir)
+    _Session.session_file = session_file
+
+    monkeypatch.setattr(codex_adapter_module, "CodexLogReader", _Reader)
+
+    codex_adapter_module._reader_factory(_Session(), None)
+
+    assert captured["follow_workspace_sessions"] is False
+
+
+def test_codex_execution_reader_factory_enables_workspace_follow_for_unbound_session(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from provider_execution import codex as codex_adapter_module
+
+    captured: dict[str, object] = {}
+    session_root = tmp_path / ".codex" / "sessions"
+
+    class _Reader:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+    class _Session:
+        codex_session_path = ""
+        codex_session_id = ""
+        codex_session_root = str(session_root)
+        work_dir = str(tmp_path / "repo")
+        data = {"codex_session_root": str(session_root)}
+
+    monkeypatch.setattr(codex_adapter_module, "CodexLogReader", _Reader)
+
+    codex_adapter_module._reader_factory(_Session(), None)
+
+    assert captured["root"] == session_root
     assert captured["follow_workspace_sessions"] is True
 
 
@@ -197,4 +263,30 @@ def test_resolve_unique_codex_session_target_accepts_single_instance(tmp_path: P
     session_file, instance = _resolve_unique_codex_session_target(work_dir)
 
     assert session_file == target
+    assert instance == "auth"
+
+
+def test_resolve_unique_codex_session_target_filters_candidates_by_log_path(tmp_path: Path) -> None:
+    from provider_backends.codex.comm import _resolve_unique_codex_session_target
+
+    work_dir = tmp_path / "repo"
+    config_dir = work_dir / ".ccb"
+    config_dir.mkdir(parents=True)
+    session_root_a = tmp_path / "agent-a" / "sessions"
+    session_root_b = tmp_path / "agent-b" / "sessions"
+    log_path = session_root_a / "2026" / "04" / "19" / "rollout-a-session.jsonl"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("", encoding="utf-8")
+    (config_dir / ".codex-auth-session").write_text(
+        json.dumps({"codex_session_root": str(session_root_a)}),
+        encoding="utf-8",
+    )
+    (config_dir / ".codex-payment-session").write_text(
+        json.dumps({"codex_session_root": str(session_root_b)}),
+        encoding="utf-8",
+    )
+
+    session_file, instance = _resolve_unique_codex_session_target(work_dir, log_path=log_path)
+
+    assert session_file == config_dir / ".codex-auth-session"
     assert instance == "auth"

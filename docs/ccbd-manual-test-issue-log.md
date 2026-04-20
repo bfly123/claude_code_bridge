@@ -588,6 +588,57 @@
   - 自动化复测确认：layout plan / project namespace / tmux start layout / supervisor 相关用例通过
   - 黑盒复测确认：当前项目三列两行配置 `cmd, agent1:codex; agent2:codex, agent3:claude; agent4:codex, agent5:gemini` 已按预期投影成三列布局
 
+### ISSUE-013
+
+- 状态：`open-planned`
+- 标题：`真实 codex-cli 0.121.0 忽略 root-only 管理隔离，导致 agent 回复写入全局 Codex home 而 execution 无法完成`
+- 根因分类：`provider-facts`
+- 测试场景：`在 /home/bfly/yunwei/test_ccb 中由 agent1 ask agent2，agent2 实际回答但 ccb execution 长时间 running`
+- 最小复现：
+  - 在 `/home/bfly/yunwei/test_ccb` 启动项目
+  - 配置包含多个 inplace Codex agents，例如 `agent1:codex` 与 `agent2:codex`
+  - 执行 `agent1 ask agent2`
+  - 观察 agent2 pane 已经输出答案 `2`
+  - 检查 `.ccb/ccbd/executions/job_d06cdffcf34a.json`
+- 预期结果：
+  - agent2 的 Codex 日志应写入 agent2 私有 managed home
+  - execution reader 应在 agent2 私有 home 内发现 `CCB_REQ_ID: job_d06cdffcf34a`
+  - job 应完成并进入 reply 流程
+- 实际结果：
+  - `.ccb/ccbd/executions/job_d06cdffcf34a.json` 中 `log_path: null`、`session_path: ""`、`anchor_seen: false`
+  - `.ccb/.codex-agent2-session` 只有 `codex_session_root`，没有绑定 `codex_session_id/codex_session_path`
+  - `.ccb/agents/agent2/provider-state/codex/home/sessions/` 没有收到真实日志
+  - 真实日志写到了 `/home/bfly/.codex/sessions/2026/04/19/rollout-2026-04-19T20-01-07-019da59d-ac36-7932-99ab-2b6801e160af.jsonl`
+  - 该真实日志包含 `CCB_REQ_ID: job_d06cdffcf34a` 和最终答案 `2`
+- 影响范围：
+  - 使用真实 `codex-cli 0.121.0` 的 managed Codex agents
+  - 多个 inplace Codex agents 共享同一 `work_dir` 的隔离正确性
+  - 手动在项目目录运行 `codex` 时与 `ccb` managed Codex 的对话隔离
+  - `ask` completion 读取、watchdog binding、restart resume
+- 初步判断：
+  - mailbox 通路正常，job 已入队并发送到 agent2
+  - provider pane 正常执行并产生答案
+  - 失败点在 managed Codex startup/session binding 与真实 CLI 日志落点不一致
+- 根因：
+  - 当前实现把 `CODEX_SESSION_ROOT` 当成默认 managed isolation authority
+  - 实测 `codex-cli 0.121.0` 在只设置 `CODEX_SESSION_ROOT` 时仍把日志写入全局 `~/.codex/sessions`
+  - 只有同时设置隔离的 `CODEX_HOME` 与 `CODEX_SESSION_ROOT` 时，真实 CLI 才把日志写入 managed provider-state
+- 系统性修复方案：
+  - 将 managed Codex 隔离单元从 session-root 级提升为 home 级
+  - 每个 configured Codex agent 默认使用 `.ccb/agents/<agent>/provider-state/codex/home/`
+  - `CODEX_SESSION_ROOT` 固定派生为 `<codex_home>/sessions`
+  - 启动、恢复、completion reader、watchdog、diagnostics 全部以 managed home 为边界
+  - 禁止通过扫描全局 `~/.codex/sessions` 修补 completion
+  - legacy root-only session 只允许显式迁移，不允许作为长期运行模式
+- 回归测试：
+  - 待补：启动命令同时导出 `CODEX_HOME` 与 `CODEX_SESSION_ROOT`
+  - 待补：两个 inplace Codex agents 拥有不同 managed homes
+  - 待补：manual Codex in same work_dir 不会被 managed reader 采用
+  - 待补：restart 后复用同一 managed `codex_session_id`
+  - 待补：真实或 stubbed Codex 写到全局 home 时，execution 显示 managed-home violation 而不是永久 running
+- 复测结论：
+  - 待补
+
 ## 6. 关闭标准
 
 问题只有同时满足以下条件才关闭：

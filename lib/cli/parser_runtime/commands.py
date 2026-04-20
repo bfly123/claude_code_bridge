@@ -10,7 +10,6 @@ from cli.models import (
     ParsedInboxCommand,
     ParsedKillCommand,
     ParsedLogsCommand,
-    ParsedOpenCommand,
     ParsedPendCommand,
     ParsedPingCommand,
     ParsedPsCommand,
@@ -37,11 +36,6 @@ def parse_kill(tokens: list[str], *, project: str | None, error_type) -> ParsedK
     parser.add_argument('-f', '--force', action='store_true')
     namespace = parse_args(parser, tokens, error_message='invalid kill command', error_type=error_type)
     return ParsedKillCommand(project=project, force=bool(namespace.force))
-
-
-def parse_open(tokens: list[str], *, project: str | None, error_type) -> ParsedOpenCommand:
-    require_no_extra(tokens, command='open', error_type=error_type)
-    return ParsedOpenCommand(project=project)
 
 
 def parse_ps(tokens: list[str], *, project: str | None, error_type) -> ParsedPsCommand:
@@ -170,7 +164,6 @@ __all__ = [
     'parse_inbox',
     'parse_kill',
     'parse_logs',
-    'parse_open',
     'parse_pend',
     'parse_ping',
     'parse_ps',

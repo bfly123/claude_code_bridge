@@ -7,7 +7,7 @@
 - 每个 `.ccb` 项目拥有专属 tmux server/socket
 - `ccbd` 是唯一项目 authority
 - daemon、tmux namespace、agent runtime 形成强绑定生命周期
-- `ccb` / `ccb open` / `ccb kill` 语义彻底拆清
+- `ccb` / `ccb kill` 语义彻底收敛
 
 它是以下文档的细化与补充：
 
@@ -68,11 +68,9 @@
 最终用户语义固定如下：
 
 - `ccb`
-  - 只负责 ensure 项目 backend、ensure 项目 namespace、ensure 配置内 agent 已挂载
-  - 不再隐式把 pane 塞进当前 tmux 世界
-- `ccb open`
-  - 只负责 attach/switch 到该项目专属 tmux server
-  - 是显式 UI 行为，不参与 authority 决策
+  - 负责 ensure 项目 backend、ensure 项目 namespace、ensure 配置内 agent 已挂载
+  - 交互式调用在 start transaction 成功后 attach 到该项目专属 tmux server
+  - 非交互式调用只输出 start transaction 状态，不 attach
 - `ccb kill`
   - 停止 `ccbd`
   - 停止 keeper 重启
@@ -145,8 +143,8 @@
 具体表现：
 
 - RPC 中的 `attach` 实际是注册 runtime binding，不是 UI attach
-- CLI 没有独立的 `open/attach` 管理命令
-- 结果 `start` 既像 ensure，又像 UI 入口，又像 binding 回写入口
+- CLI 生命周期已经收敛为 `ccb` foreground start，不能再新增独立 attach-only 管理命令
+- 结果 `start` 需要清晰拆分为 startup transaction 与 foreground attach stage，避免和 binding 回写入口混淆
 
 这会长期污染模块命名和调用者心智。
 
@@ -210,7 +208,7 @@
 - 创建和销毁项目专属 tmux server/socket
 - 创建和维护 slot layout
 - 为 agent 分配固定 slot
-- 对外提供 attach/open 入口
+- 对 `ccb` foreground attach stage 提供 namespace facts
 
 非职责：
 
@@ -342,7 +340,7 @@ slot 是逻辑身份，不等于 `pane_id`。
 用途：
 
 - 作为项目 namespace 的静态描述和最近一次切换记录
-- 给 `doctor` / `logs` / `open` 使用
+- 给 `doctor` / `logs` / foreground attach 使用
 
 ## 5.3 `.ccb/agents/<agent>/runtime.json`
 
@@ -445,15 +443,16 @@ ownership 校验必须至少比对：
 - 项目 tmux namespace 已存在
 - desired agents 已达到 `healthy` 或 `recovering`
 
-## 6.2 `ccb open`
+## 6.2 `ccb` foreground attach
 
-新增管理命令。
+foreground attach 是 `ccb` start transaction 的末端阶段，不是独立管理命令。
 
 语义固定为：
 
-- 不创建新 authority
-- 不重算 desired agents
-- 只 attach/switch 到当前项目 namespace
+- attach 前必须完成正常 `ccb` start transaction
+- attach 不创建独立 authority
+- attach 不重写 startup report
+- attach 必须 select 当前 workspace window
 
 如果 namespace 不存在：
 
@@ -510,7 +509,7 @@ ownership 校验必须至少比对：
 | `lib/terminal_runtime/tmux_identity.py` | 缺少 slot 和 epoch 标签 | 新增 `@ccb_slot` / `@ccb_namespace_epoch` / `@ccb_managed_by` | ownership 可严格校验 |
 | `lib/provider_core/tmux_ownership.py` | ownership 校验粒度不够 | 把 project + slot + epoch 作为强校验字段 | 旧 pane 不会再被误吸收 |
 | `lib/ccbd/socket_client.py` | `attach` 命名误导 | 把运行时注册 RPC 重命名为 `register_runtime` 或 `upsert_runtime_binding` | RPC 语义和 UI attach 解耦 |
-| `lib/cli/router.py` / `lib/cli/phase2.py` | 没有 `open` 命令，`ccb` 被迫兼顾 UI 语义 | 增加 `open`/`attach` 管理命令，调整 `ccb` 主命令描述 | CLI 语义稳定 |
+| `lib/cli/router.py` / `lib/cli/phase2.py` | 旧设计曾把 UI attach 拆成独立命令 | 保持 `ccb` 为唯一 start/restore/attach 入口，attach-only 命令不进入 parser/dispatch | CLI 生命周期稳定 |
 
 ## 8. 需要新增的模块
 
@@ -565,13 +564,13 @@ def destroy_namespace(namespace: ProjectNamespace, *, force: bool = False) -> di
 - 只做 state I/O
 - 不直接调用 tmux 命令
 
-## 8.3 `lib/ccbd/services/ui_attach.py`
+## 8.3 `lib/cli/services/start_foreground.py`
 
 职责：
 
-- `ccb open` 的主实现
+- `ccb` foreground attach 阶段的主实现
 - attach/switch 到项目 tmux server
-- 返回会话信息给 CLI render
+- 返回 foreground attach 会话信息给调用方
 
 设计要求：
 
@@ -712,14 +711,14 @@ def launch_tmux_runtime(
 
 交付物：
 
-- 新增 `ccb open`
-- `ccb` 主命令说明从“打开会话”改为“ensure project backend”
-- RPC 命名中区分 `register_runtime` 和 `open`
+- `ccb` 主命令说明收敛为“start/restore/attach project UI”
+- attach-only public command 不进入 parser/dispatch
+- RPC 命名中避免把 foreground attach 表达成独立 lifecycle command
 
 门禁：
 
-- `ccb` 不 attach UI 仍能成功启动
-- `ccb open` 不启动新 agent 也能 attach
+- 非交互式 `ccb` 不 attach UI 仍能成功启动
+- 交互式 `ccb` 在 start 成功后 attach
 
 ## 10.3 Phase C: Slot 与 Epoch 改造
 
@@ -811,7 +810,7 @@ def launch_tmux_runtime(
 - 项目首次启动，创建新 tmux server/socket
 - 在普通 shell 内执行 `ccb`
 - 在 tmux 内执行 `ccb`
-- `ccb open` attach 到已存在 namespace
+- 重复执行 `ccb` attach 到已存在 namespace
 - 两个不同项目并行启动，socket/server 完全隔离
 
 ## 11.3 pane 与 slot 场景

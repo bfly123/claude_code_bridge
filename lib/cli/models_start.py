@@ -14,12 +14,6 @@ class ParsedStartCommand:
 
 
 @dataclass(frozen=True)
-class ParsedOpenCommand:
-    project: str | None
-    kind: str = 'open'
-
-
-@dataclass(frozen=True)
 class ParsedKillCommand:
     project: str | None
     force: bool = False
@@ -66,7 +60,6 @@ __all__ = [
     'ParsedDoctorCommand',
     'ParsedKillCommand',
     'ParsedLogsCommand',
-    'ParsedOpenCommand',
     'ParsedPingCommand',
     'ParsedPsCommand',
     'ParsedStartCommand',

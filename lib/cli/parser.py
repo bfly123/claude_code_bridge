@@ -19,7 +19,6 @@ from .parser_runtime import (
     parse_inbox,
     parse_kill,
     parse_logs,
-    parse_open,
     parse_pend,
     parse_ping,
     parse_ps,
@@ -40,7 +39,6 @@ class CliUsageError(ValueError):
 _COMMAND_PARSERS = {
     'cancel': parse_cancel,
     'kill': parse_kill,
-    'open': parse_open,
     'ps': parse_ps,
     'ping': parse_ping,
     'watch': parse_watch,

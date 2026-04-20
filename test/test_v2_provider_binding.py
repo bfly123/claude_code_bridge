@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cli.services.provider_binding import resolve_agent_binding
-from provider_core.contracts import ProviderSessionBinding
+from provider_core.contracts import ProviderRuntimeIdentity, ProviderSessionBinding
 
 
 @dataclass
@@ -259,6 +259,37 @@ def test_resolve_agent_binding_rejects_live_foreign_tmux_pane(
     assert raw_binding.pane_state == 'foreign'
     assert raw_binding.active_pane_id is None
     assert usable_binding is None
+
+
+def test_resolve_agent_binding_surfaces_provider_identity_mismatch(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    session = _FakeSession(pane_id='%41', fake_session_id='session-1', ensure_ok=True)
+    adapter = ProviderSessionBinding(
+        provider='codex',
+        load_session=lambda root, instance: session,
+        session_id_attr='fake_session_id',
+        session_path_attr='fake_session_path',
+        live_runtime_identity=lambda candidate: ProviderRuntimeIdentity(
+            'mismatch',
+            'live_codex_process_not_running_bound_resume_session',
+        ),
+    )
+
+    monkeypatch.setattr('cli.services.provider_binding._binding_adapter', lambda provider: adapter)
+
+    binding = resolve_agent_binding(
+        provider='codex',
+        agent_name='agent1',
+        workspace_path=tmp_path / 'workspace',
+        project_root=tmp_path / 'project',
+        ensure_usable=False,
+    )
+
+    assert binding is not None
+    assert binding.provider_identity_state == 'mismatch'
+    assert binding.provider_identity_reason == 'live_codex_process_not_running_bound_resume_session'
 
 
 def test_resolve_agent_binding_named_agent_does_not_fallback_to_primary_session(

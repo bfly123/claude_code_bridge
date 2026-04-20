@@ -13,6 +13,7 @@ from .execution_runtime import poll_submission as _poll_submission
 from .execution_runtime import resume_submission as _resume_submission
 from .execution_runtime import start_active_submission as _start_active_submission
 from .session import load_project_session
+from .session_runtime.follow_policy import codex_session_root_path, should_follow_workspace_sessions
 
 
 class CodexProviderAdapter:
@@ -74,12 +75,21 @@ class CodexProviderAdapter:
 
 
 def _reader_factory(session, preferred_log: Path | None):
-    return CodexLogReader(
-        log_path=preferred_log if preferred_log is not None else (Path(session.codex_session_path).expanduser() if session.codex_session_path else None),
-        session_id_filter=session.codex_session_id or None,
-        work_dir=Path(session.work_dir),
-        follow_workspace_sessions=True,
-    )
+    work_dir = Path(session.work_dir)
+    kwargs: dict[str, object] = {
+        "log_path": preferred_log if preferred_log is not None else (Path(session.codex_session_path).expanduser() if session.codex_session_path else None),
+        "session_id_filter": session.codex_session_id or None,
+        "work_dir": work_dir,
+        "follow_workspace_sessions": should_follow_workspace_sessions(
+            work_dir=work_dir,
+            session_file=getattr(session, "session_file", None),
+            session_data=getattr(session, "data", None),
+        ),
+    }
+    session_root = codex_session_root_path(getattr(session, "data", None))
+    if session_root is not None:
+        kwargs["root"] = session_root
+    return CodexLogReader(**kwargs)
 
 
 def _load_session(work_dir: Path, agent_name: str):

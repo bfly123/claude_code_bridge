@@ -56,3 +56,65 @@ def test_materialize_codex_profile_copies_inherited_assets(tmp_path: Path, monke
     assert (runtime_home / 'skills' / 'demo.md').is_file()
     assert (runtime_home / 'commands' / 'demo.md').is_file()
     assert (runtime_home / 'sessions').is_dir()
+
+
+def test_materialize_claude_profile_creates_runtime_home(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+
+    profile = materialize_provider_profile(
+        layout=PathLayout(project_root),
+        spec=_spec(
+            'agent1',
+            provider='claude',
+            provider_profile=ProviderProfileSpec(
+                mode='isolated',
+                inherit_api=False,
+            ),
+        ),
+        workspace_path=project_root,
+    )
+
+    runtime_home = Path(profile.runtime_home or '')
+    assert runtime_home.is_dir()
+
+
+def test_materialize_gemini_profile_keeps_runtime_home_unset_without_explicit_override(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+
+    profile = materialize_provider_profile(
+        layout=PathLayout(project_root),
+        spec=_spec(
+            'agent1',
+            provider='gemini',
+            provider_profile=ProviderProfileSpec(
+                mode='isolated',
+                inherit_api=False,
+            ),
+        ),
+        workspace_path=project_root,
+    )
+
+    assert profile.runtime_home is None
+
+
+def test_materialize_gemini_profile_uses_explicit_home_override(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    explicit_home = tmp_path / 'gemini-home'
+
+    profile = materialize_provider_profile(
+        layout=PathLayout(project_root),
+        spec=_spec(
+            'agent1',
+            provider='gemini',
+            provider_profile=ProviderProfileSpec(
+                mode='isolated',
+                home=str(explicit_home),
+                inherit_api=False,
+            ),
+        ),
+        workspace_path=project_root,
+    )
+
+    runtime_home = Path(profile.runtime_home or '')
+    assert runtime_home == explicit_home.resolve()
+    assert (runtime_home / '.gemini' / 'tmp').is_dir()

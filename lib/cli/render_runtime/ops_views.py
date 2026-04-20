@@ -5,7 +5,6 @@ from .ops_views_basic import (
     render_doctor_bundle,
     render_kill,
     render_logs,
-    render_open,
     render_ps,
     render_start,
 )
@@ -18,7 +17,6 @@ __all__ = [
     'render_doctor_bundle',
     'render_kill',
     'render_logs',
-    'render_open',
     'render_ps',
     'render_start',
 ]

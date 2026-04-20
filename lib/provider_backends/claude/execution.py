@@ -79,7 +79,8 @@ class ClaudeProviderAdapter:
 
 
 def _reader_factory(session):
-    return ClaudeLogReader(work_dir=Path(session.work_dir))
+    root = Path(session.claude_projects_root).expanduser() if session.claude_projects_root else None
+    return ClaudeLogReader(root=root, work_dir=Path(session.work_dir))
 
 
 def _load_session(work_dir: Path, *, agent_name: str):

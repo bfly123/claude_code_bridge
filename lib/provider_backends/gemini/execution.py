@@ -12,6 +12,8 @@ from .comm import GeminiLogReader
 from .execution_runtime import poll_submission as _poll_submission
 from .execution_runtime import resume_submission as _resume_submission
 from .execution_runtime import start_active_submission as _start_active_submission
+from .comm_runtime.paths import GEMINI_ROOT
+from .home_layout import gemini_layout_from_session_data
 from .protocol import (
     extract_reply_for_req,
     is_done_text,
@@ -93,7 +95,9 @@ def _load_session(work_dir: Path, *, agent_name: str):
 
 
 def _reader_factory(session):
-    return GeminiLogReader(work_dir=Path(session.work_dir))
+    layout = gemini_layout_from_session_data(dict(getattr(session, 'data', {}) or {}))
+    root = layout.tmp_root if layout is not None else None
+    return GeminiLogReader(root=root or GEMINI_ROOT, work_dir=Path(session.work_dir))
 
 
 def build_execution_adapter() -> GeminiProviderAdapter:

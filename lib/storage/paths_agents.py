@@ -42,6 +42,12 @@ class AgentRuntimePathMixin:
             raise ValueError('provider cannot be empty')
         return self.agent_dir(agent_name) / 'provider-runtime' / normalized_provider
 
+    def agent_provider_state_dir(self, agent_name: str, provider: str) -> Path:
+        normalized_provider = str(provider or '').strip().lower()
+        if not normalized_provider:
+            raise ValueError('provider cannot be empty')
+        return self.agent_dir(agent_name) / 'provider-state' / normalized_provider
+
     def agent_logs_dir(self, agent_name: str) -> Path:
         return self.agent_dir(agent_name) / 'logs'
 

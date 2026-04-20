@@ -16,6 +16,8 @@ def resolve_claude_restore_target(
     workspace_path: Path | None = None,
     project_session_restore_target_fn,
     claude_history_state_fn,
+    claude_home_layout_fn,
+    load_profile_fn,
 ) -> ProviderRestoreTarget:
     context = resolve_restore_context(
         runtime_dir,
@@ -27,7 +29,13 @@ def resolve_claude_restore_target(
     if not restore:
         return default_target
 
-    session_target = project_session_restore_target_fn(context.workspace_path, context.session_instance)
+    profile = load_profile_fn(runtime_dir)
+    home_layout = claude_home_layout_fn(runtime_dir, profile)
+    session_target = project_session_restore_target_fn(
+        context.workspace_path,
+        context.session_instance,
+        managed_home=home_layout.home_root,
+    )
     if session_target is not None:
         return session_target
 
@@ -37,6 +45,7 @@ def resolve_claude_restore_target(
         invocation_dir=context.workspace_path,
         project_root=project_root,
         include_env_pwd=not managed_workspace,
+        home_dir=home_layout.home_root,
     )
     if has_history:
         return ProviderRestoreTarget(run_cwd=existing_dir(best_cwd) or context.workspace_path, has_history=True)
@@ -49,6 +58,7 @@ def project_session_restore_target(
     *,
     load_project_session_fn,
     claude_history_state_fn,
+    managed_home: Path,
 ) -> ProviderRestoreTarget | None:
     session = load_project_session_fn(workspace_path, instance=session_instance)
     if session is None:
@@ -56,10 +66,14 @@ def project_session_restore_target(
     session_cwd = existing_dir(getattr(session, 'work_dir', ''))
     if session_cwd is None:
         return None
+    session_home = getattr(session, 'claude_home_path', None)
+    if session_home is None or not _is_within_root(session_home, managed_home):
+        return None
     _session_id, has_history, best_cwd = claude_history_state_fn(
         invocation_dir=session_cwd,
         project_root=session_cwd,
         include_env_pwd=False,
+        home_dir=session_home,
     )
     if not has_history:
         return None
@@ -73,11 +87,12 @@ def claude_history_state(
     env: dict[str, str] | None = None,
     home_dir: Path,
 ) -> tuple[str | None, bool, Path | None]:
+    home = home_dir if home_dir is not None else Path.home()
     locator = ClaudeHistoryLocator(
         invocation_dir=invocation_dir,
         project_root=project_root,
         env=env or {},
-        home_dir=home_dir,
+        home_dir=home,
     )
     return locator.latest_session_id()
 
@@ -98,6 +113,28 @@ def is_ccb_managed_workspace(workspace_path: Path) -> bool:
         return (workspace_path / ".ccb-workspace.json").is_file()
     except Exception:
         return False
+
+
+def _is_within_root(candidate: Path, managed_root: Path) -> bool:
+    normalized_candidate = _normalize_path(candidate)
+    normalized_managed = _normalize_path(managed_root)
+    if normalized_candidate is None or normalized_managed is None:
+        return False
+    try:
+        normalized_candidate.relative_to(normalized_managed)
+        return True
+    except Exception:
+        return False
+
+
+def _normalize_path(value: object) -> Path | None:
+    try:
+        return Path(value).expanduser().resolve()
+    except Exception:
+        try:
+            return Path(value).expanduser()
+        except Exception:
+            return None
 
 
 __all__ = [

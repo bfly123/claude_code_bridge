@@ -21,7 +21,6 @@ from .handlers_ops import (
     handle_fault_list,
     handle_kill,
     handle_logs,
-    handle_open,
     handle_ps,
 )
 from .handlers_start import handle_config_validate, handle_start
@@ -40,7 +39,6 @@ _HANDLERS = {
     'inbox': handle_inbox,
     'kill': handle_kill,
     'logs': handle_logs,
-    'open': handle_open,
     'pend': handle_pend,
     'ping': handle_ping,
     'ps': handle_ps,

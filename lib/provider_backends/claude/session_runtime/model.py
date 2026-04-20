@@ -7,6 +7,7 @@ from typing import Optional, Tuple
 from provider_backends.pane_log_support.session import session_tmux_identity_lookup
 from terminal_runtime import get_backend_for_session
 
+from ..home_layout import claude_layout_from_session_data
 from .normalization import normalize_session_data
 from .lifecycle import attach_pane_log, ensure_pane, update_claude_binding, write_back
 
@@ -38,6 +39,22 @@ class ClaudeProjectSession:
     @property
     def claude_session_path(self) -> str:
         return str(self.data.get("claude_session_path") or "").strip()
+
+    @property
+    def claude_home(self) -> str:
+        return str(self.data.get("claude_home") or "").strip()
+
+    @property
+    def claude_home_path(self) -> Path | None:
+        layout = claude_layout_from_session_data(self.data)
+        return layout.home_root if layout is not None else None
+
+    @property
+    def claude_projects_root(self) -> str:
+        layout = claude_layout_from_session_data(self.data)
+        if layout is not None:
+            return str(layout.projects_root)
+        return str(self.data.get("claude_projects_root") or "").strip()
 
     @property
     def work_dir(self) -> str:

@@ -18,7 +18,6 @@ from cli.models import (
     ParsedInboxCommand,
     ParsedKillCommand,
     ParsedLogsCommand,
-    ParsedOpenCommand,
     ParsedPendCommand,
     ParsedPsCommand,
     ParsedQueueCommand,
@@ -227,7 +226,11 @@ def test_parse_ask_invalid(parser: CliParser, argv: list[str]) -> None:
 def test_parse_kill(parser: CliParser) -> None:
     assert parser.parse(['kill']) == ParsedKillCommand(project=None, force=False)
     assert parser.parse(['kill', '-f']) == ParsedKillCommand(project=None, force=True)
-    assert parser.parse(['open']) == ParsedOpenCommand(project=None)
+
+
+def test_parse_removed_attach_command_is_not_active(parser: CliParser) -> None:
+    with pytest.raises(CliUsageError, match='start does not accept'):
+        parser.parse(['open'])
 
 
 def test_parse_ps_and_pend(parser: CliParser) -> None:

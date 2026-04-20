@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from provider_core.contracts import ProviderRuntimeIdentity
 from provider_core.registry import build_default_session_binding_map
 
 from .binding import AgentBinding
@@ -58,6 +59,7 @@ def resolve_agent_binding(
     pane_details = inspect_session_pane(session)
     if ensure_usable and pane_details['pane_state'] == 'unknown' and pane_details['active_pane_id']:
         pane_details['pane_state'] = 'alive'
+    identity = _live_runtime_identity(adapter, session)
 
     return AgentBinding(
         runtime_ref=session_runtime_ref(session),
@@ -78,7 +80,19 @@ def resolve_agent_binding(
         active_pane_id=pane_details['active_pane_id'],
         pane_title_marker=pane_details['pane_title_marker'],
         pane_state=pane_details['pane_state'],
+        provider_identity_state=getattr(identity, 'state', None) if identity is not None else None,
+        provider_identity_reason=getattr(identity, 'reason', None) if identity is not None else None,
     )
+
+
+def _live_runtime_identity(adapter, session):
+    identity_fn = getattr(adapter, 'live_runtime_identity', None)
+    if not callable(identity_fn):
+        return None
+    try:
+        return identity_fn(session)
+    except Exception:
+        return ProviderRuntimeIdentity('unknown', 'provider_identity_probe_failed')
 
 
 __all__ = ['default_binding_adapter', 'resolve_agent_binding']
