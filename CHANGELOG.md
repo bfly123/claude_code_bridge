@@ -2,6 +2,99 @@
 
 ## Unreleased
 
+## v6.0.5 (2026-04-20)
+
+### 🔒 Agent Isolation Stability
+
+- **Agent Isolation Stability**: strengthened managed agent isolation so Codex, Claude, and Gemini agent sessions stay bound to their own project-scoped provider state under `.ccb`
+- **Provider Home Boundaries**: Claude and Gemini startup now reject stale persisted provider homes that point outside the current agent's managed state unless an explicit validated provider profile owns that home
+- **Restart Inheritance Safety**: fresh managed Gemini starts no longer adopt ambient `GEMINI_ROOT` or global `~/.gemini` history just because the same work directory was used manually
+- **Project Dotfile Protection**: managed startup keeps provider hook/trust state inside agent provider-state homes and does not rewrite project-level `.claude`, `.gemini`, or `.codex` provider dotfiles
+
+## v6.0.4 (2026-04-17)
+
+### 🔁 Legacy Update Compatibility
+
+- **Backward-Compatible Release Assets**: Linux release tarballs now include a compatibility alias so older 6.x updaters that treat the asset filename as the extracted directory can still install successfully
+- **Pre-6.0.3 Upgrade Path Restored**: existing `v6.0.1` and `v6.0.2` installs can now update to the latest stable release without relying on patched local updater code
+- **Self-Update Hotfix Retained**: current runtime still resolves the extracted release directory correctly and no longer depends on the compatibility alias
+
+## v6.0.3 (2026-04-17)
+
+### 🔧 Self-Update Hotfix
+
+- **Release Tarball Upgrade Fix**: `ccb update` now resolves the extracted release directory correctly instead of treating the `.tar.gz` filename as a directory path
+- **Installer Handoff Restored**: self-update once again finds `install.sh` inside extracted release assets and completes the replacement flow end to end
+- **Release Build Hygiene**: Linux release packaging now ignores local `.ccb-requests/` mailbox residue so official builds are not blocked by runtime leftovers
+
+## v6.0.2 (2026-04-17)
+
+### 🔁 Agent Routing & Install Guardrails
+
+- **Caller Attribution Fix**: `ccb ask` now preserves the originating agent identity so replies route back to the correct mailbox instead of drifting to `user` or `cmd`
+- **Mailbox Delivery Stability**: control-plane reply routing now keeps async `cmd` mailbox delivery aligned with the real caller chain
+- **Mixed-Case Agent Recovery**: config layout recovery now normalizes mixed-case agent names consistently during restore and startup
+- **macOS Dependency Warning**: `install.sh` now warns when Homebrew is missing on macOS before tmux and related dependencies are installed
+
+## v6.0.1 (2026-04-16)
+
+### 🔧 Release Hygiene & Upgrade Safety
+
+- **Tracked Temp Cleanup**: Removed accidentally tracked `.tmp_pytest` artifacts that contaminated GitHub source archives
+- **Repo Hygiene Guard**: Added a regression test to block ephemeral test artifacts from entering the git index again
+- **Safer Tar Validation**: Upgrade/install extraction now rejects unsafe symlink targets before unpacking
+- **Clearer Extraction Errors**: Unsafe archive failures now explain that the archive contains unsafe paths or links and should be replaced with a clean source archive or official release asset
+
+## v6.0.0 (2026-04-16)
+
+### 🚀 Multi-Agent Runtime
+
+- **Infinite Parallel Agent Edition**: CCB v6 establishes the runtime foundation for effectively unbounded multi-agent delegation inside one project
+- **Independent Agent Identity**: Each agent can carry its own role, task stream, skill set, and collaboration style
+- **Stable Native Communication**: Agent-to-agent orchestration continues through the built-in control plane instead of shell-level glue
+
+### 🧭 Public CLI Surface
+
+- **User Workflow Reduced**: Public startup and rebuild flow is now intentionally centered on `ccb`, `ccb -s`, `ccb -n`, `ccb kill`, and `ccb kill -f`
+- **Control Plane Retained**: `ask`, `ping`, `pend`, and `watch` remain available for model-side coordination without dominating user help
+- **Safe Rebuild Semantics**: Legacy project runtime state is rebuilt from `.ccb/ccb.config`, while current 6.x projects retain an explicit runtime marker
+
+### 🌳 Workspace & Recovery
+
+- **Default Inplace Workspaces**: Agents now default to `inplace`; isolated branches are opt-in via `agent:provider(worktree)`
+- **Worktree Reconciliation**: Added stable handling for added, removed, renamed, dirty, missing, and unmerged worktree agents during start, kill, and `ccb -n`
+- **Restore Stability**: Namespace root panes are preserved during cleanup so restart/restore flows no longer self-delete active project panes
+
+### 🤖 Provider & Release Reliability
+
+- **Gemini Multi-Round Completion**: Gemini completion polling now survives planning/tool rounds and waits for the real final reply
+- **Linux Release Path**: `ccb update` for the 6.x line is now aligned to Linux/WSL release assets instead of source snapshots
+- **Release Metadata Preservation**: Install/update paths preserve embedded version, commit, and date metadata, including git worktree installs
+
+## v5.3.0 (2026-04-14)
+
+### 🚀 CLI & Workspace Model
+
+- **Public CLI Simplified**: User-facing startup flow is now centered on `ccb`, `ccb -s`, `ccb -n`, `ccb kill`, and `ccb kill -f`
+- **Explicit Worktree Opt-In**: Compact `ccb.config` entries now default to `workspace_mode='inplace'`; isolated branches require `agent:provider(worktree)`
+- **Internal Control Plane Preserved**: `ask`, `ping`, `pend`, and `watch` remain available for model-side orchestration without crowding the main user help
+
+### 🔧 Project State Recovery
+
+- **Reset Rebuilds Cleanly**: `ccb -n` rebuilds project runtime state while preserving `.ccb/ccb.config`
+- **Stale Worktree Cleanup**: Startup and reset paths now prune missing registered git worktrees before rematerializing agent workspaces
+- **Agent Change Reconciliation**: Adding agents no longer disturbs existing worktrees; removing or renaming worktree agents retires clean branches and blocks on unmerged or dirty ones
+- **Kill Warnings**: `ccb kill` now warns clearly when project worktree agents still have unmerged or dirty state that needs user attention
+
+### 🤖 Completion Reliability
+
+- **Gemini Multi-Round Stability**: Gemini completion polling now tracks tool-call activity and no longer treats the first stable planning message as the final answer
+- **Detector Reset Safety**: Session rotation clears tool-active state so later turns are evaluated independently
+
+### ✅ Regression Coverage
+
+- Added focused tests for the simplified CLI surface, worktree reconciliation and reset/kill safeguards, and Gemini early-completion regression paths
+
 ## v5.2.8 (2026-03-07)
 
 ### 📝 Documentation
@@ -92,21 +185,15 @@
 
 **Supported providers:** `gemini`, `codex`, `opencode`, `droid`, `claude`
 
-### 🪟 Windows WezTerm + PowerShell Support
+### 🪟 Windows Backend Direction
 
-- Full support for Windows native environment with WezTerm terminal
-- `install.ps1` now generates wrappers for `ask`, `ccb-ping`, `pend`, `ccb-completion-hook`
-- Background execution uses PowerShell scripts with `DETACHED_PROCESS` flag
-- WezTerm CLI integration with stdin for large payloads (avoids command line length limits)
-- UTF-8 BOM handling for PowerShell-generated session files
+- The old native-Windows backend path has been removed from the active codebase
+- Current Unix runtime is tmux-only
+- Native Windows mux support is being redesigned around `psmux`
 
 ### 🔧 Technical Improvements
 
 - `completion_hook.py`: Uses `sys.executable` for cross-platform script execution
-- `ccb-completion-hook`:
-  - Added `find_wezterm_cli()` with PATH lookup and common install locations
-  - Support `CCB_WEZTERM_BIN` environment variable
-  - Uses stdin for WezTerm send-text to handle large payloads
 - `bin/ask`:
   - Unix: Uses `nohup` for true background execution
   - Windows: Uses PowerShell script + message file to avoid escaping issues

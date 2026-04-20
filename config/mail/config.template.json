@@ -37,7 +37,7 @@
     "idle_timeout": 300
   },
   "default_work_dir": "",
-  "default_provider": "claude",
-  "provider_prefix_pattern": "^(\\w+)",
+  "default_agent": "agent1",
+  "agent_prefix_pattern": "^(\\w+)",
   "case_insensitive": true
 }

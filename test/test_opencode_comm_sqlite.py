@@ -30,7 +30,7 @@ def _init_opencode_db(path: Path) -> None:
 
 
 def test_opencode_log_reader_reads_messages_and_parts_from_sqlite(tmp_path: Path) -> None:
-    from opencode_comm import OpenCodeLogReader
+    from provider_backends.opencode.comm import OpenCodeLogReader
 
     root = tmp_path / "storage"
     root.mkdir(parents=True, exist_ok=True)
@@ -79,7 +79,7 @@ def test_opencode_log_reader_reads_messages_and_parts_from_sqlite(tmp_path: Path
 
 
 def test_opencode_log_reader_falls_back_to_json_when_sqlite_has_no_matching_rows(tmp_path: Path) -> None:
-    from opencode_comm import OpenCodeLogReader
+    from provider_backends.opencode.comm import OpenCodeLogReader
 
     root = tmp_path / "storage"
     message_dir = root / "message" / "ses_file"
@@ -137,3 +137,35 @@ def test_opencode_log_reader_falls_back_to_json_when_sqlite_has_no_matching_rows
     assert parts[0].get("id") == "prt_file"
     assert parts[0].get("messageID") == "msg_file"
     assert parts[0].get("text") == "hello from json"
+
+
+def test_opencode_log_reader_stays_pinned_to_filtered_session_by_default(tmp_path: Path) -> None:
+    from provider_backends.opencode.comm import OpenCodeLogReader
+
+    root = tmp_path / "storage"
+    root.mkdir(parents=True, exist_ok=True)
+    db_path = tmp_path / "opencode.db"
+    _init_opencode_db(db_path)
+
+    project_dir = tmp_path / "repo"
+    project_dir.mkdir()
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT NOT NULL, time_updated INTEGER NOT NULL)"
+        )
+        conn.execute(
+            "INSERT INTO session (id, directory, time_updated) VALUES (?, ?, ?)",
+            ("ses_old", str(project_dir), 100),
+        )
+        conn.execute(
+            "INSERT INTO session (id, directory, time_updated) VALUES (?, ?, ?)",
+            ("ses_new", str(project_dir), 200),
+        )
+        conn.commit()
+
+    reader = OpenCodeLogReader(root=root, work_dir=project_dir, project_id="proj-test", session_id_filter="ses_old")
+    latest = reader._get_latest_session_from_db()
+
+    assert latest is not None
+    assert latest["payload"]["id"] == "ses_old"

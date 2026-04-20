@@ -2,8 +2,16 @@ from __future__ import annotations
 
 import re
 
-from ccb_protocol import DONE_PREFIX, REQ_ID_PREFIX, is_done_text, make_req_id, strip_done_text, wrap_codex_prompt
-from ccb_protocol import strip_trailing_markers
+from provider_core.protocol import (
+    DONE_PREFIX,
+    REQ_ID_PREFIX,
+    extract_reply_for_req,
+    is_done_text,
+    make_req_id,
+    strip_done_text,
+    wrap_codex_prompt,
+)
+from provider_core.protocol import strip_trailing_markers
 
 
 def test_make_req_id_format_and_uniqueness() -> None:
@@ -65,3 +73,19 @@ def test_strip_trailing_markers_removes_done_and_harness_trailers() -> None:
     req_id = make_req_id()
     text = f"line1\nline2\n{DONE_PREFIX} {req_id}\nHARNESS_DONE\n\n"
     assert strip_trailing_markers(text) == "line1\nline2"
+
+
+def test_job_id_anchor_is_accepted_by_done_and_extract_helpers() -> None:
+    req_id = "job_123abc"
+    text = (
+        "older\n"
+        "CCB_DONE: job_old\n"
+        "answer line 1\n"
+        "answer line 2\n"
+        f"{DONE_PREFIX} {req_id}\n"
+    )
+
+    assert is_done_text(text, req_id) is True
+    assert strip_done_text(text, req_id) == "older\nCCB_DONE: job_old\nanswer line 1\nanswer line 2"
+    assert extract_reply_for_req(text, req_id) == "answer line 1\nanswer line 2"
+    assert strip_trailing_markers(text) == "older\nCCB_DONE: job_old\nanswer line 1\nanswer line 2"

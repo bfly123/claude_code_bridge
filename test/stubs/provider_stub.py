@@ -7,17 +7,24 @@ import json
 import os
 import re
 import signal
+import shlex
 import sys
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 REQ_ID_RE = re.compile(r"^CCB_REQ_ID:\s*(\S+)")
 DONE_RE = re.compile(r"^CCB_DONE:\s*(\S+)")
+REQUEST_PATH_RE = re.compile(r"@(\S+\.md)\b")
 
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def _delay(provider: str) -> float:
@@ -57,12 +64,155 @@ def _append_jsonl(path: Path, payload: dict) -> None:
         handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
 
 
+def _load_json(path: Path) -> dict:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _iter_hook_commands(provider: str, workspace: Path) -> list[str]:
+    if provider == "gemini":
+        settings = _load_json(workspace / ".gemini" / "settings.json")
+        hooks = settings.get("hooks")
+        groups = hooks.get("AfterAgent") if isinstance(hooks, dict) else None
+        if isinstance(groups, list):
+            return _extract_hook_commands(groups)
+        return []
+    if provider == "claude":
+        settings = _load_json(workspace / ".claude" / "settings.local.json")
+        hooks = settings.get("hooks")
+        groups = hooks.get("Stop") if isinstance(hooks, dict) else None
+        if isinstance(groups, list):
+            return _extract_hook_commands(groups)
+        return []
+    return []
+
+
+def _extract_hook_commands(groups: list[object]) -> list[str]:
+    commands: list[str] = []
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        hooks = group.get("hooks")
+        if not isinstance(hooks, list):
+            continue
+        for hook in hooks:
+            if not isinstance(hook, dict):
+                continue
+            if str(hook.get("type") or "").strip().lower() != "command":
+                continue
+            command = str(hook.get("command") or "").strip()
+            if command:
+                commands.append(command)
+    return commands
+
+
+def _hook_context(provider: str, workspace: Path) -> tuple[Path, str, Path] | None:
+    for command in _iter_hook_commands(provider, workspace):
+        try:
+            parts = shlex.split(command)
+        except Exception:
+            continue
+        completion_dir = ""
+        agent_name = ""
+        workspace_path = ""
+        index = 0
+        while index < len(parts):
+            token = parts[index]
+            if token == "--completion-dir" and index + 1 < len(parts):
+                completion_dir = parts[index + 1]
+                index += 2
+                continue
+            if token == "--agent-name" and index + 1 < len(parts):
+                agent_name = parts[index + 1]
+                index += 2
+                continue
+            if token == "--workspace" and index + 1 < len(parts):
+                workspace_path = parts[index + 1]
+                index += 2
+                continue
+            index += 1
+        if completion_dir and agent_name and workspace_path:
+            return (
+                Path(completion_dir).expanduser(),
+                agent_name,
+                Path(workspace_path).expanduser(),
+            )
+    return None
+
+
+def _write_hook_event(provider: str, workspace: Path, req_id: str, reply: str) -> None:
+    context = _hook_context(provider, workspace)
+    if context is None:
+        return
+    completion_dir, agent_name, workspace_path = context
+    try:
+        repo_root = Path(__file__).resolve().parents[2]
+        sys.path.insert(0, str(repo_root / "lib"))
+        from provider_hooks.artifacts import write_event
+    except Exception:
+        return
+
+    try:
+        write_event(
+            provider=provider,
+            completion_dir=completion_dir,
+            agent_name=agent_name,
+            workspace_path=str(workspace_path),
+            req_id=req_id,
+            status="completed",
+            reply=reply,
+            session_id=f"stub-{provider}-{req_id}",
+            hook_event_name="AfterAgent" if provider == "gemini" else "Stop",
+            diagnostics={"source": "provider_stub"},
+        )
+    except Exception:
+        return
+
+
+def _request_message(prompt: str) -> str:
+    raw = str(prompt or "").strip()
+    if not raw:
+        return ""
+    match = REQUEST_PATH_RE.search(raw)
+    if not match:
+        lines = raw.splitlines()
+        body = [line for line in lines[1:] if line.strip()]
+        return "\n".join(body).strip() or raw
+    request_path = Path(match.group(1)).expanduser()
+    try:
+        return request_path.read_text(encoding="utf-8").strip()
+    except Exception:
+        return raw
+
+
+def _looks_like_exact_turn_prompt(provider: str, line: str, current_lines: list[str], current_req: str) -> bool:
+    if not current_req:
+        return False
+    if provider == "codex":
+        prefix = f"CCB_REQ_ID: {current_req}"
+        if line.startswith(prefix) and line[len(prefix) :].strip():
+            return True
+        if len(current_lines) >= 3 and not current_lines[1].strip() and line.strip():
+            return True
+    if provider == "gemini":
+        return "Execute the full request from @" in line
+    if provider in {"claude", "codex"}:
+        if line.strip():
+            return False
+        body_lines = [item for item in current_lines[1:] if item.strip()]
+        return bool(body_lines)
+    return False
+
+
 def _codex_log_path() -> Path:
     explicit = (os.environ.get("CODEX_LOG_PATH") or "").strip()
     if explicit:
         return Path(explicit).expanduser()
     root = Path(os.environ.get("CODEX_SESSION_ROOT") or (Path.home() / ".codex" / "sessions")).expanduser()
-    sid = (os.environ.get("CODEX_SESSION_ID") or "").strip() or f"stub-{uuid.uuid4().hex}"
+    sid = (os.environ.get("CCB_SESSION_ID") or "").strip() or f"stub-{uuid.uuid4().hex}"
     return root / sid / f"{sid}.jsonl"
 
 
@@ -79,16 +229,48 @@ def _ensure_codex_meta(path: Path, cwd: str) -> None:
 def _handle_codex(req_id: str, prompt: str, delay_s: float) -> None:
     log_path = _codex_log_path()
     _ensure_codex_meta(log_path, os.getcwd())
-    user_entry = {"type": "event_msg", "payload": {"type": "user_message", "message": prompt}}
+    turn_id = f"turn-{req_id}"
+    task_id = f"task-{req_id}"
+    reply = f"stub reply for {req_id}"
+    user_entry = {
+        "timestamp": _now_iso(),
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "user",
+            "turn_id": turn_id,
+            "task_id": task_id,
+            "content": [{"type": "input_text", "text": prompt}],
+        },
+    }
     _append_jsonl(log_path, user_entry)
     if delay_s:
         time.sleep(delay_s)
-    reply = f"stub reply for {req_id}\nCCB_DONE: {req_id}"
     assistant_entry = {
+        "timestamp": _now_iso(),
         "type": "event_msg",
-        "payload": {"type": "assistant_message", "role": "assistant", "message": reply},
+        "payload": {
+            "type": "agent_message",
+            "role": "assistant",
+            "turn_id": turn_id,
+            "task_id": task_id,
+            "phase": "final_answer",
+            "message": reply,
+        },
+    }
+    terminal_entry = {
+        "timestamp": _now_iso(),
+        "type": "event_msg",
+        "payload": {
+            "type": "task_complete",
+            "turn_id": turn_id,
+            "task_id": task_id,
+            "reason": "task_complete",
+            "last_agent_message": reply,
+        },
     }
     _append_jsonl(log_path, assistant_entry)
+    _append_jsonl(log_path, terminal_entry)
 
 
 def _gemini_session_path() -> Path:
@@ -97,7 +279,7 @@ def _gemini_session_path() -> Path:
         return Path(explicit).expanduser()
     root = Path(os.environ.get("GEMINI_ROOT") or (Path.home() / ".gemini" / "tmp")).expanduser()
     project_hash = _project_hash(Path.cwd())
-    sid = (os.environ.get("GEMINI_SESSION_ID") or "").strip() or f"stub-{uuid.uuid4().hex}"
+    sid = (os.environ.get("CCB_SESSION_ID") or "").strip() or f"stub-{uuid.uuid4().hex}"
     return root / project_hash / "chats" / f"session-{sid}.json"
 
 
@@ -151,7 +333,7 @@ def _opencode_ids() -> tuple[str, str]:
     project_id = (os.environ.get("OPENCODE_PROJECT_ID") or "").strip()
     if not project_id:
         project_id = f"proj-{_project_hash(Path.cwd())[:12]}"
-    session_id = (os.environ.get("OPENCODE_SESSION_ID") or "").strip()
+    session_id = (os.environ.get("CCB_SESSION_ID") or "").strip()
     if not session_id:
         session_id = f"ses_{project_id}"
     return project_id, session_id
@@ -215,7 +397,7 @@ def _droid_session_path() -> Path:
         return Path(explicit).expanduser()
     root = _droid_sessions_root()
     slug = _droid_slug(Path.cwd())
-    sid = (os.environ.get("DROID_SESSION_ID") or "").strip() or f"stub-{uuid.uuid4().hex}"
+    sid = (os.environ.get("CCB_SESSION_ID") or "").strip() or f"stub-{uuid.uuid4().hex}"
     return root / slug / f"{sid}.jsonl"
 
 
@@ -277,7 +459,7 @@ def main(argv: list[str]) -> int:
 
     if provider == "gemini":
         gemini_session_path = _gemini_session_path()
-        gemini_session_id = (os.environ.get("GEMINI_SESSION_ID") or "").strip() or f"stub-{uuid.uuid4().hex}"
+        gemini_session_id = (os.environ.get("CCB_SESSION_ID") or "").strip() or f"stub-{uuid.uuid4().hex}"
         gemini_messages = _load_gemini_messages(gemini_session_path)
         _write_gemini_session(gemini_session_path, gemini_session_id, gemini_messages)
     elif provider == "claude":
@@ -295,7 +477,7 @@ def main(argv: list[str]) -> int:
         }
     elif provider == "droid":
         droid_session_path = _droid_session_path()
-        droid_session_id = (os.environ.get("DROID_SESSION_ID") or "").strip() or f"stub-{uuid.uuid4().hex}"
+        droid_session_id = (os.environ.get("CCB_SESSION_ID") or "").strip() or f"stub-{uuid.uuid4().hex}"
         _ensure_droid_session_start(droid_session_path, droid_session_id, os.getcwd())
     elif provider == "copilot":
         copilot_session_id = (os.environ.get("COPILOT_SESSION_ID") or "").strip() or f"stub-{uuid.uuid4().hex}"
@@ -337,13 +519,15 @@ def main(argv: list[str]) -> int:
                 time.sleep(delay_s)
             reply = f"stub reply for {req_id}\nCCB_DONE: {req_id}"
             assert gemini_session_path is not None
-            gemini_messages.append({"type": "user", "content": prompt})
+            gemini_messages.append({"type": "user", "content": _request_message(prompt) or prompt})
             gemini_messages.append({"type": "gemini", "content": reply, "id": f"stub-{len(gemini_messages)}"})
             _write_gemini_session(gemini_session_path, gemini_session_id, gemini_messages)
+            _write_hook_event(provider, Path.cwd(), req_id, f"stub reply for {req_id}")
             return
         if provider == "claude":
             assert claude_session_path is not None
-            _handle_claude(req_id, prompt, delay_s, claude_session_path)
+            _handle_claude(req_id, _request_message(prompt) or prompt, delay_s, claude_session_path)
+            _write_hook_event(provider, Path.cwd(), req_id, f"stub reply for {req_id}")
             return
         if provider == "opencode":
             assert opencode_state is not None
@@ -397,6 +581,13 @@ def main(argv: list[str]) -> int:
             req_id = current_req or m_done.group(1).strip()
             prompt = "\n".join(current_lines).strip()
             _handle_request(req_id, prompt)
+            current_lines = []
+            current_req = ""
+            continue
+
+        if _looks_like_exact_turn_prompt(provider, line, current_lines, current_req):
+            prompt = "\n".join(current_lines).strip()
+            _handle_request(current_req, prompt)
             current_lines = []
             current_req = ""
 

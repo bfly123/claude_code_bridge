@@ -1,31 +1,26 @@
 ---
 name: ping
-description: Test connectivity with AI provider (gemini/codex/opencode/droid/claude).
+description: Inspect CCB control-plane health for a named agent or `ccbd`.
 metadata:
-  short-description: Test AI provider connectivity
+  short-description: Inspect CCB health
 ---
 
-# Ping AI Provider
+# Ping Agent
 
-Test connectivity with specified AI provider.
+Inspect project control-plane health for a named agent or for `ccbd`.
 
 ## Usage
 
-The first argument must be the provider name:
-- `gemini` - Test Gemini
-- `codex` - Test Codex
-- `opencode` - Test OpenCode
-- `droid` - Test Droid
-- `claude` - Test Claude
+The first argument must be an agent name from `.ccb/ccb.config`, or `ccbd`.
 
 ## Execution (MANDATORY)
 
 ```bash
-ccb-ping $ARGUMENTS
+ccb ping $ARGUMENTS
 ```
 
 ## Examples
 
-- `/ping gemini`
-- `/ping codex`
-- `/ping claude`
+- `/ping agent1`
+- `/ping agent3`
+- `/ping ccbd`

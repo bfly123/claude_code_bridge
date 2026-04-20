@@ -24,17 +24,10 @@ $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 # Constants
 $script:CCB_START_MARKER = "<!-- CCB_CONFIG_START -->"
 $script:CCB_END_MARKER = "<!-- CCB_CONFIG_END -->"
-$script:CCB_WEZTERM_START_MARKER = "-- CCB_WEZTERM_START"
-$script:CCB_WEZTERM_END_MARKER = "-- CCB_WEZTERM_END"
 
 $script:SCRIPTS_TO_LINK = @(
   "ccb",
-  "cask", "cpend", "cping",
-  "gask", "gpend", "gping",
-  "oask", "opend", "oping",
-  "lask", "lpend", "lping",
-  "dask", "dpend", "dping",
-  "ask", "ccb-ping", "pend", "autonew", "ccb-completion-hook", "maild"
+  "ask", "autonew", "ctx-transfer"
 )
 
 $script:CLAUDE_MARKDOWN = @(
@@ -93,8 +86,8 @@ function Show-Usage {
 
 function Find-Python {
   if (Get-Command py -ErrorAction SilentlyContinue) { return "py -3" }
-  if (Get-Command python -ErrorAction SilentlyContinue) { return (Get-Command python).Source }
-  if (Get-Command python3 -ErrorAction SilentlyContinue) { return (Get-Command python3).Source }
+  if (Get-Command python -ErrorAction SilentlyContinue) { return "python" }
+  if (Get-Command python3 -ErrorAction SilentlyContinue) { return "python3" }
   return $null
 }
 
@@ -253,12 +246,7 @@ function Install-Native {
 
   $scripts = @(
     "ccb",
-    "cask", "cping", "cpend",
-    "gask", "gping", "gpend",
-    "oask", "oping", "opend",
-    "lask", "lping", "lpend",
-    "dask", "dping", "dpend",
-    "ask", "ccb-ping", "pend", "autonew", "ccb-completion-hook", "maild"
+    "ask", "autonew", "ctx-transfer"
   )
 
   # In MSYS/Git-Bash, invoking the script file directly will honor the shebang.
@@ -354,15 +342,9 @@ function Install-Native {
   Install-DroidDelegation -PythonCmd $pythonCmd -InstallPrefix $InstallPrefix
   Cleanup-LegacyFiles -InstallPrefix $InstallPrefix
 
-  try {
-    Set-WezTermDefaultShellToPowerShell
-  } catch {
-    Write-Warning "WezTerm configuration skipped: $_"
-  }
-
   Write-Host ""
   Write-Host "Installation complete!"
-  Write-Host "Restart your terminal (WezTerm) for PATH changes to take effect."
+  Write-Host "Restart your terminal for PATH changes to take effect."
   Write-Host ""
   Write-Host "Quick start:"
   Write-Host "  ccb             # Start providers from ccb.config (default: all four)"
@@ -372,7 +354,7 @@ function Install-Native {
   Write-Host "  ccb claude      # Start with Claude backend"
 }
 
-# Clean up legacy daemon files (replaced by unified askd)
+# Clean up legacy daemon files from the pre-ccbd era
 function Cleanup-LegacyFiles {
   param([string]$InstallPrefix)
 
@@ -655,7 +637,7 @@ function Install-ClaudeConfig {
   } # end claudeMdTemplate check
 
   $allowList = @(
-    "Bash(ask:*)", "Bash(ccb-ping:*)", "Bash(pend:*)"
+    "Bash(ccb ask *)", "Bash(ccb ping *)", "Bash(ccb pend *)"
   )
 
   if (Test-Path $settingsJson) {
@@ -731,105 +713,6 @@ function Install-ClaudeConfig {
   }
 }
 
-function Set-WezTermDefaultShellToPowerShell {
-  $weztermCandidates = @(
-    (Join-Path $env:USERPROFILE ".wezterm.lua"),
-    (Join-Path $env:USERPROFILE ".config\\wezterm\\wezterm.lua")
-  )
-  $weztermConfig = $weztermCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-  if (-not $weztermConfig) {
-    Write-Host "WezTerm config not found; skipping default shell configuration."
-    Write-Host "  Checked:"
-    $weztermCandidates | ForEach-Object { Write-Host "   - $_" }
-    return
-  }
-
-  $pwsh = Get-Command pwsh.exe -ErrorAction SilentlyContinue
-  $powershell = Get-Command powershell.exe -ErrorAction SilentlyContinue
-  if ($pwsh) {
-    $shellExe = "pwsh.exe"
-    $fallbackExe = "powershell.exe"
-  } elseif ($powershell) {
-    $shellExe = "powershell.exe"
-    $fallbackExe = "pwsh.exe"
-  } else {
-    Write-Warning "PowerShell not found; skipping WezTerm configuration."
-    return
-  }
-
-  $content = Get-Content -Raw -Path $weztermConfig
-  $hasDefaultProg = $content -match "default_prog\\s*="
-  if ($hasDefaultProg) {
-    return
-  }
-  $hasConfigVar = ($content -match "(?m)^\\s*(local\\s+)?config\\s*=") -or ($content -match "(?m)^\\s*return\\s+config\\s*$")
-  if (-not $hasConfigVar) {
-    Write-Warning "WezTerm config doesn't appear to use a 'config' variable; skipping automatic edit."
-    Write-Host "Suggested snippet to add before your return statement:"
-    Write-Host "  config.default_prog = { '$shellExe' }"
-    return
-  }
-
-  $block = @"
-$($script:CCB_WEZTERM_START_MARKER)
--- Set default shell to PowerShell (installed by ccb)
-config.default_prog = { '$shellExe' }
--- Fallback (if '$shellExe' is not available): config.default_prog = { '$fallbackExe' }
-$($script:CCB_WEZTERM_END_MARKER)
-"@
-
-  $alreadyPowerShell = $content -match "default_prog\\s*=\\s*\\{\\s*'?(pwsh\\.exe|powershell\\.exe)'?\\s*\\}"
-
-  $shouldApply = $false
-  if ($content -match [regex]::Escape($script:CCB_WEZTERM_START_MARKER)) {
-    $shouldApply = $true
-  } elseif (-not $hasDefaultProg) {
-    $shouldApply = $true
-  } elseif ($alreadyPowerShell) {
-    Write-Host "WezTerm default_prog already configured for PowerShell."
-    return
-  } else {
-    if ($Yes -or $env:CCB_INSTALL_ASSUME_YES -eq "1") {
-      $shouldApply = $true
-    } elseif ([Environment]::UserInteractive) {
-      $reply = Read-Host "WezTerm default_prog is already configured. Override to '$shellExe'? (y/N)"
-      if ($reply.Trim().ToLower() -in @("y", "yes")) {
-        $shouldApply = $true
-      }
-    }
-  }
-
-  if ($shouldApply) {
-    if ($content -match [regex]::Escape($script:CCB_WEZTERM_START_MARKER)) {
-      $pattern = "(?s)\\Q$($script:CCB_WEZTERM_START_MARKER)\\E.*?\\Q$($script:CCB_WEZTERM_END_MARKER)\\E"
-      $newContent = [regex]::Replace($content, $pattern, $block)
-    } elseif ($content -match "(?m)^\\s*return\\s+config\\s*$") {
-      $newContent = [regex]::Replace($content, "(?m)^\\s*return\\s+config\\s*$", ($block + "`r`nreturn config"))
-    } else {
-      $newContent = ($content.TrimEnd() + "`r`n`r`n" + $block + "`r`n")
-    }
-
-    [System.IO.File]::WriteAllText($weztermConfig, $newContent, $script:utf8NoBom)
-    Write-Host "✓ WezTerm configured to use $shellExe ($weztermConfig)"
-  } else {
-    if ($hasDefaultProg -and -not $alreadyPowerShell -and ($content -notmatch "(?m)^\\s*--\\s*ccb:\\s*To use PowerShell as default shell")) {
-      $hint = @"
--- ccb: To use PowerShell as default shell, set:
--- config.default_prog = { '$shellExe' }
-"@
-      if ($content -match "(?m)^\\s*return\\s+config\\s*$") {
-        $newContent = [regex]::Replace($content, "(?m)^\\s*return\\s+config\\s*$", ($hint + "`r`nreturn config"))
-      } else {
-        $newContent = ($content.TrimEnd() + "`r`n`r`n" + $hint + "`r`n")
-      }
-      [System.IO.File]::WriteAllText($weztermConfig, $newContent, $script:utf8NoBom)
-      Write-Host "WezTerm default_prog not changed; added a comment hint to $weztermConfig"
-      return
-    }
-    Write-Host "WezTerm default_prog not changed."
-  }
-}
-
 function Uninstall-Native {
   $binDir = Join-Path $InstallPrefix "bin"
 
@@ -854,7 +737,7 @@ function Uninstall-Native {
 
   # 3. Remove Claude skills
   $claudeSkillsDir = Join-Path $env:USERPROFILE ".claude\skills"
-  $ccbSkills = @("ask", "cping", "ping", "pend", "autonew", "mounted", "all-plan", "docs")
+  $ccbSkills = @("ask", "ping", "pend", "autonew", "all-plan", "docs")
   if (Test-Path $claudeSkillsDir) {
     Write-Host "Removing CCB Claude skills..."
     foreach ($skill in $ccbSkills) {
@@ -883,7 +766,10 @@ function Uninstall-Native {
   # 5. Remove settings.json permissions
   $settingsFile = Join-Path $env:USERPROFILE ".claude\settings.json"
   if (Test-Path $settingsFile) {
-    $permsToRemove = @("Bash(ask:*)", "Bash(ping:*)", "Bash(ccb-ping:*)", "Bash(pend:*)")
+    $permsToRemove = @(
+      "Bash(ccb ask *)", "Bash(ccb ping *)", "Bash(ccb pend *)",
+      "Bash(ask:*)", "Bash(ping:*)", "Bash(ccb-ping:*)", "Bash(pend:*)"
+    )
     try {
       $settings = Get-Content $settingsFile -Raw -Encoding UTF8 | ConvertFrom-Json
       if ($settings.permissions -and $settings.permissions.allow) {
@@ -924,20 +810,6 @@ function Uninstall-Native {
         Remove-Item -Recurse -Force $skillPath
         Write-Host "  Removed skill: $skill"
       }
-    }
-  }
-
-  # 8. Remove WezTerm config block
-  $weztermConfig = Join-Path $env:USERPROFILE ".wezterm.lua"
-  if (Test-Path $weztermConfig) {
-    $content = Get-Content $weztermConfig -Raw -Encoding UTF8
-    if ($content -match $script:CCB_WEZTERM_START_MARKER) {
-      Write-Host "Removing CCB config from .wezterm.lua..."
-      $pattern = "(?s)\r?\n?$([regex]::Escape($script:CCB_WEZTERM_START_MARKER)).*?$([regex]::Escape($script:CCB_WEZTERM_END_MARKER))\r?\n?"
-      $content = $content -replace $pattern, "`n"
-      $content = $content.Trim() + "`n"
-      [System.IO.File]::WriteAllText($weztermConfig, $content, $script:utf8NoBom)
-      Write-Host "  Removed CCB WezTerm config block"
     }
   }
 

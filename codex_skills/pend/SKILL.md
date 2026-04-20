@@ -1,33 +1,30 @@
 ---
 name: pend
-description: View latest reply from AI provider (gemini/codex/opencode/droid/claude).
+description: Inspect the latest CCB mailbox/job reply for a named agent or `job_id`.
 metadata:
-  short-description: View latest AI provider reply
+  short-description: Inspect CCB reply
 ---
 
-# Pend - View Latest Reply
+# Pend Job Or Agent
 
-View the latest reply from specified AI provider.
+Inspect the latest mailbox/job reply for a named agent or a specific `job_id`.
 
 ## Usage
 
-The first argument must be the provider name:
-- `gemini` - View Gemini reply
-- `codex` - View Codex reply
-- `opencode` - View OpenCode reply
-- `droid` - View Droid reply
-- `claude` - View Claude reply
+The first argument must be:
+- an agent name from `.ccb/ccb.config`, or
+- a `job_id`
 
 Optional: Add a number N to show the latest N conversations.
 
 ## Execution (MANDATORY)
 
 ```bash
-pend $ARGUMENTS
+ccb pend $ARGUMENTS
 ```
 
 ## Examples
 
-- `/pend gemini`
-- `/pend codex 3`
-- `/pend claude`
+- `/pend agent1`
+- `/pend agent2 3`
+- `/pend job_1234567890ab`

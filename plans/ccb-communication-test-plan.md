@@ -106,7 +106,7 @@ Tests generate isolated project roots, start providers/daemons with stub CLIs, s
 - Strict `.ccb` anchoring means tests must never rely on ancestor traversal.
 - Deterministic stubs should simulate ask/ping/pend contracts and produce realistic logs/state files.
 - Queueing validation must measure ordering and latency without flaky sleeps (use polling with timeouts).
-- tmux/WezTerm dependencies should be minimized in tests that do not require panes.
+- tmux dependencies should be minimized in tests that do not require panes.
 - Stress thresholds should be configurable via env vars for different machines.
 
 ---

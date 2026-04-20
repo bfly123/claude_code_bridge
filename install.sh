@@ -59,14 +59,11 @@ msg() {
       en_msg="Detected WSL environment"
       zh_msg="检测到 WSL 环境" ;;
     same_env_required)
-      en_msg="ccb/ask/ping/pend must run in the same environment as codex/gemini."
-      zh_msg="ccb/ask/ping/pend 必须与 codex/gemini 在同一环境运行。" ;;
+      en_msg="ccb, ccb ask, ccb ping, and ccb pend must run in the same environment as codex/gemini."
+      zh_msg="ccb、ccb ask、ccb ping、ccb pend 必须与 codex/gemini 在同一环境运行。" ;;
     confirm_wsl_native)
       en_msg="Please confirm: you will install and run codex/gemini in WSL (not Windows native)."
       zh_msg="请确认：你将在 WSL 中安装并运行 codex/gemini（不是 Windows 原生）。" ;;
-    wezterm_recommended)
-      en_msg="Recommend installing WezTerm as terminal frontend"
-      zh_msg="推荐安装 WezTerm 作为终端前端" ;;
     watchdog_installing)
       en_msg="Installing Python dependency: watchdog"
       zh_msg="正在安装 Python 依赖: watchdog" ;;
@@ -82,6 +79,21 @@ msg() {
     root_error)
       en_msg="ERROR: Do not run as root/sudo. Please run as normal user."
       zh_msg="错误：请勿以 root/sudo 身份运行。请使用普通用户执行。" ;;
+    install_notice_source_title)
+      en_msg="WARN: Development/source install detected"
+      zh_msg="警告：检测到开发源码安装" ;;
+    install_notice_source_body)
+      en_msg="This is a development install, not an official release package."
+      zh_msg="这是开发安装，不是正式 release 包。" ;;
+    install_notice_release)
+      en_msg="INFO: Official release package install detected"
+      zh_msg="信息：检测到正式 release 包安装" ;;
+    install_notice_preview_title)
+      en_msg="WARN: Preview release package install detected"
+      zh_msg="警告：检测到预览版 release 包安装" ;;
+    install_notice_preview_body)
+      en_msg="This package was built from a preview/dirty source snapshot, not an official stable release."
+      zh_msg="该安装包来自预览或脏工作区快照，不是正式稳定 release。" ;;
     *)
       en_msg="$key"
       zh_msg="$key" ;;
@@ -100,36 +112,8 @@ if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
 fi
 
 SCRIPTS_TO_LINK=(
-  bin/cask
-  bin/cpend
-  bin/cping
-  bin/gask
-  bin/gpend
-  bin/gping
-  bin/oask
-  bin/opend
-  bin/oping
-  bin/lask
-  bin/lpend
-  bin/lping
-  bin/dask
-  bin/dpend
-  bin/dping
-  bin/hask
-  bin/hpend
-  bin/hping
-  bin/bask
-  bin/bpend
-  bin/bping
-  bin/qask
-  bin/qpend
-  bin/qping
   bin/ask
-  bin/ccb-ping
-  bin/pend
   bin/autonew
-  bin/ccb-completion-hook
-  bin/maild
   bin/ctx-transfer
   ccb
 )
@@ -139,7 +123,34 @@ CLAUDE_MARKDOWN=(
 )
 
 LEGACY_SCRIPTS=(
+  bask
+  bpend
+  bping
+  cask
+  cpend
+  cping
+  ccb-mounted
+  ccb-ping
   ping
+  dask
+  dpend
+  dping
+  gask
+  gpend
+  gping
+  hask
+  hpend
+  hping
+  lask
+  lpend
+  lping
+  oask
+  opend
+  oping
+  pend
+  qask
+  qpend
+  qping
   cast
   cast-w
   codex-ask
@@ -168,6 +179,12 @@ Optional environment variables:
   CODEX_CLAUDE_COMMAND_DIR Custom Claude commands directory (default: auto-detect)
   CCB_DROID_AUTOINSTALL    Auto-register Droid MCP tools if droid exists (default: 1)
   CCB_DROID_AUTOINSTALL_FORCE Re-register Droid MCP tools (default: 0)
+  CCB_BUILD_CHANNEL        Override build channel metadata (e.g. stable, preview, dev)
+  CCB_BUILD_PLATFORM       Override build platform metadata (default: detected platform)
+  CCB_BUILD_ARCH           Override build arch metadata (default: uname -m)
+  CCB_BUILD_TIME           Override build timestamp metadata (default: current UTC time)
+  CCB_SOURCE_KIND          Override source kind metadata (default: source if .git exists, else release)
+  CCB_CONFIRM_MAJOR_UPGRADE Set to 1 to confirm replacing a pre-v6 install with v6+
   CCB_CLAUDE_MD_MODE       CLAUDE.md injection mode: "inline" (default) or "route"
                            inline = full config in CLAUDE.md (~57 lines)
                            route  = minimal pointer in CLAUDE.md, full config in ~/.claude/rules/ccb-config.md
@@ -348,6 +365,305 @@ get_wsl_version() {
   fi
 }
 
+current_utc_timestamp() {
+  date -u +"%Y-%m-%dT%H:%M:%SZ"
+}
+
+read_embedded_assignment() {
+  local file="$1"
+  local key="$2"
+  if [[ ! -f "$file" ]]; then
+    return 0
+  fi
+  if ! pick_any_python_bin; then
+    return 0
+  fi
+  "$PYTHON_BIN" - <<PY
+from pathlib import Path
+
+text = Path("$file").read_text(encoding="utf-8", errors="replace")
+target = "${key}"
+for raw_line in text.splitlines():
+    line = raw_line.strip()
+    if "=" not in line:
+        continue
+    name, value = line.split("=", 1)
+    if name.strip() != target:
+        continue
+    resolved = value.strip().strip('"').strip("'")
+    if resolved:
+        print(resolved)
+    break
+PY
+}
+
+read_source_build_info_field() {
+  local key="$1"
+  if [[ ! -f "$REPO_ROOT/BUILD_INFO.json" ]]; then
+    return 0
+  fi
+  if ! pick_any_python_bin; then
+    return 0
+  fi
+  "$PYTHON_BIN" - <<PY
+from pathlib import Path
+import json
+
+payload = json.loads(Path("$REPO_ROOT/BUILD_INFO.json").read_text(encoding="utf-8", errors="replace"))
+value = payload.get("${key}") if isinstance(payload, dict) else None
+if value not in (None, ""):
+    print(str(value).strip())
+PY
+}
+
+resolve_install_version() {
+  if [[ -n "${CCB_BUILD_VERSION:-}" ]]; then
+    echo "$CCB_BUILD_VERSION"
+    return
+  fi
+  local build_info_version
+  build_info_version="$(read_source_build_info_field "version")"
+  if [[ -n "$build_info_version" ]]; then
+    echo "$build_info_version"
+    return
+  fi
+  if [[ -f "$REPO_ROOT/VERSION" ]]; then
+    tr -d '[:space:]' < "$REPO_ROOT/VERSION"
+    return
+  fi
+  read_embedded_assignment "$REPO_ROOT/ccb" "VERSION"
+}
+
+resolve_source_kind() {
+  if [[ -n "${CCB_SOURCE_KIND:-}" ]]; then
+    echo "$CCB_SOURCE_KIND"
+    return
+  fi
+  local build_info_source_kind
+  build_info_source_kind="$(read_source_build_info_field "source_kind")"
+  if [[ -n "$build_info_source_kind" ]]; then
+    echo "$build_info_source_kind"
+    return
+  fi
+  if [[ -d "$REPO_ROOT/.git" ]]; then
+    echo "source"
+  else
+    echo "release"
+  fi
+}
+
+resolve_build_channel() {
+  if [[ -n "${CCB_BUILD_CHANNEL:-}" ]]; then
+    echo "$CCB_BUILD_CHANNEL"
+    return
+  fi
+  local build_info_channel
+  build_info_channel="$(read_source_build_info_field "channel")"
+  if [[ -n "$build_info_channel" ]]; then
+    echo "$build_info_channel"
+    return
+  fi
+  local source_kind
+  source_kind="$(resolve_source_kind)"
+  if [[ "$source_kind" == "source" ]]; then
+    echo "dev"
+  else
+    echo "stable"
+  fi
+}
+
+resolve_install_mode() {
+  local source_kind
+  source_kind="$(resolve_source_kind)"
+  if [[ "$source_kind" == "source" ]]; then
+    echo "source"
+  else
+    echo "release"
+  fi
+}
+
+read_simple_json_string_field() {
+  local file="$1"
+  local key="$2"
+  if [[ ! -f "$file" ]]; then
+    return 0
+  fi
+  grep -o "\"${key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$file" 2>/dev/null | head -1 | sed -E "s/.*:[[:space:]]*\"([^\"]*)\"/\1/"
+}
+
+read_installed_version() {
+  if [[ -f "$INSTALL_PREFIX/VERSION" ]]; then
+    tr -d '[:space:]' < "$INSTALL_PREFIX/VERSION"
+    return
+  fi
+  local build_info_version
+  build_info_version="$(read_simple_json_string_field "$INSTALL_PREFIX/BUILD_INFO.json" "version")"
+  if [[ -n "$build_info_version" ]]; then
+    echo "$build_info_version"
+    return
+  fi
+  if [[ -f "$INSTALL_PREFIX/ccb" ]]; then
+    sed -n 's/^VERSION[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' "$INSTALL_PREFIX/ccb" | head -1
+  fi
+}
+
+version_major() {
+  local version_text="${1:-}"
+  if [[ "$version_text" =~ ^([0-9]+)(\..*)?$ ]]; then
+    echo "${BASH_REMATCH[1]}"
+  fi
+}
+
+require_major_upgrade_confirmation() {
+  local target_version existing_version target_major existing_major
+  target_version="$(resolve_install_version)"
+  existing_version="$(read_installed_version)"
+
+  if [[ -z "$target_version" || -z "$existing_version" ]]; then
+    return 0
+  fi
+
+  target_major="$(version_major "$target_version")"
+  existing_major="$(version_major "$existing_version")"
+  if [[ -z "$target_major" || -z "$existing_major" ]]; then
+    return 0
+  fi
+
+  if (( target_major < 6 || existing_major >= 6 )); then
+    return 0
+  fi
+
+  if [[ "${CCB_CONFIRM_MAJOR_UPGRADE:-}" == "1" || "${CCB_INSTALL_ASSUME_YES:-}" == "1" ]]; then
+    return 0
+  fi
+
+  echo
+  echo "================================================================"
+  echo "WARN: Major upgrade confirmation required"
+  echo "================================================================"
+  echo "Detected existing install : v$existing_version"
+  echo "Incoming install version  : v$target_version"
+  echo
+  echo "CCB v6 replaces the old source-era update path and rebuilds runtime behavior."
+  echo "To avoid accidental upgrades, this install stops until you confirm explicitly."
+  echo
+  echo "Continue options:"
+  echo "  1. Interactive shell: rerun and answer the prompt"
+  echo "  2. Non-interactive : CCB_CONFIRM_MAJOR_UPGRADE=1 ccb update"
+  echo "  3. Direct install  : CCB_CONFIRM_MAJOR_UPGRADE=1 ./install.sh install"
+  echo "================================================================"
+
+  if [[ ! -t 0 ]]; then
+    echo "ERROR: Aborting major upgrade in non-interactive mode without confirmation."
+    return 1
+  fi
+
+  local reply
+  read -r -p "Confirm replacing the existing pre-v6 install with CCB v${target_version}? (y/N): " reply
+  case "$reply" in
+    y|Y|yes|YES)
+      return 0
+      ;;
+    *)
+      echo "Installation cancelled"
+      return 1
+      ;;
+  esac
+}
+
+print_install_identity_summary() {
+  local install_mode source_kind channel version
+  install_mode="$(resolve_install_mode)"
+  source_kind="$(resolve_source_kind)"
+  channel="$(resolve_build_channel)"
+  version="$(resolve_install_version)"
+  echo "   install_mode=$install_mode"
+  echo "   source_kind=$source_kind"
+  echo "   channel=$channel"
+  if [[ -n "$version" ]]; then
+    echo "   version=$version"
+  fi
+}
+
+print_install_identity_notice() {
+  local source_kind
+  source_kind="$(resolve_source_kind)"
+  case "$source_kind" in
+    source)
+      msg install_notice_source_title
+      echo "   $(msg install_notice_source_body)"
+      ;;
+    preview)
+      msg install_notice_preview_title
+      echo "   $(msg install_notice_preview_body)"
+      ;;
+    *)
+      msg install_notice_release
+      ;;
+  esac
+}
+
+write_install_metadata() {
+  local version commit date build_time installed_at platform_name arch_name channel source_kind install_mode
+  version="$(resolve_install_version)"
+  commit="$(read_embedded_assignment "$INSTALL_PREFIX/ccb" "GIT_COMMIT")"
+  date="$(read_embedded_assignment "$INSTALL_PREFIX/ccb" "GIT_DATE")"
+  if [[ -z "$commit" ]]; then
+    commit="$(read_source_build_info_field "commit")"
+  fi
+  if [[ -z "$date" ]]; then
+    date="$(read_source_build_info_field "date")"
+  fi
+  build_time="${CCB_BUILD_TIME:-$(read_source_build_info_field "build_time")}"
+  if [[ -z "$build_time" ]]; then
+    build_time="$(current_utc_timestamp)"
+  fi
+  installed_at="$(current_utc_timestamp)"
+  platform_name="${CCB_BUILD_PLATFORM:-$(read_source_build_info_field "platform")}"
+  if [[ -z "$platform_name" ]]; then
+    platform_name="$(detect_platform)"
+  fi
+  arch_name="${CCB_BUILD_ARCH:-$(read_source_build_info_field "arch")}"
+  if [[ -z "$arch_name" ]]; then
+    arch_name="$(uname -m 2>/dev/null || echo unknown)"
+  fi
+  source_kind="$(resolve_source_kind)"
+  channel="$(resolve_build_channel)"
+  install_mode="$(resolve_install_mode)"
+
+  if ! pick_any_python_bin; then
+    echo "WARN: python required to write VERSION/BUILD_INFO metadata"
+    return
+  fi
+
+  "$PYTHON_BIN" - <<PY
+from pathlib import Path
+import json
+
+install_prefix = Path("$INSTALL_PREFIX")
+payload = {
+    "version": ${version@Q},
+    "commit": ${commit@Q},
+    "date": ${date@Q},
+    "build_time": ${build_time@Q},
+    "platform": ${platform_name@Q},
+    "arch": ${arch_name@Q},
+    "channel": ${channel@Q},
+    "source_kind": ${source_kind@Q},
+    "install_mode": ${install_mode@Q},
+    "installed_at": ${installed_at@Q},
+}
+
+version_text = str(payload["version"] or "").strip()
+if version_text:
+    (install_prefix / "VERSION").write_text(version_text + "\\n", encoding="utf-8")
+(install_prefix / "BUILD_INFO.json").write_text(
+    json.dumps(payload, ensure_ascii=True, indent=2) + "\\n",
+    encoding="utf-8",
+)
+PY
+}
+
 check_wsl_compatibility() {
   if is_wsl; then
     local ver
@@ -427,72 +743,22 @@ print_tmux_install_hint() {
 require_terminal_backend() {
   local platform
   platform="$(detect_platform)"
-  local wezterm_override="${CODEX_WEZTERM_BIN:-${WEZTERM_BIN:-}}"
 
   if [[ "$platform" == "macos" ]] && ! command -v brew >/dev/null 2>&1; then
     echo "WARN: Homebrew not found on macOS. Install from https://brew.sh before installing tmux and other dependencies."
   fi
 
-  # ============================================
-  # Prioritize detecting current environment
-  # ============================================
-
-  # 1. If running in WezTerm environment
-  if [[ -n "${WEZTERM_PANE:-}" ]]; then
-    if [[ -n "${wezterm_override}" ]] && { command -v "${wezterm_override}" >/dev/null 2>&1 || [[ -f "${wezterm_override}" ]]; }; then
-      echo "OK: Detected WezTerm environment (${wezterm_override})"
-      return
-    fi
-    if command -v wezterm >/dev/null 2>&1 || command -v wezterm.exe >/dev/null 2>&1; then
-      echo "OK: Detected WezTerm environment"
-      return
-    fi
-  fi
-  # 2. If running in tmux environment
   if [[ -n "${TMUX:-}" ]]; then
     echo "OK: Detected tmux environment"
     return
   fi
 
-  # ============================================
-  # Not in specific environment, detect by availability
-  # ============================================
-
-  # 3. Check WezTerm environment variable override
-  if [[ -n "${wezterm_override}" ]]; then
-    if command -v "${wezterm_override}" >/dev/null 2>&1 || [[ -f "${wezterm_override}" ]]; then
-      echo "OK: Detected WezTerm (${wezterm_override})"
-      return
-    fi
-  fi
-
-  # 4. Check WezTerm command
-  if command -v wezterm >/dev/null 2>&1 || command -v wezterm.exe >/dev/null 2>&1; then
-    echo "OK: Detected WezTerm"
-    return
-  fi
-
-  # WSL: Windows PATH may not be injected, try common install paths
-  if [[ -f "/proc/version" ]] && grep -qi microsoft /proc/version 2>/dev/null; then
-    if [[ -x "/mnt/c/Program Files/WezTerm/wezterm.exe" ]] || [[ -f "/mnt/c/Program Files/WezTerm/wezterm.exe" ]]; then
-      echo "OK: Detected WezTerm (/mnt/c/Program Files/WezTerm/wezterm.exe)"
-      return
-    fi
-    if [[ -x "/mnt/c/Program Files (x86)/WezTerm/wezterm.exe" ]] || [[ -f "/mnt/c/Program Files (x86)/WezTerm/wezterm.exe" ]]; then
-      echo "OK: Detected WezTerm (/mnt/c/Program Files (x86)/WezTerm/wezterm.exe)"
-      return
-    fi
-  fi
-
-  # 5. Check tmux
   if command -v tmux >/dev/null 2>&1; then
-    echo "OK: Detected tmux (recommend also installing WezTerm for better experience)"
+    echo "OK: Detected tmux"
     return
   fi
 
-  # 6. No terminal multiplexer found
-  echo "ERROR: Missing dependency: WezTerm or tmux (at least one required)"
-  echo "   WezTerm website: https://wezfurlong.org/wezterm/"
+  echo "ERROR: Missing dependency: tmux"
 
   if [[ "$platform" == "macos" ]]; then
     echo
@@ -502,53 +768,6 @@ require_terminal_backend() {
 
   print_tmux_install_hint
   exit 1
-}
-
-has_wezterm() {
-  local wezterm_override="${CODEX_WEZTERM_BIN:-${WEZTERM_BIN:-}}"
-  if [[ -n "${wezterm_override}" ]]; then
-    command -v "${wezterm_override}" >/dev/null 2>&1 || [[ -f "${wezterm_override}" ]] && return 0
-  fi
-  command -v wezterm >/dev/null 2>&1 && return 0
-  command -v wezterm.exe >/dev/null 2>&1 && return 0
-  if [[ -f "/proc/version" ]] && grep -qi microsoft /proc/version 2>/dev/null; then
-    [[ -f "/mnt/c/Program Files/WezTerm/wezterm.exe" ]] && return 0
-    [[ -f "/mnt/c/Program Files (x86)/WezTerm/wezterm.exe" ]] && return 0
-  fi
-  return 1
-}
-
-detect_wezterm_path() {
-  local wezterm_override="${CODEX_WEZTERM_BIN:-${WEZTERM_BIN:-}}"
-  if [[ -n "${wezterm_override}" ]] && [[ -f "${wezterm_override}" ]]; then
-    echo "${wezterm_override}"
-    return
-  fi
-  local found
-  found="$(command -v wezterm 2>/dev/null)" && [[ -n "$found" ]] && echo "$found" && return
-  found="$(command -v wezterm.exe 2>/dev/null)" && [[ -n "$found" ]] && echo "$found" && return
-  if is_wsl; then
-    for drive in c d e f; do
-      for path in "/mnt/${drive}/Program Files/WezTerm/wezterm.exe" \
-                  "/mnt/${drive}/Program Files (x86)/WezTerm/wezterm.exe"; do
-        if [[ -f "$path" ]]; then
-          echo "$path"
-          return
-        fi
-      done
-    done
-  fi
-}
-
-save_wezterm_config() {
-  local wezterm_path
-  wezterm_path="$(detect_wezterm_path)"
-  if [[ -n "$wezterm_path" ]]; then
-    local cfg_root="${XDG_CONFIG_HOME:-$HOME/.config}"
-    mkdir -p "$cfg_root/ccb"
-    echo "CODEX_WEZTERM_BIN=${wezterm_path}" > "$cfg_root/ccb/env"
-    echo "OK: WezTerm path cached: $wezterm_path"
-  fi
 }
 
 copy_project() {
@@ -586,19 +805,31 @@ copy_project() {
   # Update GIT_COMMIT and GIT_DATE in ccb file
   local git_commit="" git_date=""
 
-  # Method 1: From git repo
-  if command -v git >/dev/null 2>&1 && [[ -d "$REPO_ROOT/.git" ]]; then
+  # Method 1: From git repo or git worktree
+  if command -v git >/dev/null 2>&1 && git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     git_commit=$(git -C "$REPO_ROOT" log -1 --format='%h' 2>/dev/null || echo "")
     git_date=$(git -C "$REPO_ROOT" log -1 --format='%cs' 2>/dev/null || echo "")
   fi
 
-  # Method 2: From environment variables (set by ccb update)
+  # Method 2: From source BUILD_INFO.json (release artifact source of truth)
+  if [[ -z "$git_commit" ]]; then
+    git_commit="$(read_source_build_info_field "commit")"
+    git_date="$(read_source_build_info_field "date")"
+  fi
+
+  # Method 3: From environment variables (set by ccb update)
   if [[ -z "$git_commit" && -n "${CCB_GIT_COMMIT:-}" ]]; then
     git_commit="$CCB_GIT_COMMIT"
     git_date="${CCB_GIT_DATE:-}"
   fi
 
-  # Method 3: From GitHub API (fallback)
+  # Method 4: From embedded package metadata
+  if [[ -z "$git_commit" && -f "$INSTALL_PREFIX/ccb" ]]; then
+    git_commit=$(sed -n 's/^GIT_COMMIT = "\(.*\)"/\1/p' "$INSTALL_PREFIX/ccb" | head -1)
+    git_date=$(sed -n 's/^GIT_DATE = "\(.*\)"/\1/p' "$INSTALL_PREFIX/ccb" | head -1)
+  fi
+
+  # Method 5: From GitHub API (fallback)
   if [[ -z "$git_commit" ]] && command -v curl >/dev/null 2>&1; then
     local api_response
     api_response=$(curl -fsSL "https://api.github.com/repos/bfly123/claude_code_bridge/commits/main" 2>/dev/null || echo "")
@@ -686,7 +917,7 @@ install_claude_commands() {
   mkdir -p "$claude_dir"
 
   # Clean up obsolete CCB commands (replaced by unified ask/ping/pend)
-  local obsolete_cmds="cask.md gask.md oask.md dask.md lask.md cpend.md gpend.md opend.md dpend.md lpend.md cping.md gping.md oping.md dping.md lping.md"
+  local obsolete_cmds="bask.md bpend.md bping.md cask.md cpend.md cping.md dask.md dpend.md dping.md gask.md gpend.md gping.md hask.md hpend.md hping.md lask.md lpend.md lping.md oask.md opend.md oping.md qask.md qpend.md qping.md"
   for obs_cmd in $obsolete_cmds; do
     if [[ -f "$claude_dir/$obs_cmd" ]]; then
       rm -f "$claude_dir/$obs_cmd"
@@ -712,8 +943,8 @@ install_claude_skills() {
 
   mkdir -p "$skills_dst"
 
-  # Clean up obsolete CCB skills (replaced by unified ask/cping/pend)
-  local obsolete_skills="cask gask oask dask lask cpend gpend opend dpend lpend cping gping oping dping lping ping auto"
+  # Clean up obsolete wrapper/provider skills
+  local obsolete_skills="bask bpend bping cask cpend cping dask dpend dping gask gpend gping hask hpend hping lask lpend lping mounted oask opend oping qask qpend qping auto"
   for obs_skill in $obsolete_skills; do
     if [[ -d "$skills_dst/$obs_skill" ]]; then
       rm -rf "$skills_dst/$obs_skill"
@@ -761,12 +992,6 @@ install_claude_skills() {
     echo "  Installed skills docs: docs/"
   fi
 
-  # Make autoloop scripts executable
-  local autoloop_sh="$skills_dst/tr/scripts/autoloop.sh"
-  local autoloop_py="$skills_dst/tr/scripts/autoloop.py"
-  [[ -f "$autoloop_sh" ]] && chmod +x "$autoloop_sh"
-  [[ -f "$autoloop_py" ]] && chmod +x "$autoloop_py"
-
   echo "Updated Claude skills directory: $skills_dst"
 }
 
@@ -780,8 +1005,8 @@ install_codex_skills() {
 
   mkdir -p "$skills_dst"
 
-  # Clean up obsolete CCB skills (replaced by unified ask/ping/pend)
-  local obsolete_skills="cask gask oask dask lask cpend gpend opend dpend lpend cping gping oping dping lping"
+  # Clean up obsolete wrapper/provider skills
+  local obsolete_skills="bask bpend bping cask cpend cping dask dpend dping gask gpend gping hask hpend hping lask lpend lping mounted oask opend oping qask qpend qping"
   for obs_skill in $obsolete_skills; do
     if [[ -d "$skills_dst/$obs_skill" ]]; then
       rm -rf "$skills_dst/$obs_skill"
@@ -837,8 +1062,8 @@ install_droid_skills() {
 
   mkdir -p "$skills_dst"
 
-  # Clean up obsolete CCB skills (replaced by unified ask/ping/pend)
-  local obsolete_skills="cask gask oask dask lask cpend gpend opend dpend lpend cping gping oping dping lping"
+  # Clean up obsolete wrapper/provider skills
+  local obsolete_skills="bask bpend bping cask cpend cping dask dpend dping gask gpend gping hask hpend hping lask lpend lping mounted oask opend oping qask qpend qping"
   for obs_skill in $obsolete_skills; do
     if [[ -d "$skills_dst/$obs_skill" ]]; then
       rm -rf "$skills_dst/$obs_skill"
@@ -1172,9 +1397,9 @@ install_settings_permissions() {
   mkdir -p "$HOME/.claude"
 
   local perms_to_add=(
-    'Bash(ask *)'
-    'Bash(ccb-ping *)'
-    'Bash(pend *)'
+    'Bash(ccb ask *)'
+    'Bash(ccb ping *)'
+    'Bash(ccb pend *)'
   )
 
   if [[ ! -f "$settings_file" ]]; then
@@ -1182,9 +1407,9 @@ install_settings_permissions() {
 {
 	  "permissions": {
 	    "allow": [
-	      "Bash(ask *)",
-	      "Bash(ccb-ping *)",
-	      "Bash(pend *)"
+	      "Bash(ccb ask *)",
+	      "Bash(ccb ping *)",
+	      "Bash(ccb pend *)"
 	    ],
     "deny": []
   }
@@ -1194,73 +1419,59 @@ SETTINGS
     return
   fi
 
-  # Remove legacy permissions from previous versions
   local perms_to_remove=(
+    'Bash(ask *)'
+    'Bash(ccb provider ping *)'
+    'Bash(ccb provider pend *)'
     'Bash(ping *)'
+    'Bash(ccb-ping *)'
+    'Bash(pend *)'
   )
-  for old_perm in "${perms_to_remove[@]}"; do
-    if grep -q "$old_perm" "$settings_file" 2>/dev/null; then
-      if pick_python_bin; then
-        "$PYTHON_BIN" -c "
-import json, sys
-path = '$settings_file'
-old_perm = '$old_perm'
-try:
-    with open(path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-    allow = data.get('permissions', {}).get('allow', [])
-    if old_perm in allow:
-        allow.remove(old_perm)
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2)
-except Exception as e:
-    sys.stderr.write(f'WARN: failed cleaning {path}: {e}\n')
-"
-        echo "  Removed legacy permission: $old_perm"
-      fi
-    fi
-  done
-
-  local added=0
-  for perm in "${perms_to_add[@]}"; do
-    if ! grep -q "$perm" "$settings_file" 2>/dev/null; then
-      if pick_python_bin; then
-        "$PYTHON_BIN" -c "
+  if pick_python_bin; then
+    local add_json remove_json
+    add_json="$(printf '%s\n' "${perms_to_add[@]}" | "$PYTHON_BIN" -c 'import json,sys; print(json.dumps([line.rstrip("\n") for line in sys.stdin]))')"
+    remove_json="$(printf '%s\n' "${perms_to_remove[@]}" | "$PYTHON_BIN" -c 'import json,sys; print(json.dumps([line.rstrip("\n") for line in sys.stdin]))')"
+    "$PYTHON_BIN" -c "
 import json
-import sys
 
 path = '$settings_file'
-perm = '$perm'
+perms_to_add = json.loads('''$add_json''')
+perms_to_remove = set(json.loads('''$remove_json'''))
+
 try:
     with open(path, 'r', encoding='utf-8') as f:
         data = json.load(f)
-    if not isinstance(data, dict):
-        data = {}
-    perms = data.get('permissions')
-    if not isinstance(perms, dict):
-        perms = {'allow': [], 'deny': []}
-        data['permissions'] = perms
-    allow = perms.get('allow')
-    if not isinstance(allow, list):
-        allow = []
-        perms['allow'] = allow
-    if perm not in allow:
-        allow.append(perm)
-    with open(path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2)
-except Exception as e:
-    sys.stderr.write(f'WARN: failed updating {path}: {e}\\n')
-    sys.exit(0)
-"
-        added=1
-      fi
-    fi
-  done
+except Exception:
+    data = {}
 
-  if [[ $added -eq 1 ]]; then
+if not isinstance(data, dict):
+    data = {}
+perms = data.get('permissions')
+if not isinstance(perms, dict):
+    perms = {}
+    data['permissions'] = perms
+allow = perms.get('allow')
+if not isinstance(allow, list):
+    allow = []
+deny = perms.get('deny')
+if not isinstance(deny, list):
+    deny = []
+
+new_allow = [entry for entry in allow if entry not in perms_to_remove]
+for entry in perms_to_add:
+    if entry not in new_allow:
+        new_allow.append(entry)
+
+perms['allow'] = new_allow
+perms['deny'] = deny
+
+with open(path, 'w', encoding='utf-8') as f:
+    json.dump(data, f, ensure_ascii=False, indent=2)
+    f.write('\n')
+" || return 1
     echo "Updated $settings_file permissions"
   else
-    echo "Permissions already exist in $settings_file"
+    echo "WARN: python required to update $settings_file permissions"
   fi
 }
 
@@ -1479,18 +1690,9 @@ install_requirements() {
   require_python_version
   install_watchdog || true
   require_terminal_backend
-  if ! has_wezterm; then
-    echo
-    echo "================================================================"
-    echo "NOTE: Recommend installing WezTerm as terminal frontend (better experience, recommended for WSL2/Windows)"
-    echo "   - Website: https://wezfurlong.org/wezterm/"
-    echo "   - Benefits: Smoother split/scroll/font rendering, more stable bridging in WezTerm mode"
-    echo "================================================================"
-    echo
-  fi
 }
 
-# Clean up legacy daemon files (replaced by unified askd)
+# Clean up legacy daemon files from the pre-ccbd era
 cleanup_legacy_files() {
   echo "Cleaning up legacy files..."
   local cleaned=0
@@ -1540,11 +1742,12 @@ cleanup_legacy_files() {
 }
 
 install_all() {
+  require_major_upgrade_confirmation
   install_requirements
   remove_codex_mcp
   cleanup_legacy_files
-  save_wezterm_config
   copy_project
+  write_install_metadata
   install_bin_links
   ensure_path_configured
   install_claude_commands
@@ -1560,6 +1763,7 @@ install_all() {
   echo "OK: Installation complete"
   echo "   Project dir    : $INSTALL_PREFIX"
   echo "   Executable dir : $BIN_DIR"
+  print_install_identity_summary
   echo "   Claude commands updated"
   local md_mode="${CCB_CLAUDE_MD_MODE:-inline}"
   if [[ "$md_mode" == "route" ]]; then
@@ -1570,6 +1774,7 @@ install_all() {
   echo "   AGENTS.md configured with review rubrics"
   echo "   .clinerules configured with role assignments"
   echo "   Global settings.json permissions added"
+  print_install_identity_notice
 }
 
 uninstall_claude_md_config() {
@@ -1641,19 +1846,39 @@ uninstall_settings_permissions() {
   fi
 
   local perms_to_remove=(
+    'Bash(ccb ask *)'
+    'Bash(ccb ping *)'
+    'Bash(ccb pend *)'
     'Bash(ask *)'
+    'Bash(ccb provider ping *)'
+    'Bash(ccb provider pend *)'
     'Bash(ping *)'
     'Bash(ccb-ping *)'
     'Bash(pend *)'
+    'Bash(bask:*)'
+    'Bash(bpend)'
+    'Bash(bping)'
     'Bash(cask:*)'
     'Bash(cpend)'
     'Bash(cping)'
+    'Bash(dask:*)'
+    'Bash(dpend)'
+    'Bash(dping)'
     'Bash(gask:*)'
     'Bash(gpend)'
     'Bash(gping)'
+    'Bash(hask:*)'
+    'Bash(hpend)'
+    'Bash(hping)'
+    'Bash(lask:*)'
+    'Bash(lpend)'
+    'Bash(lping)'
     'Bash(oask:*)'
     'Bash(opend)'
     'Bash(oping)'
+    'Bash(qask:*)'
+    'Bash(qpend)'
+    'Bash(qping)'
   )
 
   if pick_any_python_bin; then
@@ -1673,19 +1898,39 @@ import sys
 
 path = '$settings_file'
 perms_to_remove = [
+    'Bash(ccb ask *)',
+    'Bash(ccb ping *)',
+    'Bash(ccb pend *)',
     'Bash(ask *)',
+    'Bash(ccb provider ping *)',
+    'Bash(ccb provider pend *)',
     'Bash(ping *)',
     'Bash(ccb-ping *)',
     'Bash(pend *)',
+    'Bash(bask:*)',
+    'Bash(bpend)',
+    'Bash(bping)',
     'Bash(cask:*)',
     'Bash(cpend)',
     'Bash(cping)',
+    'Bash(dask:*)',
+    'Bash(dpend)',
+    'Bash(dping)',
     'Bash(gask:*)',
     'Bash(gpend)',
     'Bash(gping)',
+    'Bash(hask:*)',
+    'Bash(hpend)',
+    'Bash(hping)',
+    'Bash(lask:*)',
+    'Bash(lpend)',
+    'Bash(lping)',
     'Bash(oask:*)',
     'Bash(opend)',
     'Bash(oping)',
+    'Bash(qask:*)',
+    'Bash(qpend)',
+    'Bash(qping)',
 ]
 try:
     with open(path, 'r', encoding='utf-8') as f:
@@ -1713,7 +1958,7 @@ except Exception:
 
 uninstall_claude_skills() {
   local skills_dst="$HOME/.claude/skills"
-  local ccb_skills="ask cping ping pend autonew mounted all-plan docs tp tr file-op review"
+  local ccb_skills="ask ping pend autonew all-plan docs tp tr file-op review continue"
 
   if [[ ! -d "$skills_dst" ]]; then
     return
@@ -1730,7 +1975,7 @@ uninstall_claude_skills() {
 
 uninstall_codex_skills() {
   local skills_dst="${CODEX_HOME:-$HOME/.codex}/skills"
-  local ccb_skills="ask ping pend autonew mounted all-plan file-op"
+  local ccb_skills="ask ping pend autonew all-plan file-op"
 
   if [[ ! -d "$skills_dst" ]]; then
     return
@@ -1747,7 +1992,7 @@ uninstall_codex_skills() {
 
 uninstall_droid_skills() {
   local skills_dst="${FACTORY_HOME:-$HOME/.factory}/skills"
-  local ccb_skills="ask ping pend autonew mounted all-plan"
+  local ccb_skills="ask ping pend autonew all-plan"
 
   if [[ ! -d "$skills_dst" ]]; then
     return
@@ -1852,7 +2097,7 @@ uninstall_all() {
   uninstall_droid_commands
 
   echo "OK: Uninstall complete"
-  echo "   NOTE: Dependencies (python, tmux, wezterm) were not removed"
+  echo "   NOTE: Dependencies (python, tmux) were not removed"
 }
 
 main() {
@@ -1875,4 +2120,6 @@ main() {
   esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

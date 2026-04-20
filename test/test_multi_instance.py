@@ -18,9 +18,9 @@ _lib = Path(__file__).resolve().parent.parent / "lib"
 sys.path.insert(0, str(_lib))
 
 # ── Stub out modules that use Python 3.10+ syntax (str | None) ─────────────
-# ccb_config and terminal use union-type syntax unsupported on Python <3.10.
-# We pre-populate sys.modules with lightweight stubs so that caskd_session /
-# gaskd_session can be imported without hitting a TypeError.
+# terminal_runtime APIs use union-type syntax unsupported on Python <3.10.
+# We pre-populate sys.modules with lightweight stubs so backend session modules
+# can be imported without hitting a TypeError.
 
 def _ensure_stub(mod_name: str, attrs: dict[str, Any] | None = None) -> None:
     """Insert a stub module into sys.modules if not already importable."""
@@ -37,11 +37,11 @@ def _ensure_stub(mod_name: str, attrs: dict[str, Any] | None = None) -> None:
     sys.modules[mod_name] = stub
 
 
-_ensure_stub("terminal", {
+_ensure_stub("terminal_runtime", {
     "_subprocess_kwargs": lambda: {},
     "get_backend_for_session": lambda data: None,
 })
-_ensure_stub("ccb_config", {
+_ensure_stub("terminal_runtime.backend_env", {
     "apply_backend_env": lambda: None,
     "get_backend_env": lambda: None,
 })
@@ -54,46 +54,46 @@ _ensure_stub("project_id", {
 
 class TestParseQualifiedProvider:
     def test_plain_provider(self):
-        from providers import parse_qualified_provider
+        from provider_core.runtime_specs import parse_qualified_provider
         assert parse_qualified_provider("codex") == ("codex", None)
 
     def test_qualified_provider(self):
-        from providers import parse_qualified_provider
+        from provider_core.runtime_specs import parse_qualified_provider
         assert parse_qualified_provider("codex:auth") == ("codex", "auth")
 
     def test_empty_string(self):
-        from providers import parse_qualified_provider
+        from provider_core.runtime_specs import parse_qualified_provider
         assert parse_qualified_provider("") == ("", None)
 
     def test_none_input(self):
-        from providers import parse_qualified_provider
+        from provider_core.runtime_specs import parse_qualified_provider
         assert parse_qualified_provider(None) == ("", None)
 
     def test_colon_only(self):
-        from providers import parse_qualified_provider
+        from provider_core.runtime_specs import parse_qualified_provider
         assert parse_qualified_provider(":") == ("", None)
 
     def test_provider_with_empty_instance(self):
-        from providers import parse_qualified_provider
+        from provider_core.runtime_specs import parse_qualified_provider
         assert parse_qualified_provider("codex:") == ("codex", None)
 
     def test_uppercase_normalized(self):
-        from providers import parse_qualified_provider
+        from provider_core.runtime_specs import parse_qualified_provider
         assert parse_qualified_provider("CODEX:Auth") == ("codex", "auth")
 
     def test_whitespace_trimmed(self):
-        from providers import parse_qualified_provider
+        from provider_core.runtime_specs import parse_qualified_provider
         assert parse_qualified_provider(" codex : auth ") == ("codex", "auth")
 
     def test_multiple_colons(self):
         """Only split on first colon."""
-        from providers import parse_qualified_provider
+        from provider_core.runtime_specs import parse_qualified_provider
         base, instance = parse_qualified_provider("codex:auth:extra")
         assert base == "codex"
         assert instance == "auth:extra"
 
     def test_all_providers(self):
-        from providers import parse_qualified_provider
+        from provider_core.runtime_specs import parse_qualified_provider
         for prov in ("codex", "gemini", "opencode", "claude", "droid", "copilot", "codebuddy", "qwen"):
             assert parse_qualified_provider(prov) == (prov, None)
             assert parse_qualified_provider(f"{prov}:test") == (prov, "test")
@@ -103,26 +103,26 @@ class TestParseQualifiedProvider:
 
 class TestMakeQualifiedKey:
     def test_no_instance(self):
-        from providers import make_qualified_key
+        from provider_core.runtime_specs import make_qualified_key
         assert make_qualified_key("codex", None) == "codex"
 
     def test_with_instance(self):
-        from providers import make_qualified_key
+        from provider_core.runtime_specs import make_qualified_key
         assert make_qualified_key("codex", "auth") == "codex:auth"
 
     def test_empty_instance(self):
-        from providers import make_qualified_key
+        from provider_core.runtime_specs import make_qualified_key
         assert make_qualified_key("codex", "") == "codex"
 
     def test_roundtrip(self):
-        from providers import parse_qualified_provider, make_qualified_key
+        from provider_core.runtime_specs import make_qualified_key, parse_qualified_provider
         key = make_qualified_key("gemini", "frontend")
         base, inst = parse_qualified_provider(key)
         assert base == "gemini"
         assert inst == "frontend"
 
     def test_roundtrip_no_instance(self):
-        from providers import parse_qualified_provider, make_qualified_key
+        from provider_core.runtime_specs import make_qualified_key, parse_qualified_provider
         key = make_qualified_key("codex", None)
         base, inst = parse_qualified_provider(key)
         assert base == "codex"
@@ -133,23 +133,23 @@ class TestMakeQualifiedKey:
 
 class TestSessionFilenameForInstance:
     def test_no_instance(self):
-        from providers import session_filename_for_instance
+        from provider_core.pathing import session_filename_for_instance
         assert session_filename_for_instance(".codex-session", None) == ".codex-session"
 
     def test_with_instance(self):
-        from providers import session_filename_for_instance
+        from provider_core.pathing import session_filename_for_instance
         assert session_filename_for_instance(".codex-session", "auth") == ".codex-auth-session"
 
     def test_empty_instance(self):
-        from providers import session_filename_for_instance
+        from provider_core.pathing import session_filename_for_instance
         assert session_filename_for_instance(".codex-session", "") == ".codex-session"
 
     def test_whitespace_instance(self):
-        from providers import session_filename_for_instance
+        from provider_core.pathing import session_filename_for_instance
         assert session_filename_for_instance(".codex-session", "  ") == ".codex-session"
 
     def test_all_provider_sessions(self):
-        from providers import session_filename_for_instance
+        from provider_core.pathing import session_filename_for_instance
         cases = [
             (".codex-session", "auth", ".codex-auth-session"),
             (".gemini-session", "frontend", ".gemini-frontend-session"),
@@ -170,13 +170,13 @@ class TestSessionModuleInstance:
     """Test that session modules accept instance parameter."""
 
     def test_codex_find_session_file_default(self, tmp_path):
-        from caskd_session import find_project_session_file
+        from provider_backends.codex.session import find_project_session_file
         # No session file exists -- should return None
         result = find_project_session_file(tmp_path)
         assert result is None
 
     def test_codex_find_session_file_with_instance(self, tmp_path):
-        from caskd_session import find_project_session_file
+        from provider_backends.codex.session import find_project_session_file
         # Create instance-specific session file
         ccb_dir = tmp_path / ".ccb"
         ccb_dir.mkdir()
@@ -187,17 +187,17 @@ class TestSessionModuleInstance:
         assert "auth" in result.name
 
     def test_codex_load_session_no_instance(self, tmp_path):
-        from caskd_session import load_project_session
+        from provider_backends.codex.session import load_project_session
         result = load_project_session(tmp_path)
         assert result is None
 
     def test_codex_load_session_with_instance(self, tmp_path):
-        from caskd_session import load_project_session
+        from provider_backends.codex.session import load_project_session
         result = load_project_session(tmp_path, instance="auth")
         assert result is None  # No file exists
 
     def test_codex_load_session_with_instance_file_exists(self, tmp_path):
-        from caskd_session import load_project_session
+        from provider_backends.codex.session import load_project_session
         ccb_dir = tmp_path / ".ccb"
         ccb_dir.mkdir()
         session_file = ccb_dir / ".codex-auth-session"
@@ -207,16 +207,16 @@ class TestSessionModuleInstance:
         assert result.pane_id == "%42"
 
     def test_codex_compute_session_key_no_instance(self):
-        from caskd_session import compute_session_key, CodexProjectSession
+        from provider_backends.codex.session import CodexProjectSession, compute_session_key
         session = CodexProjectSession(
             session_file=Path("/tmp/test/.ccb/.codex-session"),
             data={"ccb_project_id": "abc123", "work_dir": "/tmp/test"},
         )
         key = compute_session_key(session)
-        assert key == "codex:abc123"
+        assert key.startswith("codex:abc123:")
 
     def test_codex_compute_session_key_with_instance(self):
-        from caskd_session import compute_session_key, CodexProjectSession
+        from provider_backends.codex.session import CodexProjectSession, compute_session_key
         session = CodexProjectSession(
             session_file=Path("/tmp/test/.ccb/.codex-auth-session"),
             data={"ccb_project_id": "abc123", "work_dir": "/tmp/test"},
@@ -226,12 +226,12 @@ class TestSessionModuleInstance:
         assert "abc123" in key
 
     def test_gemini_find_session_file_default(self, tmp_path):
-        from gaskd_session import find_project_session_file
+        from provider_backends.gemini.session import find_project_session_file
         result = find_project_session_file(tmp_path)
         assert result is None
 
     def test_gemini_find_session_file_with_instance(self, tmp_path):
-        from gaskd_session import find_project_session_file
+        from provider_backends.gemini.session import find_project_session_file
         ccb_dir = tmp_path / ".ccb"
         ccb_dir.mkdir()
         session_file = ccb_dir / ".gemini-frontend-session"
@@ -240,8 +240,17 @@ class TestSessionModuleInstance:
         assert result is not None
         assert "frontend" in result.name
 
+
+    def test_gemini_load_session_with_instance_does_not_fallback_to_default(self, tmp_path):
+        from provider_backends.gemini.session import load_project_session
+        ccb_dir = tmp_path / '.ccb'
+        ccb_dir.mkdir()
+        (ccb_dir / '.gemini-session').write_text('{"pane_id": "%42", "work_dir": "/tmp/test"}')
+        result = load_project_session(tmp_path, instance='frontend')
+        assert result is None
+
     def test_gemini_compute_session_key_with_instance(self):
-        from gaskd_session import compute_session_key, GeminiProjectSession
+        from provider_backends.gemini.session import GeminiProjectSession, compute_session_key
         session = GeminiProjectSession(
             session_file=Path("/tmp/test/.ccb/.gemini-session"),
             data={"ccb_project_id": "xyz789", "work_dir": "/tmp/test"},
@@ -250,35 +259,40 @@ class TestSessionModuleInstance:
         assert "frontend" in key
         assert "xyz789" in key
 
+    def test_session_key_changes_for_different_worktrees_even_same_project(self):
+        from provider_backends.claude.session import ClaudeProjectSession, compute_session_key as claude_key
+        from provider_backends.codex.session import CodexProjectSession, compute_session_key as codex_key
+        from provider_backends.gemini.session import GeminiProjectSession, compute_session_key as gemini_key
 
-# ── ProviderRequest instance field ──────────────────────────────────────────
-
-class TestProviderRequestInstance:
-    def test_default_instance_is_none(self):
-        from askd.adapters.base import ProviderRequest
-        req = ProviderRequest(
-            client_id="test",
-            work_dir="/tmp",
-            timeout_s=30.0,
-            quiet=False,
-            message="hello",
-            caller="manual",
+        codex_a = CodexProjectSession(
+            session_file=Path("/tmp/repo/.ccb/.codex-a-session"),
+            data={"ccb_project_id": "same-project", "work_dir": "/tmp/repo/.ccb/workspaces/a"},
         )
-        assert req.instance is None
-
-    def test_instance_can_be_set(self):
-        from askd.adapters.base import ProviderRequest
-        req = ProviderRequest(
-            client_id="test",
-            work_dir="/tmp",
-            timeout_s=30.0,
-            quiet=False,
-            message="hello",
-            caller="manual",
-            instance="auth",
+        codex_b = CodexProjectSession(
+            session_file=Path("/tmp/repo/.ccb/.codex-b-session"),
+            data={"ccb_project_id": "same-project", "work_dir": "/tmp/repo/.ccb/workspaces/b"},
         )
-        assert req.instance == "auth"
+        assert codex_key(codex_a, instance="a") != codex_key(codex_b, instance="b")
 
+        gemini_a = GeminiProjectSession(
+            session_file=Path("/tmp/repo/.ccb/.gemini-a-session"),
+            data={"ccb_project_id": "same-project", "work_dir": "/tmp/repo/.ccb/workspaces/a"},
+        )
+        gemini_b = GeminiProjectSession(
+            session_file=Path("/tmp/repo/.ccb/.gemini-b-session"),
+            data={"ccb_project_id": "same-project", "work_dir": "/tmp/repo/.ccb/workspaces/b"},
+        )
+        assert gemini_key(gemini_a, instance="a") != gemini_key(gemini_b, instance="b")
+
+        claude_a = ClaudeProjectSession(
+            session_file=Path("/tmp/repo/.ccb/.claude-a-session"),
+            data={"ccb_project_id": "same-project", "work_dir": "/tmp/repo/.ccb/workspaces/a"},
+        )
+        claude_b = ClaudeProjectSession(
+            session_file=Path("/tmp/repo/.ccb/.claude-b-session"),
+            data={"ccb_project_id": "same-project", "work_dir": "/tmp/repo/.ccb/workspaces/b"},
+        )
+        assert claude_key(claude_a, instance="a") != claude_key(claude_b, instance="b")
 
 # ── Backward compatibility ──────────────────────────────────────────────────
 
@@ -286,21 +300,21 @@ class TestBackwardCompatibility:
     """Verify that no-instance usage produces identical behavior."""
 
     def test_parse_qualified_plain(self):
-        from providers import parse_qualified_provider
+        from provider_core.runtime_specs import parse_qualified_provider
         for prov in ("codex", "gemini", "opencode", "claude", "droid", "copilot", "codebuddy", "qwen"):
             base, inst = parse_qualified_provider(prov)
             assert base == prov
             assert inst is None
 
     def test_session_filename_unchanged(self):
-        from providers import session_filename_for_instance
+        from provider_core.pathing import session_filename_for_instance
         for name in (".codex-session", ".gemini-session", ".opencode-session",
                      ".claude-session", ".droid-session", ".copilot-session",
                      ".codebuddy-session", ".qwen-session"):
             assert session_filename_for_instance(name, None) == name
 
     def test_make_qualified_key_no_instance(self):
-        from providers import make_qualified_key
+        from provider_core.runtime_specs import make_qualified_key
         assert make_qualified_key("codex", None) == "codex"
 
 
@@ -311,14 +325,14 @@ class TestDaemonInstanceRouting:
 
     def test_daemon_parses_qualified_provider(self):
         """Verify _handle_request parses 'codex:auth' correctly."""
-        from providers import parse_qualified_provider
+        from provider_core.runtime_specs import parse_qualified_provider
         base, inst = parse_qualified_provider("codex:auth")
         assert base == "codex"
         assert inst == "auth"
 
     def test_pool_key_includes_instance(self):
         """Pool key should use qualified key for instance isolation."""
-        from providers import make_qualified_key
+        from provider_core.runtime_specs import make_qualified_key
         key = make_qualified_key("codex", "auth")
         assert key == "codex:auth"
         # Different instance = different pool key
@@ -328,7 +342,7 @@ class TestDaemonInstanceRouting:
 
     def test_same_provider_different_instances_isolated(self):
         """Two instances of the same provider must produce different keys."""
-        from providers import make_qualified_key
+        from provider_core.runtime_specs import make_qualified_key
         keys = set()
         for inst in ("auth", "payment", "frontend", "backend"):
             keys.add(make_qualified_key("codex", inst))
@@ -336,7 +350,7 @@ class TestDaemonInstanceRouting:
 
     def test_different_providers_same_instance_isolated(self):
         """Same instance name on different providers must produce different keys."""
-        from providers import make_qualified_key
+        from provider_core.runtime_specs import make_qualified_key
         key1 = make_qualified_key("codex", "auth")
         key2 = make_qualified_key("gemini", "auth")
         assert key1 != key2

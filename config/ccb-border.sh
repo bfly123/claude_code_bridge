@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
-# CCB Border Color Script - sets active pane border based on pane title
+# CCB Border Color Script - syncs active pane border from pane metadata
 
 arg="$1"
 pane_id=""
-title=""
-agent=""
 
 if [[ "$arg" == %* ]]; then
   pane_id="$arg"
-  agent="$(tmux display-message -p -t "$pane_id" "#{@ccb_agent}" 2>/dev/null | tr -d '\r')"
-  title="$(tmux display-message -p -t "$pane_id" "#{pane_title}" 2>/dev/null | tr -d '\r')"
 else
-  title="$arg"
+  exit 0
 fi
 
-key="$(echo "${agent:-}" | tr -d '\n')"
+style="$(tmux display-message -p -t "$pane_id" "#{@ccb_active_border_style}" 2>/dev/null | tr -d '\r')"
+if [[ -z "$style" ]]; then
+  style="$(tmux display-message -p -t "$pane_id" "#{@ccb_border_style}" 2>/dev/null | tr -d '\r')"
+fi
+if [[ -z "$style" ]]; then
+  style="fg=#7aa2f7,bold"
+fi
 
 set_border() {
   local style="$1"
@@ -27,48 +29,4 @@ set_border() {
   fi
 }
 
-case "$key" in
-    Codex)
-        set_border "fg=#ff9e64,bold" # Orange
-        ;;
-    Gemini)
-        set_border "fg=#7dcfff,bold" # Cyan
-        ;;
-    Claude)
-        set_border "fg=#bb9af7,bold" # Purple
-        ;;
-    OpenCode)
-        set_border "fg=#9ece6a,bold" # Green
-        ;;
-    Droid)
-        set_border "fg=#e0af68,bold" # Yellow
-        ;;
-    Cmd)
-        set_border "fg=#7dcfff,bold" # Teal
-        ;;
-    *)
-        case "$title" in
-            CCB-Codex*)
-                set_border "fg=#ff9e64,bold"
-                ;;
-            CCB-Gemini*)
-                set_border "fg=#7dcfff,bold"
-                ;;
-            Claude*)
-                set_border "fg=#bb9af7,bold"
-                ;;
-            CCB-OpenCode*)
-                set_border "fg=#9ece6a,bold"
-                ;;
-            CCB-Droid*)
-                set_border "fg=#e0af68,bold"
-                ;;
-            CCB-Cmd*)
-                set_border "fg=#7dcfff,bold"
-                ;;
-            *)
-                set_border "fg=#7aa2f7,bold" # Blue (default)
-                ;;
-        esac
-        ;;
-esac
+set_border "$style"

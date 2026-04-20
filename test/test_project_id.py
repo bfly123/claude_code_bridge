@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from project_id import compute_ccb_project_id, normalize_work_dir
+from project.identity import compute_ccb_project_id, normalize_work_dir
 
 
 def test_normalize_work_dir_basic() -> None:
@@ -36,7 +36,7 @@ def test_compute_ccb_project_id_stable_for_same_dir(tmp_path: Path) -> None:
     assert pid1 == pid2
 
 
-def test_compute_ccb_project_id_uses_anchor_root(tmp_path: Path) -> None:
+def test_compute_ccb_project_id_shares_anchor_root_for_anchored_subdirs(tmp_path: Path) -> None:
     (tmp_path / ".ccb").mkdir(parents=True, exist_ok=True)
     subdir = tmp_path / "a" / "b"
     subdir.mkdir(parents=True, exist_ok=True)
@@ -45,7 +45,7 @@ def test_compute_ccb_project_id_uses_anchor_root(tmp_path: Path) -> None:
     pid_sub = compute_ccb_project_id(subdir)
     assert pid_root
     assert pid_sub
-    assert pid_root != pid_sub
+    assert pid_root == pid_sub
 
 
 def test_compute_ccb_project_id_ignores_env_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

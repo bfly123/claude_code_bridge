@@ -1,138 +1,17 @@
 #!/usr/bin/env python3
-"""
-CCB Cleanup - Clean up zombie daemons and stale files
-"""
-import json
-import os
+
+from __future__ import annotations
+
 import sys
-from pathlib import Path
 
 
-def is_pid_alive(pid: int) -> bool:
-    """Check if a process is alive."""
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
-
-
-def cleanup_stale_state_files():
-    """Remove state files for dead daemons."""
-    cache_dir = Path.home() / ".cache" / "ccb" / "projects"
-    if not cache_dir.exists():
-        return
-
-    removed = []
-    for state_file in cache_dir.glob("*/askd.json"):
-        try:
-            with open(state_file) as f:
-                data = json.load(f)
-            pid = int(data.get("pid", 0))
-            if pid > 0 and not is_pid_alive(pid):
-                state_file.unlink()
-                removed.append(str(state_file))
-                print(f"Removed stale state file: {state_file}")
-        except Exception as e:
-            print(f"Error processing {state_file}: {e}", file=sys.stderr)
-
-    return removed
-
-
-def cleanup_stale_locks():
-    """Remove stale lock files."""
-    run_dir = Path.home() / ".ccb" / "run"
-    if not run_dir.exists():
-        return
-
-    removed = []
-    for lock_file in run_dir.glob("*.lock"):
-        try:
-            # Read PID from lock file
-            pid_str = lock_file.read_text().strip()
-            if not pid_str:
-                continue
-            pid = int(pid_str)
-            if not is_pid_alive(pid):
-                lock_file.unlink()
-                removed.append(str(lock_file))
-                print(f"Removed stale lock: {lock_file.name}")
-        except Exception as e:
-            print(f"Error processing {lock_file}: {e}", file=sys.stderr)
-
-    return removed
-
-
-def list_running_daemons():
-    """List all running askd daemons."""
-    cache_dir = Path.home() / ".cache" / "ccb" / "projects"
-    if not cache_dir.exists():
-        return []
-
-    daemons = []
-    for state_file in cache_dir.glob("*/askd.json"):
-        try:
-            with open(state_file) as f:
-                data = json.load(f)
-            pid = int(data.get("pid", 0))
-            parent_pid = int(data.get("parent_pid", 0))
-
-            if pid > 0 and is_pid_alive(pid):
-                parent_alive = is_pid_alive(parent_pid) if parent_pid > 0 else False
-                project_hash = state_file.parent.name
-                daemons.append({
-                    "pid": pid,
-                    "parent_pid": parent_pid,
-                    "parent_alive": parent_alive,
-                    "project_hash": project_hash,
-                    "started_at": data.get("started_at", "unknown"),
-                })
-        except Exception:
-            pass
-
-    return daemons
-
-
-def main():
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Clean up CCB zombie daemons and stale files")
-    parser.add_argument("--list", action="store_true", help="List running daemons")
-    parser.add_argument("--clean", action="store_true", help="Clean stale files")
-    parser.add_argument("--kill-zombies", action="store_true", help="Kill zombie daemons (parent dead)")
-
-    args = parser.parse_args()
-
-    if args.list or not (args.clean or args.kill_zombies):
-        print("=== Running askd daemons ===")
-        daemons = list_running_daemons()
-        if not daemons:
-            print("No running daemons found")
-        else:
-            for d in daemons:
-                status = "ZOMBIE (parent dead)" if not d["parent_alive"] else "OK"
-                print(f"  PID {d['pid']} (parent {d['parent_pid']}) - {status}")
-                print(f"    Project: {d['project_hash']}")
-                print(f"    Started: {d['started_at']}")
-
-    if args.clean:
-        print("\n=== Cleaning stale files ===")
-        cleanup_stale_state_files()
-        cleanup_stale_locks()
-
-    if args.kill_zombies:
-        print("\n=== Killing zombie daemons ===")
-        daemons = list_running_daemons()
-        for d in daemons:
-            if not d["parent_alive"]:
-                try:
-                    os.kill(d["pid"], 15)  # SIGTERM
-                    print(f"Killed zombie daemon PID {d['pid']}")
-                except Exception as e:
-                    print(f"Failed to kill PID {d['pid']}: {e}", file=sys.stderr)
+def main() -> int:
+    print(
+        "error: standalone ccb-cleanup was removed; use `ccb kill --zombies` for global cleanup or `ccb kill` inside a project",
+        file=sys.stderr,
+    )
+    return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

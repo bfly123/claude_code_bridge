@@ -4,7 +4,7 @@ import subprocess
 
 import pytest
 
-import terminal
+import terminal_runtime.api as terminal
 
 
 def test_respawn_pane_builds_command_and_sets_remain(monkeypatch: pytest.MonkeyPatch) -> None:

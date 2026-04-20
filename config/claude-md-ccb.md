@@ -1,10 +1,10 @@
 <!-- CCB_CONFIG_START -->
 ## AI Collaboration
-Use `/ask <provider>` to consult other AI assistants (codex/gemini/opencode/droid).
-Use `/cping <provider>` to check connectivity.
-Use `/pend <provider>` to view latest replies.
+Use `/ask <agent>` to contact another CCB agent by name.
+Use `/ping <agent|ccbd>` to inspect project control-plane health.
+Use `/pend <agent|job_id>` to inspect mailbox/job replies.
 
-Providers: `codex`, `gemini`, `opencode`, `droid`, `claude`
+Agent names come from `.ccb/ccb.config`. Providers are implementation details.
 
 ## Async Guardrail (MANDATORY)
 
@@ -29,7 +29,7 @@ Abstract roles map to concrete AI providers. Skills reference roles, not provide
 | `executor` | `claude` | Code implementation — writes and modifies code |
 
 To change a role assignment, edit the Provider column above.
-When a skill references a role (e.g. `reviewer`), resolve it to the provider listed here (e.g. `/ask codex`).
+When a skill references a role (e.g. `reviewer`), resolve it to the configured agent that owns that role.
 <!-- CCB_ROLES_END -->
 
 <!-- CODEX_REVIEW_START -->

@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-import terminal
+import terminal_runtime.api as terminal
 
 
 def _cp(*, stdout: str = "", returncode: int = 0) -> subprocess.CompletedProcess[str]:
@@ -57,6 +57,38 @@ def test_tmux_find_pane_by_title_marker_parses_list_panes(monkeypatch: pytest.Mo
     assert backend.find_pane_by_title_marker("NOPE") is None
 
 
+def test_tmux_find_pane_by_title_marker_rejects_ambiguous_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_tmux_run(self: terminal.TmuxBackend, args: list[str], *, check: bool = False, capture: bool = False,
+                      input_bytes: bytes | None = None, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
+        assert args == ["list-panes", "-a", "-F", "#{pane_id}\t#{pane_title}"]
+        assert capture is True
+        return _cp(stdout="%1\tCCB-codex-abc\n%2\tCCB-codex-def\n")
+
+    backend = terminal.TmuxBackend()
+    monkeypatch.setattr(backend, "_tmux_run", fake_tmux_run.__get__(backend, terminal.TmuxBackend))
+
+    assert backend.find_pane_by_title_marker("CCB-codex") is None
+
+
+def test_tmux_describe_pane_reads_title_and_user_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_tmux_run(self: terminal.TmuxBackend, args: list[str], *, check: bool = False, capture: bool = False,
+                      input_bytes: bytes | None = None, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
+        assert args == ["display-message", "-p", "-t", "%7", "#{pane_id}\t#{pane_title}\t#{pane_dead}\t#{@ccb_agent}\t#{@ccb_project_id}"]
+        assert capture is True
+        return _cp(stdout="%7\tagent2\t0\tagent2\tproj-7\n")
+
+    backend = terminal.TmuxBackend()
+    monkeypatch.setattr(backend, "_tmux_run", fake_tmux_run.__get__(backend, terminal.TmuxBackend))
+
+    assert backend.describe_pane("%7", user_options=("@ccb_agent", "@ccb_project_id")) == {
+        "pane_id": "%7",
+        "pane_title": "agent2",
+        "pane_dead": "0",
+        "@ccb_agent": "agent2",
+        "@ccb_project_id": "proj-7",
+    }
+
+
 @pytest.mark.parametrize(
     ("stdout", "expected"),
     [
@@ -96,6 +128,19 @@ def test_tmux_send_text_always_deletes_buffer(monkeypatch: pytest.MonkeyPatch) -
     assert any(cmd[:2] == ["load-buffer", "-b"] for cmd in calls)
     assert any(cmd and cmd[0] == "paste-buffer" and "-p" in cmd for cmd in calls)
     assert any(cmd[:2] == ["delete-buffer", "-b"] for cmd in calls)
+
+
+def test_tmux_strict_pane_helpers_reject_session_names() -> None:
+    backend = terminal.TmuxBackend()
+
+    with pytest.raises(ValueError):
+        backend.send_text_to_pane("mysession", "hello")
+    with pytest.raises(ValueError):
+        backend.is_tmux_pane_alive("mysession")
+    with pytest.raises(ValueError):
+        backend.kill_tmux_pane("mysession")
+    with pytest.raises(ValueError):
+        backend.activate_tmux_pane("mysession")
 
 
 def test_create_auto_layout_topologies(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -155,3 +200,24 @@ def test_tmux_kill_pane_prefers_pane_id_over_session(monkeypatch: pytest.MonkeyP
     calls.clear()
     backend.kill_pane("mysession")
     assert calls == [["kill-session", "-t", "mysession"]]
+
+
+def test_tmux_strict_kill_and_activate_only_use_pane_targets(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_tmux_run(self: terminal.TmuxBackend, args: list[str], *, check: bool = False, capture: bool = False,
+                      input_bytes: bytes | None = None, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
+        del check, input_bytes, timeout
+        calls.append(args)
+        if args[:3] == ["display-message", "-p", "-t"]:
+            return _cp(stdout="demo-session\n")
+        return _cp(stdout="" if not capture else "demo-session\n")
+
+    backend = terminal.TmuxBackend()
+    monkeypatch.setattr(backend, "_tmux_run", fake_tmux_run.__get__(backend, terminal.TmuxBackend))
+
+    backend.kill_tmux_pane("%7")
+    backend.activate_tmux_pane("%7")
+
+    assert calls[0] == ["kill-pane", "-t", "%7"]
+    assert calls[1] == ["select-pane", "-t", "%7"]

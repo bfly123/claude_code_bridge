@@ -44,17 +44,11 @@ class ConversationDeduper:
 
     def strip_protocol_markers(self, text: str) -> str:
         """Remove CCB protocol markers from text."""
-        lines = text.split("\n")
-        cleaned = []
-        for line in lines:
-            skip = False
-            for pattern in self._protocol_re:
-                if pattern.match(line):
-                    skip = True
-                    break
-            if not skip:
-                cleaned.append(line)
-        return "\n".join(cleaned)
+        return "\n".join(
+            line
+            for line in text.split("\n")
+            if not self._matches_protocol_marker(line)
+        )
 
     def strip_system_noise(self, text: str) -> str:
         """Remove system noise tags from text."""
@@ -82,9 +76,7 @@ class ConversationDeduper:
         prev_hash: Optional[str] = None
 
         for entry in entries:
-            # Normalize and hash content
-            normalized = self._normalize_for_hash(entry.content)
-            content_hash = f"{entry.role}:{hash(normalized)}"
+            content_hash = self._content_hash(entry)
 
             if content_hash != prev_hash:
                 result.append(entry)
@@ -109,66 +101,81 @@ class ConversationDeduper:
 
         for entry in entries:
             if entry.role == "assistant" and entry.tool_calls:
-                # Summarize tool calls
-                summary = self._summarize_tools(entry.tool_calls)
-                if entry.content:
-                    new_content = f"{entry.content}\n\n[Tools: {summary}]"
-                else:
-                    new_content = f"[Tools: {summary}]"
-                result.append(ConversationEntry(
-                    role=entry.role,
-                    content=new_content,
-                    uuid=entry.uuid,
-                    parent_uuid=entry.parent_uuid,
-                    timestamp=entry.timestamp,
-                    tool_calls=[],  # Clear after summarizing
-                ))
+                result.append(self._collapse_tool_entry(entry))
             else:
                 result.append(entry)
 
         return result
+
+    def _matches_protocol_marker(self, line: str) -> bool:
+        return any(pattern.match(line) for pattern in self._protocol_re)
+
+    def _content_hash(self, entry: ConversationEntry) -> str:
+        normalized = self._normalize_for_hash(entry.content)
+        return f"{entry.role}:{hash(normalized)}"
+
+    def _collapse_tool_entry(self, entry: ConversationEntry) -> ConversationEntry:
+        summary = self._summarize_tools(entry.tool_calls)
+        content = _append_tool_summary(entry.content, summary)
+        return ConversationEntry(
+            role=entry.role,
+            content=content,
+            uuid=entry.uuid,
+            parent_uuid=entry.parent_uuid,
+            timestamp=entry.timestamp,
+            tool_calls=[],
+        )
 
     def _summarize_tools(self, tool_calls: list[dict]) -> str:
         """Summarize tool calls into a brief description."""
         if not tool_calls:
             return ""
 
-        # Group by tool name
-        by_name: dict[str, list[dict]] = {}
-        for tc in tool_calls:
-            name = tc.get("name", "unknown")
-            by_name.setdefault(name, []).append(tc)
-
         parts = []
-        for name, calls in by_name.items():
-            if name in ("Read", "Glob", "Grep"):
-                # Extract file paths
-                files = []
-                for c in calls:
-                    inp = c.get("input", {})
-                    if isinstance(inp, dict):
-                        path = inp.get("file_path") or inp.get("path") or inp.get("pattern")
-                        if path:
-                            files.append(str(path).split("/")[-1])
-                if files:
-                    parts.append(f"{name} {len(calls)} file(s): {', '.join(files[:3])}")
-                else:
-                    parts.append(f"{name} {len(calls)} file(s)")
-            elif name in ("Edit", "Write"):
-                files = []
-                for c in calls:
-                    inp = c.get("input", {})
-                    if isinstance(inp, dict):
-                        path = inp.get("file_path")
-                        if path:
-                            files.append(str(path).split("/")[-1])
-                if files:
-                    parts.append(f"{name} {len(calls)} file(s): {', '.join(files[:3])}")
-                else:
-                    parts.append(f"{name} {len(calls)} file(s)")
-            elif name == "Bash":
-                parts.append(f"Bash {len(calls)} command(s)")
-            else:
-                parts.append(f"{name} x{len(calls)}")
+        for name, calls in _group_tool_calls(tool_calls).items():
+            parts.append(_summarize_tool_group(name, calls))
 
         return "; ".join(parts)
+
+
+def _append_tool_summary(content: str, summary: str) -> str:
+    if content:
+        return f"{content}\n\n[Tools: {summary}]"
+    return f"[Tools: {summary}]"
+
+
+def _group_tool_calls(tool_calls: list[dict]) -> dict[str, list[dict]]:
+    by_name: dict[str, list[dict]] = {}
+    for tool_call in tool_calls:
+        name = str(tool_call.get("name", "unknown"))
+        by_name.setdefault(name, []).append(tool_call)
+    return by_name
+
+
+def _summarize_tool_group(name: str, calls: list[dict]) -> str:
+    if name in ("Read", "Glob", "Grep"):
+        return _summarize_file_tool_group(name, calls, keys=("file_path", "path", "pattern"))
+    if name in ("Edit", "Write"):
+        return _summarize_file_tool_group(name, calls, keys=("file_path",))
+    if name == "Bash":
+        return f"Bash {len(calls)} command(s)"
+    return f"{name} x{len(calls)}"
+
+
+def _summarize_file_tool_group(name: str, calls: list[dict], *, keys: tuple[str, ...]) -> str:
+    files = [_tool_basename(tool_call, keys=keys) for tool_call in calls]
+    files = [item for item in files if item]
+    if files:
+        return f"{name} {len(calls)} file(s): {', '.join(files[:3])}"
+    return f"{name} {len(calls)} file(s)"
+
+
+def _tool_basename(tool_call: dict, *, keys: tuple[str, ...]) -> str | None:
+    tool_input = tool_call.get("input", {})
+    if not isinstance(tool_input, dict):
+        return None
+    for key in keys:
+        value = tool_input.get(key)
+        if value:
+            return str(value).split("/")[-1]
+    return None

@@ -1,172 +1,10 @@
 from __future__ import annotations
 
-import importlib.util
 import json
-import threading
-from types import SimpleNamespace
-from importlib.machinery import SourceFileLoader
+import os
 from pathlib import Path
 
-import askd.daemon as askd_daemon
-import askd_runtime
-from askd.adapters.base import ProviderRequest, QueuedTask
-from askd.adapters.claude import ClaudeAdapter
-from askd.adapters.gemini import GeminiAdapter
-from codex_comm import CodexLogReader
-from completion_hook import completion_status_marker
-
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-
-
-def _load_script_module(name: str, path: Path):
-    loader = SourceFileLoader(name, str(path))
-    spec = importlib.util.spec_from_loader(name, loader)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def test_completion_hook_uses_status_marker_and_directional_workdir_matching() -> None:
-    hook = _load_script_module("ccb_completion_hook_script", REPO_ROOT / "bin" / "ccb-completion-hook")
-
-    message = hook._render_terminal_message(
-        "Codex",
-        "req-1",
-        "cancelled",
-        output_file="",
-        status="cancelled",
-    )
-
-    assert completion_status_marker("cancelled") in message
-    assert hook._work_dirs_compatible("/repo", "/repo/subdir") is True
-    assert hook._work_dirs_compatible("/repo/subdir", "/repo") is False
-
-
-def test_completion_hook_manual_caller_is_noop(monkeypatch) -> None:
-    hook = _load_script_module("ccb_completion_hook_manual", REPO_ROOT / "bin" / "ccb-completion-hook")
-    monkeypatch.setenv("CCB_CALLER", "manual")
-    monkeypatch.setenv("CCB_COMPLETION_STATUS", "cancelled")
-    monkeypatch.setattr("sys.argv", ["ccb-completion-hook", "--provider", "codex", "--req-id", "req-1"])
-    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-
-    assert hook.main() == 0
-
-
-def test_completion_hook_wezterm_fallback_honors_send_failure(monkeypatch) -> None:
-    hook = _load_script_module("ccb_completion_hook_wezterm", REPO_ROOT / "bin" / "ccb-completion-hook")
-
-    monkeypatch.setattr(hook, "find_wezterm_cli", lambda: "wezterm")
-
-    calls: list[list[str]] = []
-
-    def _fake_run(cmd, **kwargs):
-        calls.append(cmd)
-        return SimpleNamespace(returncode=1, stdout="", stderr="err")
-
-    monkeypatch.setattr(hook.subprocess, "run", _fake_run)
-
-    ok = hook.send_via_wezterm("pane-1", "hello", {})
-
-    assert ok is False
-    assert len(calls) == 2
-    assert "send-text" in calls[0]
-    assert "--no-paste" in calls[1]
-
-
-def test_completion_hook_wezterm_send_key_fallbacks_to_cr(monkeypatch) -> None:
-    hook = _load_script_module("ccb_completion_hook_wezterm_submit", REPO_ROOT / "bin" / "ccb-completion-hook")
-
-    monkeypatch.setattr(hook, "find_wezterm_cli", lambda: "wezterm")
-
-    calls: list[list[str]] = []
-
-    def _fake_run(cmd, **kwargs):
-        calls.append(cmd)
-        if "send-key" in cmd:
-            return SimpleNamespace(returncode=1, stdout="", stderr="")
-        if "--no-paste" in cmd and kwargs.get("input") == b"\r":
-            return SimpleNamespace(returncode=0, stdout="", stderr="")
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(hook.subprocess, "run", _fake_run)
-
-    ok = hook.send_via_wezterm("pane-1", "hello", {})
-
-    assert ok is True
-    assert any("send-key" in call for call in calls)
-    assert any("--no-paste" in call for call in calls)
-
-
-def test_completion_hook_tmux_enter_retries_with_variants(monkeypatch) -> None:
-    hook = _load_script_module("ccb_completion_hook_tmux", REPO_ROOT / "bin" / "ccb-completion-hook")
-
-    key_calls: list[str] = []
-
-    def _fake_run(cmd, **kwargs):
-        if cmd[:3] == ["tmux", "display-message", "-p"]:
-            return SimpleNamespace(returncode=0, stdout="0", stderr="")
-        if cmd[:3] == ["tmux", "load-buffer", "-b"]:
-            return SimpleNamespace(returncode=0, stdout="", stderr="")
-        if cmd[:3] == ["tmux", "paste-buffer", "-p"]:
-            return SimpleNamespace(returncode=0, stdout="", stderr="")
-        if cmd[:3] == ["tmux", "send-keys", "-t"]:
-            key = cmd[-1]
-            key_calls.append(key)
-            rc = 0 if key == "Return" else 1
-            return SimpleNamespace(returncode=rc, stdout="", stderr="")
-        if cmd[:3] == ["tmux", "delete-buffer", "-b"]:
-            return SimpleNamespace(returncode=0, stdout="", stderr="")
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(hook.subprocess, "run", _fake_run)
-    monkeypatch.setenv("CCB_TMUX_ENTER_DELAY", "0")
-    monkeypatch.setenv("CCB_TMUX_ENTER_RETRY_DELAY", "0")
-
-    ok = hook.send_via_tmux("%1", "hello")
-
-    assert ok is True
-    assert key_calls[:2] == ["Enter", "Return"]
-
-
-def test_maybe_start_unified_daemon_honors_autostart_opt_out(monkeypatch, tmp_path: Path) -> None:
-    ask = _load_script_module("ask_script_opt_out", REPO_ROOT / "bin" / "ask")
-    popen_calls: list[dict] = []
-
-    monkeypatch.setenv("CCB_ASKD_AUTOSTART", "0")
-    monkeypatch.setattr(askd_runtime, "state_file_path", lambda name: tmp_path / name)
-    monkeypatch.setattr(askd_daemon, "ping_daemon", lambda **kwargs: False)
-    monkeypatch.setattr(ask.subprocess, "Popen", lambda *args, **kwargs: popen_calls.append(kwargs))
-
-    assert ask._maybe_start_unified_daemon() is False
-    assert popen_calls == []
-
-
-def test_maybe_start_unified_daemon_scrubs_parent_env(monkeypatch, tmp_path: Path) -> None:
-    ask = _load_script_module("ask_script_scrub", REPO_ROOT / "bin" / "ask")
-    captured: dict[str, object] = {}
-    ping_results = iter([False, True])
-
-    class _DummyProcess:
-        pass
-
-    def _fake_popen(*args, **kwargs):
-        captured["args"] = args
-        captured["kwargs"] = kwargs
-        return _DummyProcess()
-
-    monkeypatch.delenv("CCB_ASKD_AUTOSTART", raising=False)
-    monkeypatch.setenv("CCB_PARENT_PID", "12345")
-    monkeypatch.setenv("CCB_MANAGED", "1")
-    monkeypatch.setattr(askd_runtime, "state_file_path", lambda name: tmp_path / name)
-    monkeypatch.setattr(askd_daemon, "ping_daemon", lambda **kwargs: next(ping_results))
-    monkeypatch.setattr(ask.subprocess, "Popen", _fake_popen)
-
-    assert ask._maybe_start_unified_daemon() is True
-    child_env = captured["kwargs"]["env"]
-    assert "CCB_PARENT_PID" not in child_env
-    assert "CCB_MANAGED" not in child_env
+from provider_backends.codex.comm import CodexLogReader
 
 
 def test_codex_log_reader_keeps_bound_session(tmp_path: Path) -> None:
@@ -179,8 +17,13 @@ def test_codex_log_reader_keeps_bound_session(tmp_path: Path) -> None:
 
     meta = json.dumps({"type": "session_meta", "payload": {"cwd": str(work_dir)}}) + "\n"
     preferred.write_text(meta, encoding="utf-8")
+    preferred_mtime = preferred.stat().st_mtime
+    os.utime(preferred, (preferred_mtime - 30.0, preferred_mtime - 30.0))
     newer.write_text(meta, encoding="utf-8")
-    newer.touch()
+    preferred_mtime = preferred.stat().st_mtime
+    newer_mtime = newer.stat().st_mtime
+    os.utime(preferred, (preferred_mtime - 30.0, preferred_mtime - 30.0))
+    os.utime(newer, (newer_mtime, newer_mtime))
 
     reader = CodexLogReader(
         root=root,
@@ -192,127 +35,258 @@ def test_codex_log_reader_keeps_bound_session(tmp_path: Path) -> None:
     assert reader.current_log_path() == preferred
 
 
-def test_gemini_adapter_reports_cancelled_status(monkeypatch, tmp_path: Path) -> None:
-    from askd.adapters import gemini as gemini_mod
+def test_codex_log_reader_follows_newer_workspace_session_when_enabled(tmp_path: Path) -> None:
+    root = tmp_path / "sessions"
+    work_dir = tmp_path / "repo"
+    work_dir.mkdir()
+    preferred = root / "2026" / "abc-session.jsonl"
+    preferred.parent.mkdir(parents=True, exist_ok=True)
 
-    notifications: list[dict] = []
+    meta = json.dumps({"type": "session_meta", "payload": {"cwd": str(work_dir)}}) + "\n"
+    preferred.write_text(meta, encoding="utf-8")
 
-    class _Session:
-        work_dir = str(tmp_path)
-        gemini_session_path = None
-        data = {}
+    reader = CodexLogReader(
+        root=root,
+        log_path=preferred,
+        session_id_filter="abc",
+        work_dir=work_dir,
+        follow_workspace_sessions=True,
+    )
+    state = reader.capture_state()
+    assert state["log_path"] == preferred
 
-        def ensure_pane(self):
-            return True, "pane-1"
+    rotated = root / "2026" / "rotated-session.jsonl"
+    rotated.write_text(
+        meta
+        + json.dumps(
+            {
+                "timestamp": "2026-04-04T10:39:14.000Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "CCB_REQ_ID: req-rotate\n\nhello"}],
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    rotated_mtime = rotated.stat().st_mtime
+    os.utime(rotated, (rotated_mtime + 30.0, rotated_mtime + 30.0))
+    state["last_rescan"] = 0.0
 
-    class _Backend:
-        def send_text(self, pane_id: str, prompt: str) -> None:
-            return None
+    entries, next_state = reader.try_get_entries(state)
 
-        def is_alive(self, pane_id: str) -> bool:
-            return True
+    assert entries == []
+    assert next_state["log_path"] == rotated
+    assert reader.current_log_path() == rotated
+
+    entries, _final_state = reader.try_get_entries(next_state)
+    assert len(entries) == 1
+    assert entries[0]["role"] == "user"
+    assert "CCB_REQ_ID: req-rotate" in entries[0]["text"]
+
+
+def test_codex_log_reader_replays_first_entries_when_log_appears_after_capture(tmp_path: Path) -> None:
+    root = tmp_path / "sessions"
+    work_dir = tmp_path / "repo"
+    work_dir.mkdir()
+
+    reader = CodexLogReader(root=root, work_dir=work_dir)
+    state = reader.capture_state()
+    assert state["log_path"] is None
+    assert state["offset"] == -1
+
+    log_path = root / "2026" / "ccb-codex-session.jsonl"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"type": "session_meta", "payload": {"cwd": str(work_dir)}}),
+                json.dumps(
+                    {
+                        "timestamp": "2026-03-24T00:00:00.000Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "CCB_REQ_ID: req-1\n\nhello"}],
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    entries, next_state = reader.try_get_entries(state)
+
+    assert len(entries) == 1
+    assert entries[0]["role"] == "user"
+    assert "CCB_REQ_ID: req-1" in entries[0]["text"]
+    assert next_state["log_path"] == log_path
+
+
+def test_codex_execution_reader_factory_uses_bound_root_and_disables_workspace_follow(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from provider_execution import codex as codex_adapter_module
+
+    captured: dict[str, object] = {}
+    session_root = tmp_path / ".codex" / "sessions"
 
     class _Reader:
-        def __init__(self, work_dir: Path):
-            self.session_path = tmp_path / "session.json"
-
-        def set_preferred_session(self, path: Path) -> None:
-            return None
-
-        def capture_state(self) -> dict:
-            return {"msg_count": 0, "session_path": self.session_path}
-
-        def wait_for_message(self, state: dict, timeout: float):
-            return "", {"msg_count": 1, "session_path": self.session_path}
-
-    monkeypatch.setattr(gemini_mod, "load_project_session", lambda work_dir, instance=None: _Session())
-    monkeypatch.setattr(gemini_mod, "get_backend_for_session", lambda data: _Backend())
-    monkeypatch.setattr(gemini_mod, "GeminiLogReader", _Reader)
-    monkeypatch.setattr(gemini_mod, "_detect_request_cancelled", lambda *args, **kwargs: True)
-    monkeypatch.setattr(gemini_mod, "notify_completion", lambda **kwargs: notifications.append(kwargs))
-    monkeypatch.setattr(gemini_mod, "_write_log", lambda line: None)
-
-    req = ProviderRequest(
-        client_id="c1",
-        work_dir=str(tmp_path),
-        timeout_s=5.0,
-        quiet=False,
-        message="hello",
-        caller="claude",
-    )
-    task = QueuedTask(
-        request=req,
-        created_ms=0,
-        req_id="req-1",
-        done_event=threading.Event(),
-        cancel_event=threading.Event(),
-    )
-
-    result = GeminiAdapter().handle_task(task)
-
-    assert result.status == "cancelled"
-    assert notifications[0]["status"] == "cancelled"
-
-
-def test_claude_adapter_honors_cancel_event(monkeypatch, tmp_path: Path) -> None:
-    from askd.adapters import claude as claude_mod
-
-    notifications: list[dict] = []
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
 
     class _Session:
-        work_dir = str(tmp_path)
-        claude_session_path = None
-        data = {}
+        codex_session_path = str(tmp_path / "session.jsonl")
+        codex_session_id = "session-old"
+        codex_session_root = str(session_root)
+        work_dir = str(tmp_path / "repo")
+        data = {"codex_session_root": str(session_root), "codex_session_id": "session-old"}
 
-        def ensure_pane(self):
-            return True, "pane-1"
+    monkeypatch.setattr(codex_adapter_module, "CodexLogReader", _Reader)
 
-    class _Backend:
-        def send_text(self, pane_id: str, prompt: str) -> None:
-            return None
+    codex_adapter_module._reader_factory(_Session(), None)
 
-        def is_alive(self, pane_id: str) -> bool:
-            return True
+    assert captured["root"] == session_root
+    assert captured["log_path"] == tmp_path / "session.jsonl"
+    assert captured["session_id_filter"] == "session-old"
+    assert captured["work_dir"] == tmp_path / "repo"
+    assert captured["follow_workspace_sessions"] is False
+
+
+def test_codex_execution_reader_factory_disables_workspace_follow_for_ambiguous_inplace_agents(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from provider_execution import codex as codex_adapter_module
+
+    captured: dict[str, object] = {}
+    work_dir = tmp_path / "repo"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    session_dir = work_dir / ".ccb"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    session_file = session_dir / ".codex-agent1-session"
+    session_file.write_text(json.dumps({"work_dir": str(work_dir)}), encoding="utf-8")
+    (session_dir / ".codex-agent2-session").write_text(json.dumps({"work_dir": str(work_dir)}), encoding="utf-8")
 
     class _Reader:
-        def __init__(self, work_dir: Path, use_sessions_index: bool = True):
-            self.work_dir = work_dir
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
 
-        def set_preferred_session(self, path: Path) -> None:
-            return None
+    class _Session:
+        codex_session_path = str(tmp_path / "session.jsonl")
+        codex_session_id = "session-old"
+        data = {"codex_session_id": "session-old"}
 
-        def capture_state(self) -> dict:
-            return {}
+    _Session.work_dir = str(work_dir)
+    _Session.session_file = session_file
 
-        def wait_for_events(self, state: dict, timeout: float):
-            return [], state
+    monkeypatch.setattr(codex_adapter_module, "CodexLogReader", _Reader)
 
-    monkeypatch.setattr(claude_mod, "load_project_session", lambda work_dir, instance=None: _Session())
-    monkeypatch.setattr(claude_mod, "get_backend_for_session", lambda data: _Backend())
-    monkeypatch.setattr(claude_mod, "ClaudeLogReader", _Reader)
-    monkeypatch.setattr(claude_mod, "notify_completion", lambda **kwargs: notifications.append(kwargs))
-    monkeypatch.setattr(claude_mod, "_write_log", lambda line: None)
+    codex_adapter_module._reader_factory(_Session(), None)
 
-    req = ProviderRequest(
-        client_id="c1",
-        work_dir=str(tmp_path),
-        timeout_s=5.0,
-        quiet=False,
-        message="hello",
-        caller="claude",
+    assert captured["follow_workspace_sessions"] is False
+
+
+def test_codex_execution_reader_factory_enables_workspace_follow_for_unbound_session(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from provider_execution import codex as codex_adapter_module
+
+    captured: dict[str, object] = {}
+    session_root = tmp_path / ".codex" / "sessions"
+
+    class _Reader:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+    class _Session:
+        codex_session_path = ""
+        codex_session_id = ""
+        codex_session_root = str(session_root)
+        work_dir = str(tmp_path / "repo")
+        data = {"codex_session_root": str(session_root)}
+
+    monkeypatch.setattr(codex_adapter_module, "CodexLogReader", _Reader)
+
+    codex_adapter_module._reader_factory(_Session(), None)
+
+    assert captured["root"] == session_root
+    assert captured["follow_workspace_sessions"] is True
+
+
+def test_codex_log_reader_matches_wsl_and_windows_style_workdirs(tmp_path: Path) -> None:
+    root = tmp_path / "sessions"
+    log_path = root / "2026" / "wsl-session.jsonl"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(
+        json.dumps({"type": "session_meta", "payload": {"cwd": "/mnt/C/Users/alice/repo"}}) + "\n",
+        encoding="utf-8",
     )
-    cancel_event = threading.Event()
-    cancel_event.set()
-    task = QueuedTask(
-        request=req,
-        created_ms=0,
-        req_id="req-1",
-        done_event=threading.Event(),
-        cancelled=True,
-        cancel_event=cancel_event,
+
+    reader = CodexLogReader(root=root, work_dir=Path("c:/Users/alice/repo"))
+
+    assert reader.current_log_path() == log_path
+
+
+def test_resolve_unique_codex_session_target_skips_ambiguous_instances(tmp_path: Path) -> None:
+    from provider_backends.codex.comm import _resolve_unique_codex_session_target
+
+    work_dir = tmp_path / "repo"
+    config_dir = work_dir / ".ccb"
+    config_dir.mkdir(parents=True)
+    (config_dir / ".codex-auth-session").write_text("{}", encoding="utf-8")
+    (config_dir / ".codex-payment-session").write_text("{}", encoding="utf-8")
+
+    session_file, instance = _resolve_unique_codex_session_target(work_dir)
+
+    assert session_file is None
+    assert instance is None
+
+
+def test_resolve_unique_codex_session_target_accepts_single_instance(tmp_path: Path) -> None:
+    from provider_backends.codex.comm import _resolve_unique_codex_session_target
+
+    work_dir = tmp_path / "repo"
+    config_dir = work_dir / ".ccb"
+    config_dir.mkdir(parents=True)
+    target = config_dir / ".codex-auth-session"
+    target.write_text("{}", encoding="utf-8")
+
+    session_file, instance = _resolve_unique_codex_session_target(work_dir)
+
+    assert session_file == target
+    assert instance == "auth"
+
+
+def test_resolve_unique_codex_session_target_filters_candidates_by_log_path(tmp_path: Path) -> None:
+    from provider_backends.codex.comm import _resolve_unique_codex_session_target
+
+    work_dir = tmp_path / "repo"
+    config_dir = work_dir / ".ccb"
+    config_dir.mkdir(parents=True)
+    session_root_a = tmp_path / "agent-a" / "sessions"
+    session_root_b = tmp_path / "agent-b" / "sessions"
+    log_path = session_root_a / "2026" / "04" / "19" / "rollout-a-session.jsonl"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("", encoding="utf-8")
+    (config_dir / ".codex-auth-session").write_text(
+        json.dumps({"codex_session_root": str(session_root_a)}),
+        encoding="utf-8",
+    )
+    (config_dir / ".codex-payment-session").write_text(
+        json.dumps({"codex_session_root": str(session_root_b)}),
+        encoding="utf-8",
     )
 
-    result = ClaudeAdapter().handle_task(task)
+    session_file, instance = _resolve_unique_codex_session_target(work_dir, log_path=log_path)
 
-    assert result.status == "cancelled"
-    assert notifications[0]["status"] == "cancelled"
+    assert session_file == config_dir / ".codex-auth-session"
+    assert instance == "auth"

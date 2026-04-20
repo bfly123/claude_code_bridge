@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import terminal
+import terminal_runtime.api as terminal
 
 
 def test_extract_wsl_path_from_unc_like_path() -> None:

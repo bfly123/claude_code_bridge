@@ -22,10 +22,10 @@ script_dir = Path(__file__).resolve().parent
 lib_dir = script_dir.parent / "lib"
 sys.path.insert(0, str(lib_dir))
 
-from cli_output import EXIT_ERROR, EXIT_OK
-from pane_registry import load_registry_by_project_id, _get_providers_map
-from project_id import compute_ccb_project_id
-from terminal import get_backend_for_session
+from cli.output import EXIT_ERROR, EXIT_OK
+from pane_registry_runtime import get_providers_map, load_registry_by_project_id
+from project.identity import compute_ccb_project_id
+from terminal_runtime import get_backend_for_session
 
 
 # Provider to reset command mapping
@@ -78,7 +78,7 @@ def main(argv: list[str]) -> int:
         return EXIT_ERROR
 
     # Get provider's pane_id
-    providers_map = _get_providers_map(record)
+    providers_map = get_providers_map(record)
     provider_entry = providers_map.get(provider, {})
     pane_id = str(provider_entry.get("pane_id") or "").strip()
 

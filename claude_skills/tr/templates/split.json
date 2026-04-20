@@ -9,8 +9,7 @@
       "op": "autoflow_state_apply_split",
       "stepIndex": "{{stepIndex}}",
       "substeps": "{{substeps}}"
-    },
-    { "op": "run", "cmd": "python3 ~/.claude/skills/tr/scripts/autoloop.py --repo-root . --once", "cwd": ".", "timeoutMs": 600000 }
+    }
   ],
   "report": { "changedFiles": true, "diffSummary": true, "commandOutputs": "on_failure" },
   "_meta": {

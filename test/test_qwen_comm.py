@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ccb_protocol import is_done_text, make_req_id
-from qwen_comm import QwenLogReader
+from provider_core.protocol import is_done_text, make_req_id
+from provider_backends.qwen.comm import QwenLogReader
 
 
 def _write_pane_log(path: Path, content: str) -> None:
@@ -164,7 +164,7 @@ def test_log_truncation_resets_offset(tmp_path: Path) -> None:
 
 def test_session_file_override_prefers_env(tmp_path: Path, monkeypatch) -> None:
     """CCB_SESSION_FILE env var should be used to find session."""
-    from qwen_comm import QwenCommunicator
+    from provider_backends.qwen.comm import QwenCommunicator
 
     root = tmp_path / "proj"
     cfg = root / ".ccb"
@@ -183,7 +183,7 @@ def test_session_file_override_prefers_env(tmp_path: Path, monkeypatch) -> None:
 
 def test_session_file_override_ignores_wrong_filename(tmp_path: Path, monkeypatch) -> None:
     """CCB_SESSION_FILE with wrong filename should be ignored."""
-    from qwen_comm import QwenCommunicator
+    from provider_backends.qwen.comm import QwenCommunicator
 
     root = tmp_path / "proj"
     cfg = root / ".ccb"

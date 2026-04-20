@@ -1,20 +1,17 @@
 <div align="center">
 
-# Claude Code Bridge (ccb) v5.2.6
+# CCB v6(Linux) - Infinite Parallel Agents Edition
 
-**Multi-Model Collaboration via Split-Pane Terminal**
+**Native multi-agent runtime for terminal split panes**
 **Claude · Codex · Gemini · OpenCode · Droid**
-**Lightweight async messaging — full CLI power, every interaction visible**
+**Visible concurrency, native communication, project-scoped runtime**
 
 <p>
   <img src="https://img.shields.io/badge/Every_Interaction_Visible-096DD9?style=for-the-badge" alt="Every Interaction Visible">
   <img src="https://img.shields.io/badge/Every_Model_Controllable-CF1322?style=for-the-badge" alt="Every Model Controllable">
 </p>
 
-[![Version](https://img.shields.io/badge/version-5.2.6-orange.svg)]()
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![CI](https://github.com/bfly123/claude_code_bridge/actions/workflows/test.yml/badge.svg)](https://github.com/bfly123/claude_code_bridge/actions/workflows/test.yml)
+[![Version](https://img.shields.io/badge/version-6.0.5-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 **English** | [Chinese](README_zh.md)
@@ -34,39 +31,176 @@
 
 ---
 
-**Introduction:** Multi-model collaboration avoids model bias, cognitive blind spots, and context limits. Unlike MCP or API-based approaches, ccb gives you a WYSIWYG split-pane terminal where every interaction is visible and every model is controllable.
+**Introduction:** CCB v6 is the infinite parallel agents edition. It turns split-pane collaboration into a native multi-agent runtime where agents can run side by side, hold independent roles and personalities, and delegate to each other through a stable built-in communication layer.
 
-## ⚡ Why ccb?
+## Why Parallel Agents Matter
 
-| Feature | Benefit |
-| :--- | :--- |
-| **🖥️ Visual & Controllable** | Multiple AI models in split-pane CLI. See everything, control everything. |
-| **🧠 Persistent Context** | Each AI maintains its own memory. Close and resume anytime (`-r` flag). |
-| **📉 Token Savings** | Sends lightweight prompts instead of full file history. |
-| **🪟 Native Workflow** | Integrates directly into **WezTerm** (recommended) or tmux. No complex servers required. |
+Parallel agents are not just "more panes on screen". In CCB, each agent can own a fully independent role, task stream, skill library, and personality.
 
----
+CCB provides the runtime foundation for stable agent-to-agent communication and effectively unbounded delegation. It supports arbitrary agent naming and window arrangement, per-agent control, broadcast dispatch, and point-to-point communication.
+
+## 🚀 User Commands
+
+- `ccb` start, restore, and attach CCB in the project directory from the terminal
+- `ccb -s` safe mode
+- `ccb -n` rebuild the project `.ccb` state
+- `ccb kill` close CCB
+- `ccb kill -f` deep-clean exit
+
+## 💬 Communication Usage
+
+Inside a provider / agent runtime:
+
+- `/ask all "sync on the latest repo state"` broadcasts one message to all live agents.
+- `/ask reviewer "review the new parser change"` sends work to the named `[reviewer]` agent.
+
+Typical pattern:
+
+- use `ask all` for one-shot broadcast or global sync
+- use `ask agent_name` for targeted delegation
+- use implicit skill-based calls; agents invoke `ask` themselves, and skills are currently auto-installed into Codex, Claude, and other providers
+- if you only occasionally need to inspect replies manually, `pend` and `watch` are secondary tools
+
+## 🛠 Config Control
+
+`ccb` is controlled by `.ccb/ccb.config`. That file defines agent names, pane layout, and whether an agent runs `inplace` or in a separate git worktree.
+
+Quick rules:
+
+- `agent_name:provider` defines one agent. `agent_name` is also the pane label and logical runtime name.
+- `cmd` adds one shell pane.
+- `;` splits panes horizontally from left to right.
+- `,` splits panes vertically from top to bottom.
+- Default workspace mode is `inplace`. If one agent needs an isolated git worktree to avoid conflicts, write `agent_name:provider(worktree)`.
+
+Example:
+
+```text
+cmd; writer:codex, reviewer:claude; qa:gemini(worktree)
+```
+
+This layout means:
+
+- left pane: `cmd`
+- right side: a vertical stack
+- top-right pane: `writer`
+- bottom-right side: a horizontal split between `reviewer` and `qa`
+- `qa` runs in an isolated git worktree; `writer` and `reviewer` run inplace in the main project
 
 <h2 align="center">🚀 What's New</h2>
 
+Historical note: older release notes below may mention `askd`, legacy flags, or removed commands. Those references are kept only as changelog history and do not redefine the current CLI surface.
+
 <details open>
+<summary><b>v6.0.5</b> - Agent Isolation Stability</summary>
+
+- **Agent Isolation Stability**: Codex, Claude, and Gemini managed agents keep their session state under project-scoped `.ccb/agents/<agent>/provider-state/...`
+- **Restart Inheritance Safety**: restarts restore only the matching managed agent history instead of adopting manual provider conversations from the same working directory
+- **Project Dotfile Protection**: managed startup no longer rewrites project-level `.claude`, `.gemini`, or `.codex` provider dotfiles
+
+</details>
+
+<details>
+<summary><b>v6.0.4</b> - Legacy Update Compatibility Hotfix</summary>
+
+- **Backward-Compatible Release Assets**: Linux release tarballs now include a compatibility alias so older 6.x updaters can still find the extracted installer path
+- **Old Clients Can Upgrade Again**: existing `v6.0.1` and `v6.0.2` installs can now update to the latest stable release without needing a patched local updater first
+- **Modern Updater Still Clean**: current runtime keeps the correct extracted-directory resolution and does not depend on the legacy alias
+
+</details>
+
+<details>
+<summary><b>v6.0.3</b> - Self-Update Tarball Hotfix</summary>
+
+- **Release Upgrade Fixed**: `ccb update` now resolves the extracted release directory correctly instead of treating the `.tar.gz` asset name as a folder
+- **Installer Handoff Restored**: self-update now finds `install.sh` inside extracted release assets and completes end to end
+- **Release Build Hygiene**: Linux release packaging now ignores local `.ccb-requests/` residue so official builds are reproducible
+
+</details>
+
+<details>
+<summary><b>v6.0.2</b> - Caller Attribution, Mailbox Routing, and macOS Install Warning</summary>
+
+- **Correct Caller Identity**: `ccb ask` now preserves the real originating agent so replies return to the right mailbox instead of being attributed as `user`
+- **Stable Reply Routing**: async replies for delegated jobs now land back in the expected mailbox chain, including `cmd`-anchored flows
+- **Mixed-Case Agent Recovery**: config layout recovery no longer drifts when configured agent names use mixed case
+- **macOS Homebrew Warning**: `install.sh` now warns clearly when Homebrew is missing before users try to install tmux and other dependencies
+
+</details>
+
+<details>
+<summary><b>v6.0.1</b> - Release Archive Hygiene & Safer Upgrade Extraction</summary>
+
+- **Source Archive Cleanup**: Removed accidentally tracked pytest temp artifacts so GitHub source archives are clean again
+- **Safer Tar Validation**: Upgrade extraction now rejects unsafe symlink targets before unpacking
+- **Clearer Failure Mode**: Unsafe archive extraction errors now point users toward release assets or clean source archives
+- **Regression Coverage**: Added tests to block ephemeral repo artifacts from being tracked again
+
+</details>
+
+<details>
+<summary><b>v6.0.0</b> - Native Multi-Agent Runtime, Stable Native Communication, and Linux-Only Auto Upgrade</summary>
+
+**🚀 New Runtime Direction:**
+- **Infinite Parallel Agent Foundation**: CCB v6 is built as the runtime base for effectively unbounded agent-to-agent delegation and orchestration
+- **Independent Agent Identity**: agents can carry different roles, task ownership, skill libraries, and personalities
+- **Focused User Command Surface**: the public user workflow stays centered on `ccb`, `ccb -s`, `ccb -n`, `ccb kill`, and `ccb kill -f`
+
+**🧱 Project Rebuild Semantics:**
+- **Config-Preserving Legacy Cleanup**: On first `ccb` inside a pre-6 project, CCB preserves `.ccb/ccb.config`, removes the rest of the old `.ccb` runtime state, and rebuilds locally
+- **Runtime Marker**: Modern projects now record `.ccb/project-runtime.json` so current runtime state is distinguished from legacy state
+- **Worktree Safety Guard**: Dirty or unmerged CCB-managed worktrees still block destructive rebuilds until the user resolves them
+
+**🔄 Upgrade Policy:**
+- **Linux/WSL Only**: `ccb update` is now available only on Linux/WSL for the 6.x line
+- **Release-Only Upgrades**: Source tags are still published with each version, but `ccb update` for 6.x installs the GitHub release asset, not the source archive
+- **Stable Release Targeting**: Default upgrades now resolve to the latest stable release instead of the moving `main` branch
+- **Major Upgrade Confirmation**: Upgrading into `6.0.0` requires explicit confirmation before replacing the installed runtime
+
+**🤖 Provider Reliability:**
+- **Gemini Multi-Round Stability**: Gemini completion polling now waits through tool activity and no longer exits on the first stable planning sentence
+
+</details>
+
+<details>
+<summary><b>v5.3.0</b> - Simplified CLI, Explicit Worktree Mode, and Gemini Completion Stability</summary>
+
+**🚀 User-Facing CLI Simplification:**
+- **Narrowed Main Surface**: Public startup flow is now `ccb`, `ccb -s`, `ccb -n`, `ccb kill`, and `ccb kill -f`
+- **Model Control Plane Still Available**: `ask`, `ping`, `pend`, and `watch` remain for agent-to-agent orchestration without cluttering primary help
+
+**🧱 Workspace Semantics Made Explicit:**
+- **Default Inplace Mode**: Compact `ccb.config` entries now expand to `workspace_mode='inplace'`
+- **Opt-In Isolation**: Use `agent:provider(worktree)` when an agent must run in its own git worktree
+- **Safe Agent Churn**: Adding agents no longer disturbs existing worktrees; removing or renaming worktree agents retires clean branches and blocks on dirty or unmerged ones
+
+**🛠 Recovery & Reset Hardening:**
+- **Config-Preserving Reset**: `ccb -n` rebuilds project runtime state while keeping `.ccb/ccb.config`
+- **Stale Registration Cleanup**: Start and reset now prune missing registered git worktrees before rematerialization
+- **Kill Warnings**: `ccb kill` warns clearly when a worktree agent still has unmerged or dirty state
+
+**🤖 Gemini Completion Fix:**
+- **No Early Stop on Planning Text**: Gemini completion polling now tracks tool-call activity and waits for the real final reply instead of finishing on the first stable “I will ...” message
+
+</details>
+
+<details>
 <summary><b>v5.2.6</b> - Async Communication & Gemini 0.29 Compatibility</summary>
 
 **🔧 Gemini CLI 0.29.0 Support:**
 - **Dual Hash Strategy**: Session path discovery now supports both basename and SHA-256 formats
 - **Autostart**: `ccb-ping` and `ccb-mounted` gain `--autostart` flag to launch offline provider daemons
-- **Cleanup Tool**: New `ccb-cleanup` utility for removing zombie daemons and stale state files
+- **Cleanup Path**: zombie-session cleanup is now handled by `ccb kill -f`
 
 **🔗 Async Communication Fixes:**
 - **OpenCode Deadlock**: Fixed session ID pinning that caused second async call to always fail
-- **Degraded Completion**: Adapters now accept `CCB_DONE` even when req_id doesn't match exactly
+- **Legacy Completion Compatibility**: Legacy text-based providers still tolerate mismatched `CCB_DONE` lines in degraded mode
 - **req_id Regex**: `opencode_comm.py` now matches both old hex and new timestamp-based formats
 - **Gemini Idle Timeout**: Auto-detect reply completion when Gemini omits `CCB_DONE` marker (15s idle, configurable via `CCB_GEMINI_IDLE_TIMEOUT`)
 - **Gemini Prompt Hardening**: Stronger instructions to reduce `CCB_DONE` omission rate
 
 **🛠 Other Fixes:**
 - **lpend**: Prefers fresh Claude session path when registry is stale
-- **mail setup**: Unblocked `ccb mail setup` import on config v3
 
 </details>
 
@@ -125,17 +259,9 @@ These improvements significantly enhance the reliability of cross-AI communicati
 </details>
 
 <details>
-<summary><b>v5.2.0</b> - Email Integration for Remote AI Access</summary>
+<summary><b>v5.2.0</b> - Historical mail bridge release</summary>
 
-**📧 New Feature: Mail Service**
-- **Email-to-AI Gateway**: Send emails to interact with AI providers remotely
-- **Multi-Provider Support**: Gmail, Outlook, QQ, 163 mail presets
-- **Provider Routing**: Use body prefix to target specific AI (e.g., `CLAUDE: your question`)
-- **Real-time Polling**: IMAP IDLE support for instant email detection
-- **Secure Credentials**: System keyring integration for password storage
-- **Mail Daemon**: Background service (`maild`) for continuous email monitoring
-
-See [Mail System Configuration](#-mail-system-configuration) for setup instructions.
+This release introduced the old mail gateway path. That flow is now removed from the supported agent-first surface and remains legacy code only during cleanup.
 
 </details>
 
@@ -175,28 +301,28 @@ See [CHANGELOG.md](CHANGELOG.md) for full details.
 </details>
 
 <details>
-<summary><b>v5.1.0</b> - Unified Command System + Windows WezTerm Support</summary>
+<summary><b>v5.1.0</b> - Unified Command System + Historical Native Windows Experiment</summary>
 
-**🚀 Unified Commands** - Replace provider-specific commands with unified interface:
+**🚀 Unified Commands** - Replace provider-specific commands with agent-first workflows:
 
 | Old Commands | New Unified Command |
 |--------------|---------------------|
-| `cask`, `gask`, `oask`, `dask`, `lask` | `ask <provider> <message>` |
-| `cping`, `gping`, `oping`, `dping`, `lping` | `ccb-ping <provider>` |
-| `cpend`, `gpend`, `opend`, `dpend`, `lpend` | `pend <provider> [N]` |
+| `cask`, `gask`, `oask`, `dask`, `lask` | `ccb ask <agent> [from <sender>] <message>` |
+| `cping`, `gping`, `oping`, `dping`, `lping` | `ccb ping <agent\|all>` |
+| `cpend`, `gpend`, `opend`, `dpend`, `lpend` | `ccb pend <agent\|job_id> [N]` |
 
 **Supported providers:** `gemini`, `codex`, `opencode`, `droid`, `claude`
 
-**🪟 Windows WezTerm + PowerShell Support:**
-- Full native Windows support with WezTerm terminal
-- Background execution using PowerShell + `DETACHED_PROCESS`
-- WezTerm CLI integration with stdin for large payloads
-- UTF-8 BOM handling for PowerShell compatibility
+**🪟 Historical native Windows experiment:**
+- Earlier releases explored a native Windows split-pane path
+- Background execution used PowerShell + `DETACHED_PROCESS`
+- Large payload delivery used stdin-based handoff
+- That backend has since been removed; future native Windows mux support is being redesigned around `psmux`
 
 **📦 New Skills:**
-- `/ask <provider> <message>` - Request to AI provider (background by default)
-- `/cping <provider>` - Test provider connectivity
-- `/pend <provider> [N]` - View latest provider reply
+- `/ask <agent> <message>` - Send work to a named agent
+- `/ping <agent|all>` - Check mounted agent health
+- `/pend <agent|job_id> [N]` - View latest agent reply
 
 See [CHANGELOG.md](CHANGELOG.md) for full details.
 
@@ -248,7 +374,7 @@ Highlights:
 - **Simplified Launch**: Dropped `ccb up`; use `ccb ...` or the default `ccb.config`.
 - **Flexible Mounting**: More flexible pane mounting and session binding.
 - **Default Config**: Auto-create `ccb.config` when missing.
-- **Daemon Autostart**: `caskd`/`laskd` auto-start in WezTerm/tmux when needed.
+- **Project askd Autostart**: project askd and provider runtimes auto-start in the project tmux namespace when needed.
 - **Session Robustness**: PID liveness checks prevent stale sessions.
 
 </details>
@@ -257,9 +383,9 @@ Highlights:
 <summary><b>v4.0</b> - tmux-first refactor</summary>
 
 - **Full Refactor**: Cleaner structure, better stability, and easier extension.
-- **Terminal Backend Abstraction**: Unified terminal layer (`TmuxBackend` / `WeztermBackend`) with auto-detection and WSL path handling.
+- **Terminal Runtime Cleanup**: The runtime moved toward a single tmux-oriented pane/control model instead of parallel terminal backends.
 - **Perfect tmux Experience**: Stable layouts + pane titles/borders + session-scoped theming.
-- **Works in Any Terminal**: If your terminal can run tmux, CCB can provide the full multi-model split experience (except native Windows; WezTerm recommended; otherwise just use tmux).
+- **Works in Any Terminal**: If your terminal can run tmux, CCB can provide the full multi-model split experience.
 
 </details>
 
@@ -285,15 +411,15 @@ Highlights:
 
 <h3 align="center">✨ Key Features</h3>
 
-- **🔄 True Parallelism**: Submit multiple tasks to Codex, Gemini, or OpenCode simultaneously. The new daemons (`caskd`, `gaskd`, `oaskd`) automatically queue and execute them serially, ensuring no context pollution.
-- **🤝 Cross-AI Orchestration**: Claude and Codex can now simultaneously drive OpenCode agents. All requests are arbitrated by the unified daemon layer.
-- **🛡️ Bulletproof Stability**: Daemons are self-managing—they start automatically on the first request and shut down after 60s of idleness to save resources.
+- **🔄 True Parallelism**: Submit multiple tasks to Codex, Gemini, or OpenCode simultaneously. Provider runtimes queue and execute them serially, ensuring no context pollution.
+- **🤝 Cross-AI Orchestration**: Claude and Codex can now simultaneously drive OpenCode agents. All requests are arbitrated by the project askd layer.
+- **🛡️ Bulletproof Stability**: The runtime layer is self-managing. It starts on first use and shuts down after idleness to save resources.
 - **⚡ Chained Execution**: Advanced workflows supported! Codex can autonomously call `oask` to delegate sub-tasks to OpenCode models.
 - **🛑 Smart Interruption**: Gemini tasks now support intelligent interruption detection, automatically handling stops and ensuring workflow continuity.
 
 <h3 align="center">🧩 Feature Support Matrix</h3>
 
-| Feature | `caskd` (Codex) | `gaskd` (Gemini) | `oaskd` (OpenCode) |
+| Feature | Codex | Gemini | OpenCode |
 | :--- | :---: | :---: | :---: |
 | **Parallel Queue** | ✅ | ✅ | ✅ |
 | **Interruption Awareness** | ✅ | ✅ | - |
@@ -333,7 +459,7 @@ Highlights:
 
 ## 🚀 Quick Start
 
-**Step 1:** Install [WezTerm](https://wezfurlong.org/wezterm/) (native `.exe` for Windows)
+**Step 1:** Use a tmux-capable environment (`tmux` on Linux/macOS/WSL)
 
 **Step 2:** Choose installer based on your environment:
 
@@ -382,6 +508,8 @@ cd claude_code_bridge
 
 > Use this if your Claude/Codex/Gemini runs natively on Windows.
 
+> Native Windows mux runtime is being redesigned around `psmux`. The stable split-pane path in this branch is still Linux/macOS/WSL + `tmux`.
+
 ```powershell
 git clone https://github.com/bfly123/claude_code_bridge.git
 cd claude_code_bridge
@@ -389,32 +517,29 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 install
 ```
 
 - The installer prefers `pwsh.exe` (PowerShell 7+) when available, otherwise `powershell.exe`.
-- If a WezTerm config exists, the installer will try to set `config.default_prog` to PowerShell (adds a `-- CCB_WEZTERM_*` block and will prompt before overriding an existing `default_prog`).
 
 </details>
 
 ### Run
 ```bash
-ccb                    # Start providers from ccb.config (default: all four)
-ccb codex gemini       # Start both
-ccb codex gemini opencode claude  # Start all four (spaces)
-ccb codex,gemini,opencode,claude  # Start all four (commas)
-ccb -r codex gemini     # Resume last session for Codex + Gemini
-ccb -a codex gemini opencode  # Auto-approval mode with multiple providers
-ccb -a -r codex gemini opencode claude  # Auto + resume for all providers
+ccb                              # Start default agents from .ccb/ccb.config
+ccb -s                           # Safe start: keep configured/manual permission behavior
+ccb -n                           # Rebuild .ccb except ccb.config, then start fresh
+ccb kill                         # Stop this project's background runtime
+ccb kill -f                      # Force cleanup before rebuilding state
 
 tmux tip: CCB's tmux status/pane theming is enabled only while CCB is running.
 tmux tip: press `Ctrl+b` then `Space` to cycle tmux layouts. You can press it repeatedly to keep switching layouts.
 
-Layout rule: the last provider runs in the current pane. Extras are ordered as `[cmd?, reversed providers]`; the first extra goes to the top-right, then the left column fills top-to-bottom, then the right column fills top-to-bottom. Examples: 4 panes = left2/right2, 5 panes = left2/right3.
-Note: `ccb up` is removed; use `ccb ...` or configure `ccb.config`.
+Layout rule: the last selected agent runs in the current pane. Extras are ordered by the selected target list; the first extra goes to the top-right, then the left column fills top-to-bottom, then the right column fills top-to-bottom.
+Note: `ccb up` is removed; use `ccb ...` with `.ccb/ccb.config`.
 ```
 
 ### Flags
 | Flag | Description | Example |
 | :--- | :--- | :--- |
-| `-r` | Resume previous session context | `ccb -r` |
-| `-a` | Auto-mode, skip permission prompts | `ccb -a` |
+| `-s` | Safe start; disable CLI auto-permission override | `ccb -s` |
+| `-n` | Rebuild `.ccb` except `ccb.config`, then start fresh | `ccb -n` |
 | `-h` | Show help information | `ccb -h` |
 | `-v` | Show version and check for updates | `ccb -v` |
 
@@ -423,32 +548,35 @@ Default lookup order:
 - `.ccb/ccb.config` (project)
 - `~/.ccb/ccb.config` (global)
 
-Simple format (recommended):
+Compact format only:
 ```text
-codex,gemini,opencode,claude
+writer:codex,reviewer:claude
 ```
 
 Enable cmd pane (default title/command):
 ```text
-codex,gemini,opencode,claude,cmd
+agent1:codex,agent2:codex,agent3:claude,cmd
 ```
 
-Advanced JSON (optional, for flags or custom cmd pane):
-```json
-{
-  "providers": ["codex", "gemini", "opencode", "claude"],
-  "cmd": { "enabled": true, "title": "CCB-Cmd", "start_cmd": "bash" },
-  "flags": { "auto": false, "resume": false }
-}
-```
-Cmd pane participates in the layout as the first extra pane and does not change which AI runs in the current pane.
+Rules:
+- Each agent entry must be `agent_name:provider`.
+- `cmd` is a reserved standalone token for the shell pane, not an agent name.
+- `;` splits panes horizontally from left to right.
+- `,` splits panes vertically from top to bottom.
+- `(...)` groups part of the layout explicitly.
+- Each agent entry expands to fixed defaults: `target='.'`, `workspace_mode='inplace'`, `restore='auto'`, `permission='manual'`.
+- Use `agent_name:provider(worktree)` when you want that agent isolated in its own git worktree.
+- Missing project config is auto-created as `codex:codex,claude:claude`.
+- Cmd pane participates in the layout as the first extra pane and does not change which AI runs in the current pane.
 
 ### Update
+CCB v6 currently supports `ccb update` only on Linux/WSL. A major upgrade fully replaces the installed runtime. On the first `ccb` inside an older project, CCB preserves `.ccb/ccb.config`, clears the rest of the old `.ccb` state, and rebuilds locally.
+
 ```bash
-ccb update              # Update ccb to the latest version
-ccb update 4            # Update to the highest v4.x.x version
-ccb update 4.1          # Update to the highest v4.1.x version
-ccb update 4.1.2        # Update to specific version v4.1.2
+ccb update              # Update to the latest stable release
+ccb update 6            # Update to the highest v6.x.x version
+ccb update 6.0          # Update to the highest v6.0.x version
+ccb update 6.0.5        # Update to a specific version
 ccb uninstall           # Uninstall ccb and clean configs
 ccb reinstall           # Clean then reinstall ccb
 ```
@@ -456,18 +584,19 @@ ccb reinstall           # Clean then reinstall ccb
 ---
 
 <details>
-<summary><b>🪟 Windows Installation Guide (WSL vs Native)</b></summary>
+<summary><b>🪟 Windows Environment Guide</b></summary>
 
-> **Key Point:** `ccb/cask/cping/cpend` must run in the **same environment** as `codex/gemini`. The most common issue is environment mismatch causing `cping` to fail.
+> **Key Point:** `ccb` and the underlying agent CLIs must run in the **same environment**. The most common issue is environment mismatch causing project startup or agent attach to fail.
 
 Note: The installers also install OS-specific `SKILL.md` variants for Claude/Codex skills:
 - Linux/macOS/WSL: bash heredoc templates (`SKILL.md.bash`)
 - Native Windows: PowerShell here-string templates (`SKILL.md.powershell`)
 
-### 1) Prerequisites: Install Native WezTerm
+### 1) Current backend status
 
-- Install Windows native WezTerm (`.exe` from official site or via winget), not the Linux version inside WSL.
-- Reason: `ccb` in WezTerm mode relies on `wezterm cli` to manage panes.
+- The active multi-pane runtime in this branch is `tmux` only.
+- Stable split-pane usage today means Linux/macOS/WSL with `tmux`.
+- Native Windows mux support is being redesigned around `psmux`; see [docs/ccbd-windows-psmux-plan.md](docs/ccbd-windows-psmux-plan.md).
 
 ### 2) How to Identify Your Environment
 
@@ -479,29 +608,19 @@ Determine based on **how you installed/run Claude Code/Codex**:
   - Verify: `cat /proc/version | grep -i microsoft` has output, or `echo $WSL_DISTRO_NAME` is non-empty
 
 - **Native Windows Environment**
-  - You installed/run via Windows Terminal / WezTerm / PowerShell / CMD (e.g., `winget`, PowerShell scripts)
+  - You installed/run via Windows Terminal / PowerShell / CMD (e.g., `winget`, PowerShell scripts)
   - Paths look like: `C:\Users\<user>\...`
 
-### 3) WSL Users: Configure WezTerm to Auto-Enter WSL
+### 3) Recommended path today
 
-Edit WezTerm config (`%USERPROFILE%\.wezterm.lua`):
+- If you want the stable split-pane/runtime supervision path, run `ccb` and all agent CLIs inside WSL, then use `tmux`.
+- If your tools currently run natively on Windows, keep that environment consistent, but treat native split-pane orchestration as transitional until `psmux` lands.
 
-```lua
-local wezterm = require 'wezterm'
-return {
-  default_domain = 'WSL:Ubuntu', -- Replace with your distro name
-}
-```
-
-Check distro name with `wsl -l -v` in PowerShell.
-
-### 4) Troubleshooting: `cping` Not Working
+### 4) Troubleshooting: `ccb` Not Starting Correctly
 
 - **Most common:** Environment mismatch (ccb in WSL but codex in native Windows, or vice versa)
-- **Codex session not running:** Run `ccb codex` (or add codex to ccb.config) first
-- **WezTerm CLI not found:** Ensure `wezterm` is in PATH
-- **Terminal not refreshed:** Restart WezTerm after installation
-- **Text sent but not submitted (no Enter) on Windows WezTerm:** Set `CCB_WEZTERM_ENTER_METHOD=key` and ensure your WezTerm supports `wezterm cli send-key`
+- **tmux not available:** Install `tmux` in the environment where you run `ccb`
+- **Terminal not refreshed:** Restart the shell after installation so PATH changes are visible
 
 </details>
 
@@ -510,7 +629,7 @@ Check distro name with `wsl -l -v` in PowerShell.
 
 ### Command Not Found After Installation
 
-If `ccb`, `cask`, `cping` commands are not found after running `./install.sh install`:
+If `ccb` is not found after running `./install.sh install`:
 
 **Cause:** The install directory (`~/.local/bin`) is not in your PATH.
 
@@ -533,18 +652,22 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-### WezTerm Not Detecting Commands
+### tmux Shell Not Detecting Commands
 
-If WezTerm cannot find ccb commands but regular Terminal can:
+If a shell started inside tmux cannot find ccb commands but a regular Terminal can:
 
-- WezTerm may use a different shell config
+- tmux may be starting a different shell init path
 - Add PATH to `~/.zprofile` as well:
 
 ```bash
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile
 ```
 
-Then restart WezTerm completely (Cmd+Q, reopen).
+Then restart the tmux server completely:
+
+```bash
+tmux kill-server
+```
 
 </details>
 
@@ -568,47 +691,31 @@ Once started, collaborate naturally. Claude will detect when to delegate tasks.
 >
 > 🃏 Claude (Landlord) vs 🎯 Codex + 💎 Gemini (Farmers)
 
-> **Note:** Manual commands (like `cask`, `cping`) are usually invoked by Claude automatically. See Command Reference for details.
+> **Note:** The public project runtime workflow in CCB v6 is intentionally small: `ccb`, `ccb -s`, `ccb -n`, `ccb kill`, and `ccb kill -f`. Internal control-plane commands still exist for agent-side orchestration, but they are not part of the user-facing startup/reset surface.
 
 ---
 
-## 🛠️ Unified Command System
+## 🛠️ User-Facing CLI
 
-### Legacy Commands (Deprecated)
-- `cask/gask/oask/dask/lask` - Independent ask commands per provider
-- `cping/gping/oping/dping/lping` - Independent ping commands  
-- `cpend/gpend/opend/dpend/lpend` - Independent pend commands
+The public project runtime workflow in CCB v6 is intentionally reduced to five primary commands:
 
-### Unified Commands
-- **`ask <provider> <message>`** - Unified request (background by default)
-  - Supports: `gemini`, `codex`, `opencode`, `droid`, `claude`
-  - Defaults to background; managed Codex sessions prefer foreground to avoid cleanup
-  - Override with `--foreground` / `--background` or `CCB_ASK_FOREGROUND=1` / `CCB_ASK_BACKGROUND=1`
-  - Foreground uses sync send and disables completion hook unless `CCB_COMPLETION_HOOK_ENABLED` is set
-  - Supports `--notify` for short synchronous notifications
-  - Supports `CCB_CALLER` (default: `codex` in Codex sessions, otherwise `claude`)
+- **`ccb`** - Default start path; launch agents defined by `.ccb/ccb.config`
+- **`ccb -s`** - Safe start; keep each agent's configured/default permission behavior
+- **`ccb -n`** - Rebuild project `.ccb` state except `ccb.config`, then start fresh with confirmation
+- **`ccb kill`** - Stop the current project's runtime
+- **`ccb kill -f`** - Force cleanup project-owned runtime residue before `ccb -n`
+  - Also works as a recovery path when `.ccb` exists but `ccb.config` is missing or stale
 
-- **`ccb-ping <provider>`** - Unified connectivity test
-  - Checks if the specified provider's daemon is online
-
-- **`pend <provider> [N]`** - Unified reply fetch
-  - Fetches latest N replies from the provider
-  - Optional N specifies number of recent messages
-
-### Skills System
-- `/ask <provider> <message>` - Request skill (background by default; foreground in managed Codex sessions)
-- `/cping <provider>` - Connectivity test skill
-- `/pend <provider>` - Reply fetch skill
+Internal control-plane commands still exist for model-side orchestration and automation, but they are intentionally not presented here as public user commands.
 
 ### Cross-Platform Support
 - **Linux/macOS/WSL**: Uses `tmux` as terminal backend
-- **Windows WezTerm**: Uses **PowerShell** as terminal backend
-- **Windows PowerShell**: Native support via `DETACHED_PROCESS` background execution
+- **Native Windows**: Mux runtime is being redesigned around `psmux`; this branch no longer ships a parallel legacy native backend
 
 ### Completion Hook
 - Notifies caller upon task completion
-- Supports `CCB_CALLER` targeting (`claude`/`codex`/`droid`)
-- Compatible with both tmux and WezTerm backends
+- Supports caller-targeted completion notifications (`claude`/`codex`/`droid`)
+- Compatible with the tmux backend used by the current branch
  - Foreground ask suppresses the hook unless `CCB_COMPLETION_HOOK_ENABLED` is set
 
 ---
@@ -651,136 +758,9 @@ When to use:
 
 ---
 
-## 📧 Mail System Configuration
+## Legacy Cleanup Note
 
-The mail system allows you to interact with AI providers via email, enabling remote access when you're away from your terminal.
-
-### How It Works
-
-1. **Send an email** to your CCB service mailbox
-2. **Specify the AI provider** using a prefix in the email body (e.g., `CLAUDE: your question`)
-3. **CCB routes the request** to the specified AI provider via the ASK system
-4. **Receive the response** via email reply
-
-### Quick Setup
-
-**Step 1: Run the configuration wizard**
-```bash
-maild setup
-```
-
-**Step 2: Choose your email provider**
-- Gmail
-- Outlook
-- QQ Mail
-- 163 Mail
-- Custom IMAP/SMTP
-
-**Step 3: Enter credentials**
-- Service email address (CCB's mailbox)
-- App password (not your regular password - see provider-specific instructions below)
-- Target email (where to send replies)
-
-**Step 4: Start the mail daemon**
-```bash
-maild start
-```
-
-### Configuration File
-
-Configuration is stored in `~/.ccb/mail/config.json`:
-
-```json
-{
-  "version": 3,
-  "enabled": true,
-  "service_account": {
-    "provider": "gmail",
-    "email": "your-ccb-service@gmail.com",
-    "imap": {"host": "imap.gmail.com", "port": 993, "ssl": true},
-    "smtp": {"host": "smtp.gmail.com", "port": 587, "starttls": true}
-  },
-  "target_email": "your-phone@example.com",
-  "default_provider": "claude",
-  "polling": {
-    "use_idle": true,
-    "idle_timeout": 300
-  }
-}
-```
-
-### Provider-Specific Setup
-
-<details>
-<summary><b>Gmail</b></summary>
-
-1. Enable 2-Step Verification in your Google Account
-2. Go to [App Passwords](https://myaccount.google.com/apppasswords)
-3. Generate a new app password for "Mail"
-4. Use this 16-character password (not your Google password)
-
-</details>
-
-<details>
-<summary><b>Outlook / Office 365</b></summary>
-
-1. Enable 2-Step Verification in your Microsoft Account
-2. Go to [Security > App Passwords](https://account.live.com/proofs/AppPassword)
-3. Generate a new app password
-4. Use this password for CCB mail configuration
-
-</details>
-
-<details>
-<summary><b>QQ Mail</b></summary>
-
-1. Log in to QQ Mail web interface
-2. Go to Settings > Account
-3. Enable IMAP/SMTP service
-4. Generate an authorization code (授权码)
-5. Use this authorization code as the password
-
-</details>
-
-<details>
-<summary><b>163 Mail</b></summary>
-
-1. Log in to 163 Mail web interface
-2. Go to Settings > POP3/SMTP/IMAP
-3. Enable IMAP service
-4. Set an authorization password (客户端授权密码)
-5. Use this authorization password for CCB
-
-</details>
-
-### Email Format
-
-**Basic format:**
-```
-Subject: Any subject (ignored)
-Body:
-CLAUDE: What is the weather like today?
-```
-
-**Supported provider prefixes:**
-- `CLAUDE:` or `claude:` - Route to Claude
-- `CODEX:` or `codex:` - Route to Codex
-- `GEMINI:` or `gemini:` - Route to Gemini
-- `OPENCODE:` or `opencode:` - Route to OpenCode
-- `DROID:` or `droid:` - Route to Droid
-
-If no prefix is specified, the request goes to the `default_provider` (default: `claude`).
-
-### Mail Daemon Commands
-
-```bash
-maild start          # Start the mail daemon
-maild stop           # Stop the mail daemon
-maild status         # Check daemon status
-maild config         # Show current configuration
-maild setup          # Run configuration wizard
-maild test           # Test email connectivity
-```
+The legacy mail subsystem has been removed from the repo. The current runtime is project-scoped around `.ccb/ccb.config`, and old runtime state can be cleared and rebuilt.
 
 ---
 
@@ -793,7 +773,7 @@ maild test           # Test email connectivity
 ## 📋 Requirements
 
 - **Python 3.10+**
-- **Terminal:** [WezTerm](https://wezfurlong.org/wezterm/) (Highly Recommended) or tmux
+- **Terminal:** `tmux`
 
 ---
 
@@ -811,7 +791,9 @@ ccb reinstall
 
 <div align="center">
 
-**Windows fully supported** (WSL + Native via WezTerm)
+**Stable runtime:** Linux/macOS/WSL + tmux
+
+**Native Windows mux:** planned around `psmux`
 
 ---
 
@@ -855,7 +837,7 @@ ccb reinstall
 - **Unified Control**: Single entry point controls Claude/OpenCode/Gemini equally
 - **Simplified Launch**: Removed `ccb up`; default `ccb.config` is auto-created when missing
 - **Flexible Mounting**: More flexible pane mounting and session binding
-- **Daemon Autostart**: `caskd`/`laskd` auto-start in WezTerm/tmux when needed
+- **Project askd Autostart**: project askd and provider runtimes auto-start in the project tmux namespace when needed
 - **Session Robustness**: PID liveness checks prevent stale sessions
 
 ### v4.1.3
@@ -883,13 +865,13 @@ ccb reinstall
 - **Codex Skills Stability**: Codex `oask/gask` skills default to waiting (`--timeout -1`) to avoid sending the next task too early
 
 ### v4.0.8
-- **Daemon Log Binding Refresh**: `caskd` daemon now periodically refreshes `.codex-session` log paths by parsing `start_cmd` and scanning latest logs
+- **Codex Log Binding Refresh**: the Codex runtime now periodically refreshes `.codex-session` log paths by parsing `start_cmd` and scanning latest logs
 - **Tmux Clipboard Enhancement**: Added `xsel` support and `update-environment` for better clipboard integration across GUI/remote sessions
 
 ### v4.0.7
 - **Tmux Status Bar Redesign**: Dual-line status bar with modern dot indicators (●/○), git branch, and CCB version display
 - **Session Freshness**: Always scan logs for latest session instead of using cached session file
-- **Simplified Auto Mode**: `ccb -a` now purely uses `--dangerously-skip-permissions`
+- **Simplified Auto Mode (Historical)**: auto-permission behavior was consolidated into the current primary start flow
 
 ### v4.0.6
 - **Session Overrides**: `cping/gping/oping/cpend/opend` support `--session-file` / `CCB_SESSION_FILE` to bypass wrong `cwd`
@@ -920,7 +902,7 @@ ccb reinstall
 - **Works in Any Terminal**: Recommended to run everything in tmux (except native Windows)
 
 ### v3.0.0
-- **Smart Daemons**: `caskd`/`gaskd`/`oaskd` with 60s idle timeout & parallel queue support
+- **Smart Runtime Queue**: project askd with 60s idle timeout and provider queue support
 - **Cross-AI Collaboration**: Support multiple agents (Claude/Codex) calling one agent (OpenCode) simultaneously
 - **Interruption Detection**: Gemini now supports intelligent interruption handling
 - **Chained Execution**: Codex can call `oask` to drive OpenCode

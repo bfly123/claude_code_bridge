@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-ctx-transfer - Transfer conversation context between CCB providers.
+ctx-transfer - Transfer conversation context between CCB agents.
 
 Usage:
     ctx-transfer [OPTIONS]
 
 Examples:
-    ctx-transfer --last 5 --to codex --send   # Transfer last 5 conversations
+    ctx-transfer --last 5 --agent agent1 --send  # Transfer last 5 conversations
     ctx-transfer --dry-run                   # Preview without sending
     ctx-transfer --output context.md         # Write to file
     ctx-transfer --from auto                 # Auto-detect source provider
@@ -33,7 +33,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
         prog="ctx-transfer",
-        description="Transfer conversation context between CCB providers.",
+        description="Transfer conversation context between CCB agents.",
     )
     parser.add_argument(
         "-n", "--last",
@@ -50,16 +50,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Source provider (default: auto)",
     )
     parser.add_argument(
-        "-t", "--to",
-        dest="provider",
-        default="codex",
-        choices=["codex", "gemini", "opencode", "droid"],
-        help="Target provider (default: codex)",
+        "--agent",
+        dest="agent_name",
+        help="Target agent name (required with --send)",
     )
     parser.add_argument(
         "--send",
         action="store_true",
-        help="Send to provider via ask (default: disabled)",
+        help="Send to agent via ask (default: disabled)",
     )
     parser.add_argument(
         "-d", "--dry-run",
@@ -102,14 +100,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--no-save",
         action="store_true",
-        help="Disable auto-save when sending to provider",
+        help="Disable auto-save when sending to agent",
     )
     parser.add_argument(
         "--detailed",
         action="store_true",
         help="Output detailed tool executions with full results",
     )
-    return parser.parse_args(argv[1:])
+    args = parser.parse_args(argv[1:])
+    if args.send and not str(args.agent_name or "").strip():
+        parser.error("--send requires --agent <agent_name>")
+    return args
 
 
 def main(argv: list[str]) -> int:
@@ -159,26 +160,24 @@ def main(argv: list[str]) -> int:
         if not args.send:
             # Default: write to history dir when no --output/--dry-run
             if not args.output:
-                saved_path = transfer.save_transfer(context, args.fmt, target_provider=None)
+                saved_path = transfer.save_transfer(context, args.fmt, target_agent=None)
                 if not args.quiet:
                     print(f"Saved to {saved_path}", file=sys.stderr)
             return 0
 
-        # Save if requested or sending to provider (unless --no-save)
+        # Save if requested or sending to agent (unless --no-save)
         should_save = args.save or (not args.no_save)
         saved_path = None
         if should_save:
-            saved_path = transfer.save_transfer(context, args.fmt, args.provider)
+            saved_path = transfer.save_transfer(context, args.fmt, args.agent_name)
             if not args.quiet:
                 print(f"Saved to {saved_path}", file=sys.stderr)
 
-        # Send to provider
-        success, result = transfer.send_to_provider(
-            context, args.provider, args.fmt
-        )
+        # Send to agent
+        success, result = transfer.send_to_agent(context, args.agent_name, args.fmt)
         if success:
             if not args.quiet:
-                print(f"Sent to {args.provider}", file=sys.stderr)
+                print(f"Sent to {args.agent_name}", file=sys.stderr)
             if result:
                 print(result)
             return 0

@@ -1,45 +1,61 @@
 ---
 name: ask
-description: Send the user's request to specified AI provider asynchronously
+description: Send a message to a CCB agent with `ccb ask`.
 metadata:
-  short-description: Ask AI provider asynchronously
+  short-description: Ask agent
 ---
 
-# Ask AI Provider
+Use this skill when the user writes `$ask`.
 
-Send the user's request to the specified AI provider via ask.
+Syntax:
 
-## Usage
+```text
+$ask <target> <message...>
+```
 
-The first argument must be the provider name. The message MUST be provided via stdin
-(heredoc or pipe), not as CLI arguments, to avoid shell globbing issues:
-- `gemini` - Send to Gemini
-- `claude` - Send to Claude
-- `opencode` - Send to OpenCode
-- `droid` - Send to Droid
+Rules:
 
-## Execution (MANDATORY)
+- `target` is the first token after `$ask`.
+- `message` is the exact remainder after `target`.
+- If `message` is empty, stop and report a short usage error.
+- Do not inspect files, search the repo, explain a plan, or add commentary first.
+- Do not rewrite, summarize, or translate the message.
+- Do not infer or pass a sender manually. `ccb ask` resolves it.
+- Do not run `pend`, `ping`, or any follow-up command unless the user explicitly asks.
+- Default behavior is async submit.
+- Only use `--wait` if the user explicitly asks to wait for the reply in the same turn.
+- Only use `--silence` if the user explicitly asks for silent success mail.
+
+Default:
 
 ```bash
-CCB_CALLER=codex ask $PROVIDER <<'EOF'
+command ccb ask "$TARGET" <<'EOF'
 $MESSAGE
 EOF
 ```
 
-## Rules
+Wait:
 
-- After running the command, say "[Provider] processing..." and immediately end your turn.
-- Do not wait for results or check status in the same turn.
-- The task ID and log file path will be displayed for tracking.
+```bash
+command ccb ask --wait "$TARGET" <<'EOF'
+$MESSAGE
+EOF
+```
 
-## Examples
+Silent:
 
-- `/ask gemini What is 12+12?` (send via heredoc)
-- `CCB_CALLER=codex ask gemini <<'EOF'`
-  `What is 12+12?`
-  `EOF`
+```bash
+command ccb ask --silence "$TARGET" <<'EOF'
+$MESSAGE
+EOF
+```
 
-## Notes
+Wait + silent:
 
-- If it fails, check backend health with the corresponding ping command (`ccb-ping <provider>` (e.g., `ccb-ping gemini`)).
-- Codex-managed sessions default to foreground; use `--background` or `CCB_ASK_BACKGROUND=1` for async.
+```bash
+command ccb ask --wait --silence "$TARGET" <<'EOF'
+$MESSAGE
+EOF
+```
+
+If async output contains `[CCB_ASYNC_SUBMITTED`, stop immediately and return that output only.

@@ -101,7 +101,7 @@ Out of scope:
 
 ### Step 5: CCB Startup Integration
 - **Actions**: add `_build_droid_start_cmd`, `_start_droid_tmux`, `_start_droid_current_pane`, `_write_droid_session`; update `config/ccb-status.sh`.
-- **Deliverables**: CCB can start Droid in tmux/wezterm and record session metadata.
+- **Deliverables**: CCB can start Droid in tmux and record session metadata.
 - **Dependencies**: Steps 2-4.
 
 ### Step 6: Tests + Docs
