@@ -373,10 +373,11 @@ def test_shutdown_daemon_terminates_lingering_ccbd_pid(tmp_path: Path, monkeypat
     lease = SimpleNamespace(
         mount_state=SimpleNamespace(value='unmounted'),
         ccbd_pid=321,
+        daemon_instance_id='daemon-a',
     )
-    mark_calls: list[str] = []
+    mark_calls: list[dict[str, object]] = []
     manager = SimpleNamespace(
-        mark_unmounted=lambda: mark_calls.append('unmounted') or lease,
+        mark_unmounted=lambda **kwargs: mark_calls.append(dict(kwargs)) or lease,
         load_state=lambda: lease,
     )
     inspection = SimpleNamespace(
@@ -407,8 +408,61 @@ def test_shutdown_daemon_terminates_lingering_ccbd_pid(tmp_path: Path, monkeypat
 
     assert client_calls == ['shutdown']
     assert terminated == [321]
-    assert mark_calls == ['unmounted']
+    assert mark_calls == [
+        {
+            'expected_pid': 321,
+            'expected_daemon_instance_id': 'daemon-a',
+        }
+    ]
     assert summary.state == 'unmounted'
+
+
+def test_shutdown_daemon_does_not_unmount_replaced_lease_holder(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-kill-daemon-replaced'
+    project_root.mkdir(parents=True, exist_ok=True)
+    bootstrap_project(project_root)
+    command = ParsedKillCommand(project=None, force=False)
+    context = CliContextBuilder().build(command, cwd=project_root, bootstrap_if_missing=False)
+
+    inspected_lease = SimpleNamespace(
+        mount_state=SimpleNamespace(value='mounted'),
+        ccbd_pid=321,
+        daemon_instance_id='daemon-a',
+    )
+    replacement_lease = SimpleNamespace(
+        mount_state=SimpleNamespace(value='mounted'),
+        ccbd_pid=654,
+        daemon_instance_id='daemon-b',
+    )
+    mark_calls: list[dict[str, object]] = []
+
+    def _mark_unmounted(**kwargs):
+        mark_calls.append(dict(kwargs))
+        raise RuntimeError('ccbd lease holder changed')
+
+    manager = SimpleNamespace(
+        mark_unmounted=_mark_unmounted,
+        load_state=lambda: replacement_lease,
+    )
+    inspection = SimpleNamespace(
+        socket_connectable=False,
+        pid_alive=False,
+        lease=inspected_lease,
+    )
+
+    monkeypatch.setattr('cli.services.daemon.inspect_daemon', lambda context: (manager, None, inspection))
+    monkeypatch.setattr('cli.services.daemon._wait_for_keeper_exit', lambda context, timeout_s: True)
+    monkeypatch.setattr('cli.services.daemon.is_pid_alive', lambda pid: False)
+
+    summary = shutdown_daemon(context, force=False)
+
+    assert mark_calls == [
+        {
+            'expected_pid': 321,
+            'expected_daemon_instance_id': 'daemon-a',
+        }
+    ]
+    assert summary.state == 'mounted'
 
 
 def test_kill_project_force_ignores_invalid_runtime_file_for_unknown_agent(tmp_path: Path, monkeypatch) -> None:

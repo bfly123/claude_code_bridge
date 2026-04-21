@@ -27,6 +27,12 @@ def _repo_root() -> Path:
 
 def _run_ccb(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
+    for name in tuple(env):
+        if name in {'CCB_SESSION_FILE', 'CCB_SESSION_ID'}:
+            env.pop(name, None)
+            continue
+        if name.startswith(('CCB_CALLER_', 'CODEX_', 'CLAUDE_', 'GEMINI_', 'OPENCODE_', 'DROID_')):
+            env.pop(name, None)
     return subprocess.run(
         [sys.executable, str(_repo_root() / 'ccb'), *args],
         cwd=str(cwd),
@@ -2694,6 +2700,7 @@ def test_ccb_two_named_claude_agents_concurrent_ask_isolated(monkeypatch, tmp_pa
             self.data = {'pane_id': pane_id}
             self.claude_session_id = session_id
             self.claude_session_path = str(session_path)
+            self.claude_projects_root = None
             self.work_dir = str(work_dir)
 
         def ensure_pane(self):
@@ -3484,6 +3491,7 @@ def test_ccb_claude_real_adapter_blackbox_watch_chain(monkeypatch, tmp_path: Pat
         data = {}
         claude_session_path = str(tmp_path / 'claude-session.jsonl')
         claude_session_id = 'claude-session-id'
+        claude_projects_root = None
         work_dir = str(project_root)
 
         def ensure_pane(self):
@@ -3586,6 +3594,7 @@ def test_ccb_claude_real_adapter_blackbox_watch_chain_without_done_marker(monkey
         data = {}
         claude_session_path = str(tmp_path / 'claude-session.jsonl')
         claude_session_id = 'claude-session-id'
+        claude_projects_root = None
         work_dir = str(project_root)
 
         def ensure_pane(self):
@@ -3677,6 +3686,7 @@ def test_ccb_claude_real_adapter_recovers_after_ccbd_restart(monkeypatch, tmp_pa
         data = {}
         claude_session_path = str(tmp_path / 'claude-session.jsonl')
         claude_session_id = 'claude-session-id'
+        claude_projects_root = None
         work_dir = str(project_root)
 
         def ensure_pane(self):
@@ -3797,6 +3807,7 @@ def test_ccb_claude_real_adapter_blackbox_rotate_and_subagent_only_new_main_boun
         data = {}
         claude_session_path = old_session_path
         claude_session_id = 'claude-session-id'
+        claude_projects_root = None
         work_dir = str(project_root)
 
         def ensure_pane(self):
@@ -3964,6 +3975,7 @@ def test_ccb_claude_real_adapter_recovers_after_ccbd_restart_rotate_and_subagent
         data = {}
         claude_session_path = old_session_path
         claude_session_id = 'claude-session-id'
+        claude_projects_root = None
         work_dir = str(project_root)
 
         def ensure_pane(self):

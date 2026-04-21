@@ -63,7 +63,7 @@ def shutdown_incompatible_daemon(
     unavailable_health_states,
 ) -> None:
     try:
-        client.shutdown()
+        client.stop_all(force=False)
     except CcbdClientError:
         pass
     deadline = time.time() + shutdown_timeout_s

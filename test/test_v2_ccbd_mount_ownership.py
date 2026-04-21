@@ -243,6 +243,74 @@ def test_mount_manager_does_not_revive_unmounted_lease_on_heartbeat(tmp_path: Pa
     assert manager.load_state().mount_state is MountState.UNMOUNTED
 
 
+def test_mount_manager_refresh_heartbeat_rejects_replaced_lease_holder(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-replaced-holder'
+    project_root.mkdir()
+    ctx = bootstrap_project(project_root)
+    layout = PathLayout(project_root)
+    clock = Clock(
+        [
+            '2026-03-18T00:00:00Z',
+            '2026-03-18T00:00:05Z',
+        ]
+    )
+    manager = MountManager(layout, clock=clock, uid_getter=lambda: 1000, boot_id_getter=lambda: 'boot-1')
+
+    manager.mark_mounted(
+        project_id=ctx.project_id,
+        pid=321,
+        socket_path=layout.ccbd_socket_path,
+        generation=2,
+        daemon_instance_id='daemon-a',
+    )
+    manager.mark_mounted(
+        project_id=ctx.project_id,
+        pid=654,
+        socket_path=layout.ccbd_socket_path,
+        generation=3,
+        daemon_instance_id='daemon-b',
+    )
+
+    with pytest.raises(RuntimeError, match='lease holder changed'):
+        manager.refresh_heartbeat(expected_pid=321, expected_daemon_instance_id='daemon-a')
+
+    lease = manager.load_state()
+    assert lease is not None
+    assert lease.ccbd_pid == 654
+    assert lease.daemon_instance_id == 'daemon-b'
+
+
+def test_mount_manager_mark_unmounted_rejects_replaced_lease_holder(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-replaced-unmount'
+    project_root.mkdir()
+    ctx = bootstrap_project(project_root)
+    layout = PathLayout(project_root)
+    manager = MountManager(layout, clock=lambda: '2026-03-18T00:00:00Z', uid_getter=lambda: 1000, boot_id_getter=lambda: 'boot-1')
+
+    manager.mark_mounted(
+        project_id=ctx.project_id,
+        pid=321,
+        socket_path=layout.ccbd_socket_path,
+        generation=2,
+        daemon_instance_id='daemon-a',
+    )
+    manager.mark_mounted(
+        project_id=ctx.project_id,
+        pid=654,
+        socket_path=layout.ccbd_socket_path,
+        generation=3,
+        daemon_instance_id='daemon-b',
+    )
+
+    with pytest.raises(RuntimeError, match='lease holder changed'):
+        manager.mark_unmounted(expected_pid=321, expected_daemon_instance_id='daemon-a')
+
+    lease = manager.load_state()
+    assert lease is not None
+    assert lease.mount_state is MountState.MOUNTED
+    assert lease.ccbd_pid == 654
+
+
 def test_ownership_guard_blocks_healthy_lease_and_allows_stale_takeover(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo'
     project_root.mkdir()
@@ -961,7 +1029,7 @@ def test_ccbd_heartbeat_recovers_degraded_agent_and_drains_queue(tmp_path: Path,
     app.runtime_service._session_bindings = {'codex': binding}
     app.health_monitor._session_bindings = {'codex': binding}
     app.dispatcher._execution_service = None
-    monkeypatch.setattr(app.mount_manager, 'refresh_heartbeat', lambda: None)
+    monkeypatch.setattr(app.mount_manager, 'refresh_heartbeat', lambda **kwargs: None)
 
     submit = app.dispatcher.submit(
         MessageEnvelope(
@@ -1001,7 +1069,7 @@ def test_ccbd_heartbeat_starts_missing_agent_and_drains_queue(tmp_path: Path, mo
     ctx = bootstrap_project(project_root)
     app = CcbdApp(project_root)
     app.dispatcher._execution_service = None
-    monkeypatch.setattr(app.mount_manager, 'refresh_heartbeat', lambda: None)
+    monkeypatch.setattr(app.mount_manager, 'refresh_heartbeat', lambda **kwargs: None)
     seen: list[tuple[tuple[str, ...], bool, bool, bool, bool]] = []
     app.registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=app.paths, pid=1234))
 
@@ -1068,7 +1136,7 @@ def test_ccbd_heartbeat_uses_persisted_start_policy_for_recovery_mount(tmp_path:
     app = CcbdApp(project_root)
     app.persist_start_policy(auto_permission=True)
     app.dispatcher._execution_service = None
-    monkeypatch.setattr(app.mount_manager, 'refresh_heartbeat', lambda: None)
+    monkeypatch.setattr(app.mount_manager, 'refresh_heartbeat', lambda **kwargs: None)
     seen: list[tuple[tuple[str, ...], bool, bool, bool, bool]] = []
     app.registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=app.paths, pid=1234))
 
@@ -1116,6 +1184,39 @@ def test_ccbd_heartbeat_uses_persisted_start_policy_for_recovery_mount(tmp_path:
     running = app.dispatcher.get(job_id)
     assert running is not None
     assert running.status.value == 'running'
+
+
+def test_ccbd_request_shutdown_does_not_unmount_replaced_lease_holder(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-request-shutdown-replaced'
+    project_root.mkdir()
+    config_path = project_root / '.ccb' / 'ccb.config'
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text('codex:codex\n', encoding='utf-8')
+    ctx = bootstrap_project(project_root)
+    app = CcbdApp(project_root)
+
+    app.mount_manager.mark_mounted(
+        project_id=ctx.project_id,
+        pid=app.pid,
+        socket_path=app.paths.ccbd_socket_path,
+        generation=1,
+        daemon_instance_id=app.daemon_instance_id,
+    )
+    app.mount_manager.mark_mounted(
+        project_id=ctx.project_id,
+        pid=app.pid + 1,
+        socket_path=app.paths.ccbd_socket_path,
+        generation=2,
+        daemon_instance_id='replacement-daemon',
+    )
+
+    app.request_shutdown()
+
+    lease = app.mount_manager.load_state()
+    assert lease is not None
+    assert lease.mount_state is MountState.MOUNTED
+    assert lease.ccbd_pid == app.pid + 1
+    assert lease.daemon_instance_id == 'replacement-daemon'
 
 
 def test_ccbd_foreign_pane_reflow_uses_persisted_start_policy(tmp_path: Path, monkeypatch) -> None:

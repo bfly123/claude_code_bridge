@@ -101,6 +101,10 @@ Out of scope:
 - Each project anchor may have at most one authoritative `ccbd` backend.
 - `lease.json` plus startup lock plus socket ownership define backend authority.
 - A second `ccbd` may only replace the current one through explicit takeover rules.
+- Once takeover has replaced the recorded lease holder, the previous daemon must treat that lease as lost authority:
+  - heartbeat refresh must not succeed against a replaced holder
+  - backend-local shutdown or unmount must not rewrite a newer holder's lease
+  - stale control-plane helpers must prefer reading current authority over forcing an unmount write
 - Provider-specific background daemons must not become competing project authorities.
 
 ### 5.3 Desired Agent Set
@@ -172,6 +176,10 @@ Managed provider startup mutation rules:
 - startup preparation must not create, delete, or rewrite project-level provider dotfiles such as `.claude/settings.json`, `.claude/settings.local.json`, `.gemini/settings.json`, `.codex/*`, or equivalent provider-owned workspace config
 - provider bootstrap config needed for managed launches must live under `.ccb/agents/<agent>/provider-state/<provider>/` or an explicit validated provider-profile runtime home
 - agent workspaces may still be created or reconciled as workspace mounts, but provider configuration/trust state must remain inside the managed provider boundary rather than the project worktree
+- the project control plane (`ccb`, keeper, `ccbd`) must not inherit provider-runtime session identity or managed-home variables from the caller shell:
+  - examples include `CCB_SESSION_ID`, `CCB_SESSION_FILE`, `CCB_CALLER_*`, `CODEX_*`, `CLAUDE_*`, `GEMINI_*`, `OPENCODE_*`, and equivalent provider runtime markers
+  - those variables are runtime-local evidence for the currently running managed agent process, not startup authority for a new or existing project backend
+  - provider runtime environment must be injected only into the managed provider process being launched, not leaked into project-scoped control-plane subprocesses
 
 Missing-config recovery rules:
 
@@ -276,6 +284,8 @@ Project namespace compatibility:
 - that legacy reuse exception is narrow:
   - if the session file explicitly declares a tmux socket and it is not the project socket, startup must reject it
   - if same-socket pane inspection proves the pane belongs to a detached sibling session or foreign project identity, startup must reject it
+  - if provider live-identity proof is merely unavailable or `unknown`, startup may still reuse that legacy instance-scoped binding
+  - if provider live-identity proof is explicitly `mismatch`, startup must reject it and relaunch
   - inferred default-server socket facts must not override an otherwise valid instance-scoped legacy binding
 
 ### 5.6 Runtime Supervision Is A Daemon Responsibility
@@ -346,6 +356,9 @@ Project-socket cleanup rules:
 - startup must compute the authoritative active pane set for the current project-owned tmux socket
 - same-socket pane/session residue is evidence only; it must not be silently tolerated just because it lives on the project socket
 - startup must clean project-owned orphan panes on the project socket during the startup transaction, not wait for a later manual cleanup path
+- UNIX-socket cleanup must be identity-safe:
+  - a daemon may unlink the project socket path only if the current filesystem entry is still the exact socket inode it bound
+  - shutting down an old daemon must never remove a newer daemon's replacement socket path
 
 ### 5.8 Daemon Must Not Stay Dead
 
@@ -364,6 +377,7 @@ Target architecture:
   - `STALE`
 - `DEGRADED` with a live pid plus fresh heartbeat is observation only, not restart authority, even if the project socket is temporarily unreachable
 - therefore temporary UNIX-socket accept stalls during active work must surface as degraded availability, not a keeper-triggered daemon replacement
+- if takeover does occur, any superseded daemon that wakes up again must fail its next lease refresh and exit rather than continuing to serve against stale authority
 
 If keeper is absent, the system can only provide "restart on next `ccb` command", which is weaker than the target contract.
 
@@ -393,6 +407,9 @@ That means:
 - configured-agent authority must end in a clean stopped/unmounted state
 - once shutdown intent is acquired, the backend must not run any further reconcile/heartbeat tick that could remount desired agents during the same shutdown transaction
 - local daemon shutdown helpers must not stop at `mark_unmounted()` plus socket close; they must run the same stop-all cleanup transaction first so provider-runtime pid files, namespace state, and configured-agent authority do not survive a backend-local shutdown
+- lease writes that transition backend authority to `unmounted` must be holder-safe:
+  - daemon-local shutdown paths may only unmount the lease they still own
+  - CLI or keeper cleanup paths acting on an inspected lease must not overwrite a newer holder that took over after inspection
 
 ## 6. Required Runtime States
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from agents.models import build_project_layout_plan
 
 from .namespace import ensure_project_namespace
-from .reporting import record_shutdown_report, record_startup_report
+from .reporting import record_startup_report
 
 
 def start_supervisor(
@@ -93,47 +93,17 @@ def stop_all_supervisor(
     tmux_cleanup_history_store_cls,
     stop_all_project_fn,
 ):
-    try:
-        execution = stop_all_project_fn(
-            project_root=supervisor._project_root,
-            project_id=supervisor._project_id,
-            paths=supervisor._paths,
-            registry=supervisor._registry,
-            project_namespace=supervisor._project_namespace,
-            clock=supervisor._clock,
-            force=force,
-            cleanup_project_tmux_orphans_by_socket_fn=cleanup_project_tmux_orphans_by_socket_fn,
-            tmux_cleanup_history_store_cls=tmux_cleanup_history_store_cls,
-        )
-    except Exception as exc:
-        record_shutdown_report(
-            supervisor,
-            trigger='stop_all',
-            status='failed',
-            forced=force,
-            reason='stop_all',
-            stopped_agents=(),
-            actions_taken=('stop_all_failed',),
-            cleanup_summaries=(),
-            failure_reason=str(exc),
-        )
-        raise
-
-    record_shutdown_report(
-        supervisor,
-        trigger='stop_all',
-        status='ok',
-        forced=force,
-        reason='stop_all',
-        stopped_agents=execution.stopped_agents,
-        actions_taken=execution.actions_taken,
-        cleanup_summaries=execution.cleanup_summaries,
-        failure_reason=None,
+    execution = stop_all_project_fn(
+        project_root=supervisor._project_root,
+        project_id=supervisor._project_id,
+        paths=supervisor._paths,
+        registry=supervisor._registry,
+        project_namespace=supervisor._project_namespace,
+        clock=supervisor._clock,
+        force=force,
+        cleanup_project_tmux_orphans_by_socket_fn=cleanup_project_tmux_orphans_by_socket_fn,
+        tmux_cleanup_history_store_cls=tmux_cleanup_history_store_cls,
     )
-    try:
-        supervisor._start_policy_store.clear()
-    except Exception:
-        pass
     return execution.summary
 
 

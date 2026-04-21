@@ -25,12 +25,19 @@ def resolve_claude_home_layout(runtime_dir: Path, profile) -> ClaudeHomeLayout:
 
 def prepare_claude_home_overrides(runtime_dir: Path, profile) -> dict[str, str]:
     layout = resolve_claude_home_layout(runtime_dir, profile)
-    _prepare_managed_home(_system_home_root(), layout, profile=profile)
+    materialize_claude_home_config(layout.home_root, profile=profile)
     return {
         'HOME': str(layout.home_root),
         'CLAUDE_PROJECTS_ROOT': str(layout.projects_root),
         'CLAUDE_PROJECT_ROOT': str(layout.projects_root),
     }
+
+
+def materialize_claude_home_config(target_home: Path, *, profile=None, source_home: Path | None = None) -> ClaudeHomeLayout:
+    layout = claude_layout_for_home(Path(target_home).expanduser())
+    source_root = Path(source_home).expanduser() if source_home is not None else _system_home_root()
+    _prepare_managed_home(source_root, layout, profile=profile)
+    return layout
 
 
 def _profile_runtime_home(profile) -> Path | None:
@@ -101,14 +108,14 @@ def _prepare_managed_home(source_home: Path, target_layout: ClaudeHomeLayout, *,
 
 
 def _materialize_settings(source_home: Path, target_layout: ClaudeHomeLayout, *, profile) -> None:
-    if target_layout.settings_path.exists():
-        return
     payload = _projected_settings_payload(source_home / '.claude' / 'settings.json', profile=profile)
-    if payload is None:
+    existing = _read_json_object(target_layout.settings_path)
+    merged = _merge_settings_payload(payload, existing=existing)
+    if merged is None:
         return
     target_layout.settings_path.parent.mkdir(parents=True, exist_ok=True)
     target_layout.settings_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + '\n',
+        json.dumps(merged, ensure_ascii=False, indent=2) + '\n',
         encoding='utf-8',
     )
 
@@ -144,6 +151,27 @@ def _projected_settings_payload(source_settings_path: Path, *, profile) -> dict[
     if payload:
         return payload
     return {} if _needs_settings_stub(profile) else None
+
+
+def _merge_settings_payload(
+    projected: dict[str, object] | None,
+    *,
+    existing: dict[str, object],
+) -> dict[str, object] | None:
+    existing_payload = dict(existing or {})
+    projected_payload = dict(projected or {})
+    merged = dict(projected_payload)
+
+    for key in ('hooks', 'permissions'):
+        value = existing_payload.get(key)
+        if value is not None:
+            merged[key] = value
+
+    if not merged and existing_payload:
+        return existing_payload
+    if merged:
+        return merged
+    return None
 
 
 def _needs_settings_stub(profile) -> bool:
@@ -209,4 +237,4 @@ def _system_home_root() -> Path:
     return Path.home().expanduser()
 
 
-__all__ = ['prepare_claude_home_overrides', 'resolve_claude_home_layout']
+__all__ = ['materialize_claude_home_config', 'prepare_claude_home_overrides', 'resolve_claude_home_layout']

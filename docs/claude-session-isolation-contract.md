@@ -98,6 +98,11 @@ When `ccb` starts a managed Claude agent:
   launching Claude
 - it must materialize required Claude auth/config projections into the managed
   home without treating them as conversation identity
+- managed Claude home materialization is part of startup preparation, before
+  hook/trust installation and before launcher command assembly
+- managed `settings.json` projection must treat inherited system settings as the
+  baseline and preserve managed runtime sections such as `hooks` and compatible
+  Claude-written runtime state such as `permissions`
 - it must install Claude hook/trust state only inside that managed home
 - it must write the effective `claude_home`, `claude_projects_root`, and
   `claude_session_env_root` into the agent session file

@@ -13,6 +13,7 @@ from ccbd.keeper import (
     keeper_state_is_running,
 )
 from ccbd.system import utc_now
+from runtime_env.control_plane import control_plane_env
 
 from cli.kill_runtime.processes import is_pid_alive
 
@@ -103,8 +104,7 @@ def keeper_pid(context, lease, *, process_exists_fn=is_pid_alive) -> int:
 def spawn_keeper_process(context) -> None:
     lib_root = _lib_root()
     script = lib_root / 'ccbd' / 'keeper_main.py'
-    env = dict(os.environ)
-    env['PYTHONUNBUFFERED'] = '1'
+    env = control_plane_env(extra={'PYTHONUNBUFFERED': '1'})
     current_pythonpath = env.get('PYTHONPATH')
     env['PYTHONPATH'] = (
         str(lib_root)

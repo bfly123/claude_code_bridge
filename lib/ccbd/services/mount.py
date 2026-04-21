@@ -60,23 +60,58 @@ class MountManager:
         self._store.save(self._layout.ccbd_lease_path, lease, serializer=lambda value: value.to_record())
         return lease
 
-    def refresh_heartbeat(self) -> CcbdLease:
+    def refresh_heartbeat(self, *, expected_pid: int | None = None, expected_daemon_instance_id: str | None = None) -> CcbdLease:
         lease = self.load_state()
         if lease is None:
             raise RuntimeError('ccbd lease does not exist')
         if lease.mount_state is not MountState.MOUNTED:
             return lease
+        self._assert_expected_holder(
+            lease,
+            expected_pid=expected_pid,
+            expected_daemon_instance_id=expected_daemon_instance_id,
+        )
         updated = lease.with_heartbeat(self._clock())
         self._store.save(self._layout.ccbd_lease_path, updated, serializer=lambda value: value.to_record())
         return updated
 
-    def mark_unmounted(self) -> CcbdLease | None:
+    def mark_unmounted(
+        self,
+        *,
+        expected_pid: int | None = None,
+        expected_daemon_instance_id: str | None = None,
+    ) -> CcbdLease | None:
         lease = self.load_state()
         if lease is None:
             return None
+        self._assert_expected_holder(
+            lease,
+            expected_pid=expected_pid,
+            expected_daemon_instance_id=expected_daemon_instance_id,
+        )
         updated = lease.with_mount_state(MountState.UNMOUNTED, heartbeat_at=self._clock())
         self._store.save(self._layout.ccbd_lease_path, updated, serializer=lambda value: value.to_record())
         return updated
+
+    def _assert_expected_holder(
+        self,
+        lease: CcbdLease,
+        *,
+        expected_pid: int | None,
+        expected_daemon_instance_id: str | None,
+    ) -> None:
+        if expected_pid is not None and int(lease.ccbd_pid) != int(expected_pid):
+            raise RuntimeError(
+                f'ccbd lease holder changed: expected pid={expected_pid}, found pid={lease.ccbd_pid}'
+            )
+        expected_instance = str(expected_daemon_instance_id or '').strip()
+        if expected_instance:
+            current_instance = str(lease.daemon_instance_id or '').strip()
+            if current_instance != expected_instance:
+                raise RuntimeError(
+                    'ccbd lease holder changed: '
+                    f'expected daemon_instance_id={expected_instance}, found daemon_instance_id={current_instance or "<missing>"}'
+                )
 
 
 def _lease_from_record(record: dict) -> CcbdLease:

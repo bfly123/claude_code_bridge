@@ -16,6 +16,7 @@ class CcbdSocketServer:
         self._socket_path = Path(socket_path)
         self._handlers: dict[str, callable] = {}
         self._server = None
+        self._bound_socket_stat: tuple[int, int] | None = None
         self._stop_event = threading.Event()
 
     @property

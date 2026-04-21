@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/模型皆可控-CF1322?style=for-the-badge" alt="模型皆可控">
 </p>
 
-[![Version](https://img.shields.io/badge/version-6.0.5-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-6.0.6-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 [English](README.md) | **中文**
@@ -98,6 +98,16 @@ cmd; writer:codex, reviewer:claude; qa:gemini(worktree)
 历史说明：下面较旧的发布记录里仍可能出现 `askd`、旧 flag 或已移除命令。这些内容仅作为 changelog 历史保留，不代表当前 CLI 入口。
 
 <details open>
+<summary><b>v6.0.6</b> - Agent 隔离稳定性增强与 kill 生命周期修复</summary>
+
+- **Agent 隔离稳定性增强**：Codex、Claude、Gemini 的 managed agent 会把会话状态稳定保存在项目级 `.ccb/agents/<agent>/provider-state/...` 下
+- **重启继承更安全**：重启只恢复对应 managed agent 自己的历史，不再因为工作目录相同而吸收手工运行 provider 的对话
+- **项目 Provider Dotfile 保护**：managed 启动不再改写项目级 `.claude`、`.gemini` 或 `.codex` provider dotfiles
+- **Kill 生命周期修复**：`ccb kill` 主动销毁当前项目 tmux session 后，交互式 `ccb` 不再误报前台 attach 失败
+
+</details>
+
+<details>
 <summary><b>v6.0.5</b> - Agent 隔离稳定性增强</summary>
 
 - **Agent 隔离稳定性增强**：Codex、Claude、Gemini 的 managed agent 会把会话状态稳定保存在项目级 `.ccb/agents/<agent>/provider-state/...` 下

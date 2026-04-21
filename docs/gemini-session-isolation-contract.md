@@ -88,6 +88,14 @@ When `ccb` starts a managed Gemini agent:
 - it must explicitly set the effective `GEMINI_ROOT`
 - it must ensure `GEMINI_ROOT == <gemini_home>/.gemini/tmp`
 - it must create the managed home and managed temp root before launching Gemini
+- it must materialize required Gemini auth/config projections into the managed
+  home without treating them as conversation identity
+- managed Gemini home materialization is part of startup preparation, before
+  hook/trust installation and before launcher command assembly
+- managed `settings.json` projection must treat inherited system settings as the
+  baseline and preserve managed runtime sections such as `hooks`
+- managed `trustedFolders.json` projection must merge inherited system trust
+  entries with agent-local runtime trust entries
 - it must install Gemini hook/trust state only inside that managed home
 - it must write the effective `gemini_home` and `gemini_root` into the agent
   session file

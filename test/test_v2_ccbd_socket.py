@@ -15,6 +15,7 @@ from ccbd.api_models import DeliveryScope, MessageEnvelope
 from ccbd.app import CcbdApp
 from ccbd.services.project_namespace_state import ProjectNamespaceEvent, ProjectNamespaceState
 from ccbd.socket_client import CcbdClient, CcbdClientError
+from ccbd.socket_server import CcbdSocketServer
 from completion.models import CompletionConfidence, CompletionDecision, CompletionStatus
 from message_bureau import AttemptStore, MessageStore
 from mailbox_kernel import InboundEventStatus, InboundEventStore, InboundEventType
@@ -200,6 +201,29 @@ def test_ccbd_socket_roundtrip_and_shutdown(tmp_path: Path) -> None:
     thread.join(timeout=2)
     assert not thread.is_alive()
     assert app.mount_manager.load_state().mount_state.value == 'unmounted'
+
+
+def test_ccbd_socket_shutdown_does_not_remove_replaced_socket_path(tmp_path: Path) -> None:
+    socket_path = tmp_path / 'ccbd.sock'
+    old_server = CcbdSocketServer(socket_path)
+    old_server.listen()
+    old_stat = socket_path.stat()
+
+    socket_path.unlink()
+
+    new_server = CcbdSocketServer(socket_path)
+    new_server.listen()
+    new_stat = socket_path.stat()
+
+    assert (old_stat.st_dev, old_stat.st_ino) != (new_stat.st_dev, new_stat.st_ino)
+
+    old_server.shutdown()
+    assert socket_path.exists()
+    current_stat = socket_path.stat()
+    assert (current_stat.st_dev, current_stat.st_ino) == (new_stat.st_dev, new_stat.st_ino)
+
+    new_server.shutdown()
+    assert not socket_path.exists()
 
 
 def test_ccbd_stop_all_does_not_run_post_shutdown_heartbeat(tmp_path: Path) -> None:
@@ -1110,6 +1134,7 @@ def test_ccbd_socket_claude_session_boundary_completes_via_tracker(monkeypatch, 
         data = {}
         claude_session_path = str(tmp_path / 'claude-session.jsonl')
         claude_session_id = 'claude-session-id'
+        claude_projects_root = None
         work_dir = str(project_root)
 
         def ensure_pane(self):
@@ -1211,6 +1236,7 @@ def test_ccbd_socket_claude_turn_duration_completion_without_done_marker(monkeyp
         data = {}
         claude_session_path = str(tmp_path / 'claude-session.jsonl')
         claude_session_id = 'claude-session-id'
+        claude_projects_root = None
         work_dir = str(project_root)
 
         def ensure_pane(self):

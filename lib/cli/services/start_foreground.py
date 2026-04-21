@@ -4,9 +4,13 @@ from dataclasses import dataclass
 import os
 import shutil
 import subprocess
+import time
 
 from cli.context import CliContext
 from ccbd.socket_client import CcbdClient, CcbdClientError
+
+_ATTACH_ESTABLISH_TIMEOUT_S = 1.5
+_ATTACH_ESTABLISH_POLL_INTERVAL_S = 0.05
 
 
 @dataclass(frozen=True)
@@ -40,20 +44,92 @@ def attach_started_project_namespace(context: CliContext) -> ForegroundAttachSum
         env=env,
     ):
         raise ForegroundAttachError('project namespace workspace window is missing after successful `ccb` start')
-    attach = subprocess.run(
-        ['tmux', '-S', tmux_socket_path, 'attach-session', '-t', tmux_session_name],
-        check=False,
-        env=env,
-    )
-    if attach.returncode != 0:
-        if not _tmux_has_session(tmux_socket_path, tmux_session_name, env=env):
-            raise ForegroundAttachError('project namespace session exited before foreground attach completed')
-        raise ForegroundAttachError('failed to attach project namespace after successful `ccb` start')
-    return ForegroundAttachSummary(
+    summary = ForegroundAttachSummary(
         project_id=context.project.project_id,
         tmux_socket_path=tmux_socket_path,
         tmux_session_name=tmux_session_name,
     )
+    attach = subprocess.Popen(
+        ['tmux', '-S', tmux_socket_path, 'attach-session', '-t', tmux_session_name],
+        env=env,
+    )
+    attached = _wait_for_attach_established(
+        attach,
+        tmux_socket_path=tmux_socket_path,
+        tmux_session_name=tmux_session_name,
+        env=env,
+    )
+    returncode = attach.wait()
+    if attached:
+        return summary
+    if returncode != 0 and not _tmux_has_session(tmux_socket_path, tmux_session_name, env=env):
+        raise ForegroundAttachError('project namespace session exited before foreground attach completed')
+    raise ForegroundAttachError('failed to attach project namespace after successful `ccb` start')
+
+
+def _wait_for_attach_established(
+    attach: subprocess.Popen[bytes] | subprocess.Popen[str],
+    *,
+    tmux_socket_path: str,
+    tmux_session_name: str,
+    env: dict[str, str],
+) -> bool:
+    deadline = time.monotonic() + _ATTACH_ESTABLISH_TIMEOUT_S
+    while True:
+        if _tmux_client_pid_attached(
+            tmux_socket_path,
+            tmux_session_name,
+            client_pid=attach.pid,
+            env=env,
+        ):
+            return True
+        if attach.poll() is not None:
+            return False
+        if time.monotonic() >= deadline:
+            return True
+        time.sleep(_ATTACH_ESTABLISH_POLL_INTERVAL_S)
+
+
+def _tmux_client_pid_attached(
+    tmux_socket_path: str,
+    tmux_session_name: str,
+    *,
+    client_pid: int,
+    env: dict[str, str],
+) -> bool:
+    return client_pid in _tmux_list_client_pids(
+        tmux_socket_path,
+        tmux_session_name,
+        env=env,
+    )
+
+
+def _tmux_list_client_pids(
+    tmux_socket_path: str,
+    tmux_session_name: str,
+    *,
+    env: dict[str, str],
+) -> tuple[int, ...]:
+    probe = subprocess.run(
+        ['tmux', '-S', tmux_socket_path, 'list-clients', '-t', tmux_session_name, '-F', '#{client_pid}'],
+        check=False,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    if probe.returncode != 0:
+        return ()
+    client_pids: list[int] = []
+    for line in (probe.stdout or '').splitlines():
+        value = line.strip()
+        if not value:
+            continue
+        try:
+            client_pids.append(int(value))
+        except ValueError:
+            continue
+    return tuple(client_pids)
 
 
 def _client_for_started_project(context: CliContext):

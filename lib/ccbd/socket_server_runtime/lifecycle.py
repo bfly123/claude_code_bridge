@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import socket
 
 
@@ -16,6 +17,7 @@ def listen_server(server) -> None:
     runtime_socket.listen(16)
     runtime_socket.settimeout(0.2)
     server._server = runtime_socket
+    server._bound_socket_stat = _bound_socket_stat(server._socket_path)
     server._stop_event.clear()
 
 
@@ -26,8 +28,25 @@ def shutdown_server(server) -> None:
             server._server.close()
         finally:
             server._server = None
+    _unlink_bound_socket_path(server)
+    server._bound_socket_stat = None
+
+
+def _bound_socket_stat(path) -> tuple[int, int] | None:
     try:
-        if server._socket_path.exists():
+        stat = os.stat(path)
+    except OSError:
+        return None
+    return int(stat.st_dev), int(stat.st_ino)
+
+
+def _unlink_bound_socket_path(server) -> None:
+    bound = getattr(server, '_bound_socket_stat', None)
+    if bound is None:
+        return
+    try:
+        current = _bound_socket_stat(server._socket_path)
+        if current == bound:
             server._socket_path.unlink()
     except FileNotFoundError:
         pass

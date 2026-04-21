@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v6.0.6 (2026-04-21)
+
+### 🔒 Agent Isolation Stability & Foreground Kill Lifecycle
+
+- **Foreground Kill Lifecycle Fix**: `ccb kill` no longer leaves interactive `ccb` reporting a false foreground-attach failure after the project tmux namespace is intentionally destroyed
+- **Codex Session Isolation Contract Landed**: managed Codex startup now keeps agent-scoped session authority bound to the agent-owned managed home instead of ambient project or global provider state
+- **Provider Control-Plane Isolation Tightened**: project-scoped control-plane processes now scrub inherited provider runtime markers more strictly so agent runtime identity does not leak into `ccb`, keeper, or `ccbd`
+- **Agent Isolation Stability**: restart and recovery paths continue to preserve project-scoped managed provider boundaries for Codex, Claude, and Gemini agents
+
 ## v6.0.5 (2026-04-20)
 
 ### 🔒 Agent Isolation Stability

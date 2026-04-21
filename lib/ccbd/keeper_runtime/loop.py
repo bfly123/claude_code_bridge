@@ -135,7 +135,7 @@ def daemon_matches_project_config(app) -> bool:
 def request_shutdown(app) -> None:
     client = CcbdClient(app.paths.ccbd_socket_path, timeout_s=0.2)
     try:
-        client.shutdown()
+        client.stop_all(force=False)
     except CcbdClientError:
         inspection = app._ownership_guard.inspect()
         if inspection.lease is not None and inspection.pid_alive:

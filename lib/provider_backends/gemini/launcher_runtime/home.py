@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import shutil
+
+from provider_profiles import provider_api_env_keys
 
 from ..home_layout import GeminiHomeLayout, gemini_layout_for_home, gemini_layout_from_session_data
 from .session_paths import read_session_payload, session_file_for_runtime_dir, state_dir_for_runtime_dir
@@ -23,7 +24,7 @@ def resolve_gemini_home_layout(runtime_dir: Path, profile) -> GeminiHomeLayout:
 
 def prepare_gemini_home_overrides(runtime_dir: Path, profile) -> dict[str, str]:
     layout = resolve_gemini_home_layout(runtime_dir, profile)
-    _prepare_managed_home(layout)
+    materialize_gemini_home_config(layout.home_root, profile=profile)
     return {
         'HOME': str(layout.home_root),
         'GEMINI_ROOT': str(layout.tmp_root),
@@ -94,27 +95,82 @@ def _ensure_json_file(path: Path) -> None:
     path.write_text('{}\n', encoding='utf-8')
 
 
-def materialize_gemini_home_config(target_home: Path, *, source_home: Path | None = None) -> None:
+def materialize_gemini_home_config(target_home: Path, *, profile=None, source_home: Path | None = None) -> GeminiHomeLayout:
     layout = gemini_layout_for_home(target_home)
     _prepare_managed_home(layout)
-    if source_home is None:
-        return
-    source_home = Path(source_home).expanduser()
-    _copy_if_missing(source_home / '.gemini' / 'settings.json', layout.settings_path)
-    _copy_if_missing(source_home / '.gemini' / 'trustedFolders.json', layout.trusted_folders_path)
+    source_root = Path(source_home).expanduser() if source_home is not None else _system_home_root()
+    if layout.home_root != source_root:
+        _materialize_settings(source_root, layout, profile=profile)
+        _materialize_trusted_folders(source_root, layout)
+    return layout
 
 
-def _copy_if_missing(source: Path, target: Path) -> None:
-    if target.exists() or not source.is_file():
+def _materialize_settings(source_home: Path, layout: GeminiHomeLayout, *, profile) -> None:
+    projected = _projected_settings_payload(source_home / '.gemini' / 'settings.json', profile=profile)
+    existing = _read_json_object(layout.settings_path)
+    merged = _merge_settings_payload(projected, existing=existing)
+    if merged is None:
         return
-    target.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        shutil.copy2(source, target)
-    except Exception:
-        payload = _read_json_object(source)
-        if payload is None:
-            return
-        target.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    _write_json_object(layout.settings_path, merged)
+
+
+def _materialize_trusted_folders(source_home: Path, layout: GeminiHomeLayout) -> None:
+    projected = _read_json_object(source_home / '.gemini' / 'trustedFolders.json')
+    existing = _read_json_object(layout.trusted_folders_path)
+    merged = _merge_object_payload(projected, existing=existing)
+    if merged is None:
+        return
+    _write_json_object(layout.trusted_folders_path, merged)
+
+
+def _projected_settings_payload(source_settings_path: Path, *, profile) -> dict[str, object] | None:
+    source_payload = _read_json_object(source_settings_path)
+    if not source_payload:
+        return {} if _needs_settings_stub(profile) else None
+
+    env_payload = dict(source_payload.get('env') or {}) if isinstance(source_payload.get('env'), dict) else {}
+    if not _inherits_api(profile):
+        for key in provider_api_env_keys('gemini'):
+            env_payload.pop(key, None)
+
+    payload: dict[str, object] = {}
+    if _inherits_config(profile):
+        payload.update(source_payload)
+    if env_payload:
+        payload['env'] = env_payload
+    else:
+        payload.pop('env', None)
+    if payload:
+        return payload
+    return {} if _needs_settings_stub(profile) else None
+
+
+def _merge_settings_payload(
+    projected: dict[str, object] | None,
+    *,
+    existing: dict[str, object] | None,
+) -> dict[str, object] | None:
+    projected_payload = dict(projected or {})
+    existing_payload = dict(existing or {})
+    merged = dict(projected_payload)
+    hooks = existing_payload.get('hooks')
+    if hooks is not None:
+        merged['hooks'] = hooks
+    if merged:
+        return merged
+    if existing_payload:
+        return existing_payload
+    return None
+
+
+def _merge_object_payload(
+    projected: dict[str, object] | None,
+    *,
+    existing: dict[str, object] | None,
+) -> dict[str, object] | None:
+    merged = dict(projected or {})
+    merged.update(dict(existing or {}))
+    return merged if merged else None
 
 
 def _read_json_object(path: Path) -> dict[str, object] | None:
@@ -123,6 +179,27 @@ def _read_json_object(path: Path) -> dict[str, object] | None:
     except Exception:
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def _write_json_object(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+
+
+def _needs_settings_stub(profile) -> bool:
+    return bool(_inherits_api(profile) or _inherits_config(profile))
+
+
+def _inherits_api(profile) -> bool:
+    return True if profile is None else bool(getattr(profile, 'inherit_api', True))
+
+
+def _inherits_config(profile) -> bool:
+    return True if profile is None else bool(getattr(profile, 'inherit_config', True))
+
+
+def _system_home_root() -> Path:
+    return Path.home().expanduser()
 
 
 __all__ = [

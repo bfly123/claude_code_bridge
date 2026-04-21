@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import os
 
-from ccbd.models import CcbdStartupReport
+from ccbd.models import CcbdShutdownReport, CcbdStartupReport, cleanup_summaries_from_objects
+from ccbd.stop_flow import build_shutdown_runtime_snapshots
 
 
 def start(app):
@@ -24,8 +25,7 @@ def start(app):
         try:
             app.socket_server.listen()
         except Exception as exc:
-            app.lease = app.mount_manager.mark_unmounted()
-            app.socket_server.shutdown()
+            app.lease = release_backend_ownership(app)
             record_startup_report(
                 app,
                 trigger='daemon_boot',
@@ -47,7 +47,7 @@ def start(app):
             restore_summary=restore_report.summary_fields() if restore_report is not None else {},
         )
     except Exception as exc:
-        request_shutdown(app)
+        release_backend_ownership(app)
         record_startup_report(
             app,
             trigger='daemon_boot',
@@ -66,7 +66,10 @@ def heartbeat(app):
     app.dispatcher.tick()
     app.dispatcher.poll_completions()
     app.job_heartbeat.tick(app.dispatcher)
-    app.lease = app.mount_manager.refresh_heartbeat()
+    app.lease = app.mount_manager.refresh_heartbeat(
+        expected_pid=app.pid,
+        expected_daemon_instance_id=app.daemon_instance_id,
+    )
     return app.lease
 
 
@@ -79,21 +82,120 @@ def serve_forever(app, *, poll_interval: float = 0.2) -> None:
             on_tick=app.heartbeat,
         )
     finally:
-        app.lease = app.mount_manager.mark_unmounted()
-        app.socket_server.shutdown()
+        app.lease = release_backend_ownership(app)
 
 
 def request_shutdown(app) -> None:
-    app.lease = app.mount_manager.mark_unmounted()
-    app.socket_server.shutdown()
+    app.lease = release_backend_ownership(app)
 
 
 def shutdown(app) -> None:
+    execute_project_stop(
+        app,
+        force=True,
+        trigger='shutdown',
+        reason='shutdown',
+        clear_start_policy=True,
+    )
+
+
+def mark_current_daemon_unmounted(app):
     try:
-        app.runtime_supervisor.stop_all(force=True)
+        return app.mount_manager.mark_unmounted(
+            expected_pid=app.pid,
+            expected_daemon_instance_id=app.daemon_instance_id,
+        )
+    except RuntimeError:
+        return app.mount_manager.load_state()
+
+
+def release_backend_ownership(app):
+    lease = mark_current_daemon_unmounted(app)
+    app.socket_server.shutdown()
+    return lease
+
+
+def execute_project_stop(
+    app,
+    *,
+    force: bool,
+    trigger: str,
+    reason: str,
+    clear_start_policy: bool,
+):
+    try:
+        summary = app.runtime_supervisor.stop_all(force=force)
+    except Exception as exc:
+        record_shutdown_report(
+            app,
+            trigger=trigger,
+            status='failed',
+            forced=force,
+            reason=reason,
+            stopped_agents=(),
+            actions_taken=('stop_all_failed',),
+            cleanup_summaries=(),
+            failure_reason=str(exc),
+        )
+        raise
+
+    app.lease = release_backend_ownership(app)
+    if clear_start_policy:
+        try:
+            app.start_policy_store.clear()
+        except Exception:
+            pass
+    record_shutdown_report(
+        app,
+        trigger=trigger,
+        status='ok',
+        forced=force,
+        reason=reason,
+        stopped_agents=tuple(summary.stopped_agents),
+        actions_taken=('request_shutdown',),
+        cleanup_summaries=summary.cleanup_summaries,
+        failure_reason=None,
+    )
+    return summary
+
+
+def record_shutdown_report(
+    app,
+    *,
+    trigger: str,
+    status: str,
+    forced: bool,
+    reason: str,
+    stopped_agents: tuple[str, ...],
+    actions_taken: tuple[str, ...],
+    cleanup_summaries,
+    failure_reason: str | None,
+) -> None:
+    try:
+        inspection = app.ownership_guard.inspect()
+        runtime_snapshots = build_shutdown_runtime_snapshots(
+            paths=app.paths,
+            config=app.config,
+            registry=app.registry,
+        )
+        report = CcbdShutdownReport(
+            project_id=app.project_id,
+            generated_at=app.clock(),
+            trigger=trigger,
+            status=status,
+            forced=forced,
+            stopped_agents=stopped_agents,
+            daemon_generation=inspection.generation,
+            reason=reason,
+            inspection_after=inspection.to_record(),
+            actions_taken=actions_taken,
+            cleanup_summaries=cleanup_summaries_from_objects(cleanup_summaries),
+            runtime_snapshots=runtime_snapshots,
+            failure_reason=failure_reason,
+        )
+        app.shutdown_report_store.save(report)
     except Exception:
-        pass
-    request_shutdown(app)
+        return
 
 
 def record_startup_report(
@@ -145,4 +247,15 @@ def effective_poll_interval(poll_interval: float) -> float:
     return max(requested, minimum)
 
 
-__all__ = ['heartbeat', 'record_startup_report', 'request_shutdown', 'serve_forever', 'shutdown', 'start']
+__all__ = [
+    'execute_project_stop',
+    'heartbeat',
+    'mark_current_daemon_unmounted',
+    'record_shutdown_report',
+    'record_startup_report',
+    'release_backend_ownership',
+    'request_shutdown',
+    'serve_forever',
+    'shutdown',
+    'start',
+]

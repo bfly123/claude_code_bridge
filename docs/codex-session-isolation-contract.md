@@ -100,6 +100,14 @@ Startup must fail clearly or mark the agent degraded when the requested managed
 home cannot be prepared. It must not silently fall back to the caller's global
 Codex home.
 
+Project control-plane isolation rule:
+
+- `ccb`, keeper, and `ccbd` must not inherit Codex runtime-local session variables from the caller shell
+- examples include `CCB_SESSION_ID`, `CCB_SESSION_FILE`, `CCB_CALLER_*`, `CODEX_RUNTIME_DIR`, `CODEX_INPUT_FIFO`, `CODEX_OUTPUT_FIFO`, `CODEX_TERMINAL`, and equivalent runtime markers
+- those variables belong only to the managed Codex runtime process that was launched for one agent generation
+- a fresh project control-plane subprocess must treat such caller-shell variables as contamination, not startup authority
+- only the managed agent session file and managed provider-state under `.ccb/agents/<agent>/provider-state/codex/` may define restore authority for a project-scoped Codex agent
+
 ## 5. Binding Contract
 
 Managed Codex session reading has exactly two modes:
@@ -130,6 +138,11 @@ Runtime pane reuse is a separate proof obligation from session-file binding:
 - if the live process identity is missing, unknown, or proves a different/non-resume Codex command, startup must reject that pane as reusable evidence and relaunch through the normal managed start command
 - the persisted `start_cmd` or `codex_start_cmd` is desired launch authority, not proof that the current pane process was launched with that command
 - relaunch after identity mismatch must preserve the agent-scoped `codex_home`, derived `codex_session_root`, and bound `codex_session_id` so ordinary `ccb` restores history while `ccb -n` remains the explicit fresh-start path
+
+Legacy agent-only reuse exception:
+
+- when the project is in an agent-only legacy layout with `cmd` disabled and the instance-scoped session file does not declare a conflicting tmux socket, startup may still reuse that binding even if live Codex identity proof is temporarily unavailable or `unknown`
+- that exception does not apply when live identity explicitly proves `mismatch`
 
 ## 6. Isolation Contract
 

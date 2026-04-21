@@ -91,6 +91,11 @@ def has_acceptable_provider_runtime_identity(binding) -> bool:
     return state == 'match'
 
 
+def has_no_provider_runtime_identity_mismatch(binding) -> bool:
+    state = str(getattr(binding, 'provider_identity_state', None) or '').strip().lower()
+    return state != 'mismatch'
+
+
 def declares_current_project_socket(binding_socket_path: str | None, *, context: BindingValidationContext) -> bool:
     return context.same_tmux_socket_path_fn(binding_socket_path, context.tmux_socket_path)
 
@@ -107,6 +112,7 @@ __all__ = [
     'build_binding_validation_context',
     'declares_current_project_socket',
     'has_acceptable_provider_runtime_identity',
+    'has_no_provider_runtime_identity_mismatch',
     'has_project_tmux_session_name',
     'has_reusable_tmux_pane',
     'is_live_tmux_binding',

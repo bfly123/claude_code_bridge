@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ccbd.socket_client import CcbdClientError
 
+from .lease import mark_inspected_lease_unmounted
 from .models import CcbdServiceError, KillSummary
 
 
@@ -20,7 +21,7 @@ def _request_shutdown_or_mark_unmounted(
             if not force:
                 raise CcbdServiceError(str(exc)) from exc
     else:
-        manager.mark_unmounted()
+        mark_inspected_lease_unmounted(manager, inspection)
 
 
 def _wait_for_daemon_shutdown(
@@ -38,7 +39,7 @@ def _wait_for_daemon_shutdown(
     if not wait_for_pid_exit_fn(daemon_pid, timeout_s=shutdown_timeout_s):
         terminate_pid_tree_fn(daemon_pid, timeout_s=shutdown_timeout_s, is_pid_alive_fn=is_pid_alive_fn)
     if not is_pid_alive_fn(daemon_pid):
-        manager.mark_unmounted()
+        mark_inspected_lease_unmounted(manager, inspection)
 
 
 def _wait_for_keeper_shutdown(

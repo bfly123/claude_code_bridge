@@ -339,7 +339,7 @@ def test_shutdown_daemon_records_intent_and_terminates_keeper(tmp_path: Path, mo
         keeper_pid=None,
     )
     manager = SimpleNamespace(
-        mark_unmounted=lambda: lease,
+        mark_unmounted=lambda **kwargs: lease,
         load_state=lambda: lease,
     )
     inspection = SimpleNamespace(

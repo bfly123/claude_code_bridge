@@ -6,6 +6,8 @@ import subprocess
 import sys
 import time
 
+from runtime_env.control_plane import control_plane_env
+
 from ccbd.socket_client import CcbdClient, CcbdClientError
 
 
@@ -60,8 +62,7 @@ def _wait_for_ccbd_ready(*, process: subprocess.Popen[bytes], socket_path: Path,
 
 
 def _ccbd_env(*, keeper_pid: int | None) -> dict[str, str]:
-    env = dict(os.environ)
-    env['PYTHONUNBUFFERED'] = '1'
+    env = control_plane_env(extra={'PYTHONUNBUFFERED': '1'})
     lib_root = str(Path(__file__).resolve().parents[1])
     current_pythonpath = env.get('PYTHONPATH')
     env['PYTHONPATH'] = lib_root if not current_pythonpath else lib_root + os.pathsep + current_pythonpath

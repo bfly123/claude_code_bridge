@@ -843,6 +843,165 @@ def test_runtime_supervisor_reuses_agent_only_binding_without_cmd_namespace_matc
     assert runtime.session_ref == 'demo-session-id'
 
 
+def test_runtime_supervisor_reuses_agent_only_missing_binding_when_session_file_declares_no_socket(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-ccbd-agent-only-missing-binding'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    app = CcbdApp(project_root)
+    monkeypatch.setattr(
+        app.project_namespace,
+        'ensure',
+        lambda: SimpleNamespace(
+            tmux_socket_path=str(app.paths.ccbd_tmux_socket_path),
+            tmux_session_name=app.paths.ccbd_tmux_session_name,
+            namespace_epoch=6,
+        ),
+    )
+    monkeypatch.setattr('ccbd.start_flow.TmuxBackend', _FakeNamespaceTmuxBackend)
+    monkeypatch.setattr('ccbd.start_flow.set_tmux_ui_active', lambda active: None)
+    layout_targets: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        'ccbd.start_flow.prepare_tmux_start_layout',
+        lambda context, config, targets, **kwargs: layout_targets.append(tuple(targets)) or SimpleNamespace(cmd_pane_id=None, agent_panes={}),
+    )
+    monkeypatch.setattr('ccbd.start_flow.cleanup_project_tmux_orphans_by_socket', lambda **kwargs: ())
+    monkeypatch.setattr(
+        'ccbd.start_flow.TmuxCleanupHistoryStore',
+        lambda paths: SimpleNamespace(append=lambda event: None),
+    )
+    monkeypatch.setattr(
+        'ccbd.start_flow.resolve_agent_binding',
+        lambda **kwargs: AgentBinding(
+            runtime_ref='tmux:%9',
+            session_ref='demo-session-id',
+            provider='codex',
+            runtime_root=str(app.paths.agent_provider_runtime_dir('demo', 'codex')),
+            runtime_pid=9,
+            session_file=str(project_root / '.ccb' / '.codex-demo-session'),
+            session_id='demo-session-id',
+            tmux_socket_name=None,
+            tmux_socket_path=None,
+            terminal='tmux',
+            pane_id='%9',
+            active_pane_id=None,
+            pane_title_marker='CCB-demo',
+            pane_state='missing',
+            provider_identity_state='unknown',
+            provider_identity_reason='pane_pid_unavailable',
+        ),
+    )
+    monkeypatch.setattr(
+        'ccbd.start_flow.ensure_agent_runtime',
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError('agent-only missing binding should remain reusable legacy evidence')),
+    )
+
+    summary = app.runtime_supervisor.start(
+        agent_names=('demo',),
+        restore=False,
+        auto_permission=False,
+        cleanup_tmux_orphans=False,
+        interactive_tmux_layout=True,
+    )
+
+    runtime = app.registry.get('demo')
+    assert summary.started == ('demo',)
+    assert layout_targets == [()]
+    assert 'reuse_binding:demo' in summary.actions_taken
+    assert runtime is not None
+    assert runtime.runtime_ref == 'tmux:%9'
+    assert runtime.session_ref == 'demo-session-id'
+
+
+def test_runtime_supervisor_rejects_agent_only_binding_with_provider_identity_mismatch(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-ccbd-agent-only-mismatch-binding'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    app = CcbdApp(project_root)
+    monkeypatch.setattr(
+        app.project_namespace,
+        'ensure',
+        lambda: SimpleNamespace(
+            tmux_socket_path=str(app.paths.ccbd_tmux_socket_path),
+            tmux_session_name=app.paths.ccbd_tmux_session_name,
+            namespace_epoch=6,
+        ),
+    )
+    monkeypatch.setattr('ccbd.start_flow.TmuxBackend', _FakeNamespaceTmuxBackend)
+    monkeypatch.setattr('ccbd.start_flow.set_tmux_ui_active', lambda active: None)
+    monkeypatch.setattr(
+        'ccbd.start_flow.prepare_tmux_start_layout',
+        lambda context, config, targets, **kwargs: SimpleNamespace(cmd_pane_id=None, agent_panes={'demo': '%10'}),
+    )
+    monkeypatch.setattr('ccbd.start_flow.cleanup_project_tmux_orphans_by_socket', lambda **kwargs: ())
+    monkeypatch.setattr(
+        'ccbd.start_flow.TmuxCleanupHistoryStore',
+        lambda paths: SimpleNamespace(append=lambda event: None),
+    )
+    monkeypatch.setattr(
+        'ccbd.start_flow.resolve_agent_binding',
+        lambda **kwargs: AgentBinding(
+            runtime_ref='tmux:%9',
+            session_ref='demo-session-id',
+            provider='codex',
+            runtime_root=str(app.paths.agent_provider_runtime_dir('demo', 'codex')),
+            runtime_pid=9,
+            session_file=str(project_root / '.ccb' / '.codex-demo-session'),
+            session_id='demo-session-id',
+            tmux_socket_name=None,
+            tmux_socket_path=None,
+            terminal='tmux',
+            pane_id='%9',
+            active_pane_id='%9',
+            pane_title_marker='CCB-demo',
+            pane_state='alive',
+            provider_identity_state='mismatch',
+            provider_identity_reason='live_codex_process_not_running_bound_resume_session',
+        ),
+    )
+    launch_hints: list[object | None] = []
+    monkeypatch.setattr(
+        'ccbd.start_flow.ensure_agent_runtime',
+        lambda *args, **kwargs: launch_hints.append(args[4]) or RuntimeLaunchResult(
+            launched=True,
+            binding=AgentBinding(
+                runtime_ref='tmux:%10',
+                session_ref='demo-session-id',
+                provider='codex',
+                runtime_root=str(app.paths.agent_provider_runtime_dir('demo', 'codex')),
+                runtime_pid=10,
+                session_file=str(project_root / '.ccb' / '.codex-demo-session'),
+                session_id='demo-session-id',
+                tmux_socket_name=None,
+                tmux_socket_path=None,
+                terminal='tmux',
+                pane_id='%10',
+                active_pane_id='%10',
+                pane_title_marker='CCB-demo',
+                pane_state='alive',
+                provider_identity_state='match',
+            ),
+        ),
+    )
+
+    summary = app.runtime_supervisor.start(
+        agent_names=('demo',),
+        restore=False,
+        auto_permission=False,
+        cleanup_tmux_orphans=False,
+        interactive_tmux_layout=True,
+    )
+
+    runtime = app.registry.get('demo')
+    assert len(launch_hints) == 1
+    assert getattr(launch_hints[0], 'runtime_ref', None) == 'tmux:%9'
+    assert getattr(launch_hints[0], 'provider_identity_state', None) == 'mismatch'
+    assert 'relaunch_runtime:demo' in summary.actions_taken
+    assert runtime is not None
+    assert runtime.runtime_ref == 'tmux:%10'
+
+
 def test_runtime_supervisor_project_namespace_start_does_not_preheal_dead_binding_before_layout(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / 'repo-ccbd-layout-launch'
     (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
@@ -938,11 +1097,11 @@ def test_ccbd_start_marks_project_mounted_before_socket_listen(tmp_path: Path, m
     bootstrap_project(project_root)
     app = CcbdApp(project_root)
     observed: dict[str, object] = {}
+    original_listen = app.socket_server.listen
 
     def fake_listen() -> None:
         observed['lease_during_listen'] = app.mount_manager.load_state()
-        app.paths.ccbd_socket_path.parent.mkdir(parents=True, exist_ok=True)
-        app.paths.ccbd_socket_path.touch()
+        original_listen()
 
     monkeypatch.setattr(app.socket_server, 'listen', fake_listen)
     monkeypatch.setattr(app.dispatcher, 'restore_running_jobs', lambda: None)
@@ -966,12 +1125,6 @@ def test_ccbd_start_rolls_back_mount_when_restore_fails(tmp_path: Path, monkeypa
     (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
     bootstrap_project(project_root)
     app = CcbdApp(project_root)
-
-    def fake_listen() -> None:
-        app.paths.ccbd_socket_path.parent.mkdir(parents=True, exist_ok=True)
-        app.paths.ccbd_socket_path.touch()
-
-    monkeypatch.setattr(app.socket_server, 'listen', fake_listen)
     monkeypatch.setattr(app.dispatcher, 'restore_running_jobs', lambda: (_ for _ in ()).throw(RuntimeError('boom')))
 
     with pytest.raises(RuntimeError, match='boom'):

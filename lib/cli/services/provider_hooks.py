@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import sys
 
-from provider_backends.claude.launcher_runtime import resolve_claude_home_layout
+from provider_backends.claude.launcher_runtime import materialize_claude_home_config, resolve_claude_home_layout
+from provider_backends.gemini.launcher_runtime.home import materialize_gemini_home_config
 from provider_hooks.settings import build_hook_command, install_workspace_completion_hooks
 from provider_profiles import (
     ResolvedProviderProfile,
@@ -66,6 +68,12 @@ def prepare_provider_workspace(
             spec=spec,
             workspace_path=workspace_path,
         )
+    _materialize_provider_home(
+        layout=layout,
+        spec=spec,
+        runtime_dir=runtime_dir,
+        resolved_profile=resolved_profile,
+    )
     prepare_workspace_provider_hooks(
         provider=spec.provider,
         workspace_path=workspace_path,
@@ -80,6 +88,32 @@ def prepare_provider_workspace(
         resolved_profile=resolved_profile,
     )
     return resolved_profile
+
+
+def _materialize_provider_home(*, layout, spec, runtime_dir: Path, resolved_profile: ResolvedProviderProfile | None) -> None:
+    provider = str(spec.provider or '').strip().lower()
+    if provider == 'claude':
+        home_root = resolve_claude_home_layout(runtime_dir, resolved_profile).home_root
+        materialize_claude_home_config(
+            home_root,
+            profile=resolved_profile,
+            source_home=_current_system_home(),
+        )
+        return
+    if provider == 'gemini':
+        materialize_gemini_home_config(
+            resolve_gemini_home_root(
+                layout=layout,
+                agent_name=spec.name,
+                resolved_profile=resolved_profile,
+            ),
+            profile=resolved_profile,
+            source_home=_current_system_home(),
+        )
+
+
+def _current_system_home() -> Path:
+    return Path(os.environ.get('HOME') or Path.home()).expanduser()
 
 
 def provider_hook_home_root(

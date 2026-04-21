@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 from agents.config_identity import project_config_identity_payload
 from agents.config_loader import load_project_config
@@ -147,7 +149,8 @@ def test_ensure_daemon_started_restarts_healthy_daemon_on_config_drift(monkeypat
             assert target == 'ccbd'
             return dict(self._payload)
 
-        def shutdown(self) -> dict:
+        def stop_all(self, *, force: bool = False) -> dict:
+            assert force is False
             shutdown_calls.append(str(self._payload.get('config_signature') or ''))
             return {'ok': True}
 
@@ -330,6 +333,56 @@ def test_ensure_daemon_started_restarts_stale_unreachable_daemon_with_live_pid(
     assert handle.started is True
     assert restart_calls == ['heartbeat_stale,socket_unreachable']
     assert spawn_calls == [ctx.project.project_root]
+
+
+def test_restart_unreachable_daemon_does_not_unmount_replaced_lease_holder(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from cli.services.daemon_runtime import processes as daemon_processes
+
+    project_root = tmp_path / 'repo-stale-replaced'
+    ctx = _context(project_root, 'agent1:codex\n')
+    inspection = _inspection(
+        ctx,
+        health=LeaseHealth.STALE,
+        socket_connectable=False,
+        pid_alive=True,
+        heartbeat_fresh=False,
+        reason='heartbeat_stale,socket_unreachable',
+    )
+    inspected_lease = replace(inspection.lease, daemon_instance_id='daemon-a')
+    inspection = replace(inspection, lease=inspected_lease)
+    mark_calls: list[dict[str, object]] = []
+    kill_calls: list[tuple[int, bool]] = []
+
+    def _mark_unmounted(**kwargs):
+        mark_calls.append(dict(kwargs))
+        raise RuntimeError('ccbd lease holder changed')
+
+    manager = SimpleNamespace(
+        mark_unmounted=_mark_unmounted,
+        load_state=lambda: inspection.lease,
+    )
+
+    monkeypatch.setattr(daemon_processes, 'wait_for_daemon_release', lambda context, timeout_s, inspect_daemon_fn: True)
+
+    daemon_processes.restart_unreachable_daemon(
+        ctx,
+        inspection,
+        shutdown_timeout_s=1.0,
+        inspect_daemon_fn=lambda context: (manager, None, inspection),
+        manager_factory=lambda paths: manager,
+        kill_pid_fn=lambda pid, force: kill_calls.append((pid, force)),
+    )
+
+    assert kill_calls == [(inspection.lease.ccbd_pid, False)]
+    assert mark_calls == [
+        {
+            'expected_pid': inspection.lease.ccbd_pid,
+            'expected_daemon_instance_id': 'daemon-a',
+        }
+    ]
 
 
 def test_connect_mounted_daemon_recovers_after_transient_degraded_unreachable_daemon(
