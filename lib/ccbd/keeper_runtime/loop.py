@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from agents.config_identity import project_config_identity_payload
@@ -12,6 +13,23 @@ from ccbd.socket_client import CcbdClient, CcbdClientError
 from .records import KeeperState
 from .state import compute_project_id, restart_backoff_active
 from .support import reap_child_processes, try_acquire_keeper_lock
+
+
+def _keeper_ping_timeout_s() -> float:
+    """Keeper→ccbd config-check ping timeout.
+
+    Upstream hardcodes 0.2s which spuriously trips when ccbd is busy with a
+    paste/poll cycle → lifecycle.failed → all ccb ask rejected. Env-override
+    lets ops raise it without patching upstream again.
+    """
+    raw = os.environ.get('CCB_KEEPER_PING_TIMEOUT_S', '').strip()
+    if not raw:
+        return 2.0
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 2.0
+    return value if value > 0 else 2.0
 
 
 def run_forever(app, *, poll_interval: float = 0.5, start_timeout_s: float = 5.0) -> int:
@@ -176,7 +194,7 @@ def stale_restart_state(app, *, state: KeeperState, inspection, occurred_at: str
 
 def daemon_matches_project_config(app) -> bool:
     expected = project_config_identity_payload(load_project_config(app.project_root).config)
-    payload = CcbdClient(app.paths.ccbd_socket_path, timeout_s=0.2).ping('ccbd')
+    payload = CcbdClient(app.paths.ccbd_socket_path, timeout_s=_keeper_ping_timeout_s()).ping('ccbd')
     actual_signature = str(payload.get('config_signature') or '').strip()
     if actual_signature:
         return actual_signature == expected['config_signature']
