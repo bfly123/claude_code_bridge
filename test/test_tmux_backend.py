@@ -221,3 +221,64 @@ def test_tmux_strict_kill_and_activate_only_use_pane_targets(monkeypatch: pytest
 
     assert calls[0] == ["kill-pane", "-t", "%7"]
     assert calls[1] == ["select-pane", "-t", "%7"]
+
+
+def test_psmux_base_uses_named_server_when_socket_name_is_provided(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CCB_PSMUX_BIN", raising=False)
+    backend = terminal.PsmuxBackend(socket_name="gate-main")
+    assert backend.backend_ref == "gate-main"
+    assert backend._tmux_base() == ["psmux", "-L", "gate-main"]
+
+
+def test_psmux_socket_path_maps_to_stable_named_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CCB_PSMUX_BIN", raising=False)
+    backend = terminal.PsmuxBackend(socket_path="/tmp/ccb-runtime/demo.sock")
+    assert backend.backend_ref is not None
+    assert backend.backend_ref.startswith("demo.sock-")
+    assert backend._tmux_base() == ["psmux", "-L", backend.backend_ref]
+
+
+def test_psmux_kill_session_uses_kill_server_for_named_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_tmux_run(
+        self: terminal.PsmuxBackend,
+        args: list[str],
+        *,
+        check: bool = False,
+        capture: bool = False,
+        input_bytes: bytes | None = None,
+        timeout: float | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, capture, input_bytes, timeout
+        calls.append(args)
+        return _cp(stdout="")
+
+    backend = terminal.PsmuxBackend(socket_name="gate-main")
+    monkeypatch.setattr(backend, "_tmux_run", fake_tmux_run.__get__(backend, terminal.PsmuxBackend))
+
+    assert backend.kill_session("demo") is True
+    assert calls == [["kill-server"]]
+
+
+def test_psmux_kill_session_uses_kill_session_without_named_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_tmux_run(
+        self: terminal.PsmuxBackend,
+        args: list[str],
+        *,
+        check: bool = False,
+        capture: bool = False,
+        input_bytes: bytes | None = None,
+        timeout: float | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, capture, input_bytes, timeout
+        calls.append(args)
+        return _cp(stdout="")
+
+    backend = terminal.PsmuxBackend()
+    monkeypatch.setattr(backend, "_tmux_run", fake_tmux_run.__get__(backend, terminal.PsmuxBackend))
+
+    assert backend.kill_session("demo") is True
+    assert calls == [["kill-session", "-t", "demo"]]
