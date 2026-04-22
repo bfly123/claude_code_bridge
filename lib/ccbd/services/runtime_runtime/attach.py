@@ -34,6 +34,7 @@ def attach_runtime(
     window_id: str | None = None,
     workspace_epoch: int | None = None,
     lifecycle_state: str | None = None,
+    daemon_generation: int | None = None,
     managed_by: str | None = None,
     binding_source: str | RuntimeBindingSource | None = None,
 ) -> AgentRuntime:
@@ -65,6 +66,7 @@ def attach_runtime(
         window_id=window_id,
         workspace_epoch=workspace_epoch,
         lifecycle_state=lifecycle_state,
+        daemon_generation=daemon_generation,
         managed_by=managed_by,
         binding_source=binding_source,
     )
@@ -76,7 +78,7 @@ def attach_runtime(
             timestamp=timestamp,
             project_id=project_id,
         )
-        return registry.upsert(updated)
+        return _upsert_authority(registry, updated)
 
     runtime = new_runtime(
         spec_name=spec.name,
@@ -85,4 +87,11 @@ def attach_runtime(
         timestamp=timestamp,
         project_id=project_id,
     )
+    return _upsert_authority(registry, runtime)
+
+
+def _upsert_authority(registry, runtime):
+    upsert_authority = getattr(registry, 'upsert_authority', None)
+    if callable(upsert_authority):
+        return upsert_authority(runtime)
     return registry.upsert(runtime)

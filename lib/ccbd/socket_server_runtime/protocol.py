@@ -22,7 +22,12 @@ def handle_connection(server, conn) -> str | None:
         if handler is None:
             response = RpcResponse.failure(f'unknown op: {request.op}')
         else:
-            response = RpcResponse.success(handler(request.request))
+            guard = getattr(server, '_request_guard', None)
+            rejection = guard(request.op) if guard is not None else None
+            if rejection:
+                response = RpcResponse.failure(rejection)
+            else:
+                response = RpcResponse.success(handler(request.request))
     except Exception as exc:
         response = RpcResponse.failure(str(exc))
     try:

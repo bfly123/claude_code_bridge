@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from agents.models import build_project_layout_plan
+from ccbd.services import CcbdLifecycleStore
 
 from .namespace import ensure_project_namespace
 from .reporting import record_startup_report
@@ -57,6 +58,7 @@ def start_supervisor(
             fresh_workspace=bool(getattr(namespace, 'workspace_recreated_this_call', False)),
             clock=supervisor._clock,
         )
+        _sync_lifecycle_namespace_epoch(supervisor, namespace=namespace)
     except Exception as exc:
         record_startup_report(
             supervisor,
@@ -83,6 +85,31 @@ def start_supervisor(
         failure_reason=None,
     )
     return summary
+
+
+def _sync_lifecycle_namespace_epoch(supervisor, *, namespace) -> None:
+    if namespace is None:
+        return
+    epoch = getattr(namespace, 'namespace_epoch', None)
+    if epoch is None:
+        return
+    lifecycle_store = CcbdLifecycleStore(supervisor._paths)
+    lifecycle = lifecycle_store.load()
+    if lifecycle is None:
+        return
+    inspection = supervisor._ownership_guard.inspect()
+    current_generation = inspection.generation
+    if current_generation is None:
+        return
+    if lifecycle.generation != int(current_generation):
+        return
+    if lifecycle.phase == 'unmounted':
+        return
+    if lifecycle.namespace_epoch == int(epoch):
+        return
+    lifecycle_store.save(
+        lifecycle.with_updates(namespace_epoch=int(epoch))
+    )
 
 
 def stop_all_supervisor(

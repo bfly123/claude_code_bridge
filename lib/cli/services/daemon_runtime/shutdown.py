@@ -71,6 +71,7 @@ def shutdown_daemon(
     *,
     force: bool,
     record_shutdown_intent_fn,
+    finalize_shutdown_lifecycle_fn,
     inspect_daemon_fn,
     client_factory,
     lease_pid_fn,
@@ -111,14 +112,24 @@ def shutdown_daemon(
         is_pid_alive_fn=is_pid_alive_fn,
     )
     _unlink_socket_if_forced(context, force=force)
+    finalize_shutdown_lifecycle_fn(context)
 
-    lease = manager.load_state()
+    _, _, final_inspection = inspect_daemon_fn(context)
     return KillSummary(
         project_id=context.project.project_id,
-        state=lease.mount_state.value if lease is not None else 'unmounted',
+        state=_inspection_phase(final_inspection),
         socket_path=str(context.paths.ccbd_socket_path),
         forced=force,
     )
+
+
+def _inspection_phase(inspection) -> str:
+    phase = str(getattr(inspection, 'phase', '') or '').strip()
+    if phase:
+        return phase
+    lease = getattr(inspection, 'lease', None)
+    mount_state = str(getattr(getattr(lease, 'mount_state', None), 'value', '') or '').strip()
+    return mount_state or 'unmounted'
 
 
 __all__ = ['shutdown_daemon']

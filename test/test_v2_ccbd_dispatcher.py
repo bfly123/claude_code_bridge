@@ -224,6 +224,38 @@ def test_runtime_service_refresh_provider_binding_recovers_tmux_binding(provider
     assert persisted.session_ref == f'{provider}-session-new'
 
 
+def test_runtime_service_attach_reconciles_helper_ownership_via_registry_upsert(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-helper-attach'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex')
+    registry = AgentRegistry(layout, config)
+    runtime_service = RuntimeService(layout, registry, ctx.project_id, clock=lambda: '2026-03-18T00:00:00Z')
+    seen: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        'ccbd.services.registry.cleanup_stale_runtime_helper',
+        lambda layout, runtime: seen.append(('cleanup', runtime.agent_name)) or False,
+    )
+    monkeypatch.setattr(
+        'ccbd.services.registry.sync_runtime_helper_manifest',
+        lambda layout, runtime: seen.append(('sync', runtime.agent_name)) or None,
+    )
+
+    runtime_service.attach(
+        agent_name='codex',
+        workspace_path=str(layout.workspace_path('codex')),
+        backend_type='tmux',
+        pid=101,
+        runtime_ref='tmux:%41',
+        session_ref='codex-session-old',
+        health='healthy',
+        provider='codex',
+    )
+
+    assert seen == [('cleanup', 'codex'), ('sync', 'codex')]
+
+
 def test_dispatcher_submit_tick_complete_roundtrip(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo'
     ctx = _bootstrap_test_project(project_root)
@@ -248,12 +280,18 @@ def test_dispatcher_submit_tick_complete_roundtrip(tmp_path: Path) -> None:
     job_id = receipt.jobs[0].job_id
     runtime = registry.get('codex')
     assert runtime is not None and runtime.queue_depth == 1
+    binding_generation = runtime.binding_generation
+    runtime_generation = runtime.runtime_generation
+    daemon_generation = runtime.daemon_generation
 
     started = dispatcher.tick()
     assert len(started) == 1
     assert started[0].job_id == job_id
     runtime = registry.get('codex')
     assert runtime is not None and runtime.state is AgentState.BUSY
+    assert runtime.binding_generation == binding_generation
+    assert runtime.runtime_generation == runtime_generation
+    assert runtime.daemon_generation == daemon_generation
 
     terminal = dispatcher.complete(
         job_id,
@@ -278,6 +316,9 @@ def test_dispatcher_submit_tick_complete_roundtrip(tmp_path: Path) -> None:
     assert snapshot.latest_decision.reply == 'done'
     runtime = registry.get('codex')
     assert runtime is not None and runtime.state is AgentState.IDLE and runtime.queue_depth == 0
+    assert runtime.binding_generation == binding_generation
+    assert runtime.runtime_generation == runtime_generation
+    assert runtime.daemon_generation == daemon_generation
 
 
 def test_dispatcher_rejects_email_sender(tmp_path: Path) -> None:
@@ -1093,6 +1134,79 @@ def test_dispatcher_restore_running_jobs_marks_unrecoverable_execution_incomplet
     event_types = [event['type'] for event in watched['events']]
     assert 'execution_restore_failed' in event_types
     assert watched['terminal'] is True
+
+
+def test_dispatcher_terminate_nonterminal_jobs_prevents_retry_and_restart_restore(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-stop-terminal'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _fake_config()
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('demo', project_id=ctx.project_id, layout=layout, pid=301))
+    clock = StepClock(
+        '2026-03-18T00:00:00Z',
+        '2026-03-18T00:00:00Z',
+        '2026-03-18T00:00:00Z',
+        '2026-03-18T00:00:00Z',
+        '2026-03-18T00:00:00Z',
+        '2026-03-18T00:00:01Z',
+        '2026-03-18T00:00:02Z',
+    )
+    execution_service = ExecutionService(
+        build_default_execution_registry(),
+        clock=clock,
+        state_store=ExecutionStateStore(layout),
+    )
+    dispatcher = JobDispatcher(layout, config, registry, execution_service=execution_service, clock=clock)
+
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='demo',
+            from_actor='user',
+            body='stop me',
+            task_id='fake;latency_ms=1500',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    job_id = receipt.jobs[0].job_id
+    dispatcher.tick()
+    running = dispatcher.get(job_id)
+    assert running is not None
+    assert running.status is JobStatus.RUNNING
+    assert layout.execution_state_path(job_id).exists()
+
+    terminated = dispatcher.terminate_nonterminal_jobs(shutdown_reason='kill', forced=True)
+    assert len(terminated) == 1
+
+    terminal = dispatcher.get(job_id)
+    assert terminal is not None
+    assert terminal.status is JobStatus.INCOMPLETE
+    assert terminal.terminal_decision is not None
+    assert terminal.terminal_decision['reason'] == 'project_shutdown'
+    assert terminal.terminal_decision['diagnostics']['shutdown_reason'] == 'kill'
+    assert terminal.terminal_decision['diagnostics']['forced'] is True
+    assert not layout.execution_state_path(job_id).exists()
+
+    watched = dispatcher.watch(job_id, start_line=0)
+    event_types = [event['type'] for event in watched['events']]
+    assert 'job_retry_scheduled' not in event_types
+    assert watched['terminal'] is True
+
+    restarted = JobDispatcher(
+        layout,
+        config,
+        registry,
+        execution_service=ExecutionService(
+            build_default_execution_registry(),
+            clock=lambda: '2026-03-18T00:00:05Z',
+            state_store=ExecutionStateStore(layout),
+        ),
+        clock=lambda: '2026-03-18T00:00:05Z',
+    )
+    assert restarted.restore_running_jobs() == ()
 
 
 def test_dispatcher_broadcast_does_not_lazy_restore_offline_agents(tmp_path: Path) -> None:

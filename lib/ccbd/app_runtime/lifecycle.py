@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 
+from agents.models import AgentState
 from ccbd.models import CcbdShutdownReport, CcbdStartupReport, cleanup_summaries_from_objects
+from ccbd.services.lifecycle import build_lifecycle, current_socket_inode
 from ccbd.stop_flow import build_shutdown_runtime_snapshots
 
 
@@ -26,6 +28,7 @@ def start(app):
             app.socket_server.listen()
         except Exception as exc:
             app.lease = release_backend_ownership(app)
+            _mark_lifecycle_failed(app, failure_reason=str(exc))
             record_startup_report(
                 app,
                 trigger='daemon_boot',
@@ -36,18 +39,24 @@ def start(app):
             raise
     try:
         app.dispatcher.restore_running_jobs()
+        adopted_agents = _adopt_existing_runtime_authority(app)
         restore_report = app.dispatcher.last_restore_report(project_id=app.project_id)
         if restore_report is not None:
             app.restore_report_store.save(restore_report)
+        _mark_lifecycle_mounted(app)
+        startup_actions = ['mount_backend', 'listen_socket', 'restore_running_jobs']
+        if adopted_agents:
+            startup_actions.append(f'adopt_runtime_authority:{",".join(adopted_agents)}')
         record_startup_report(
             app,
             trigger='daemon_boot',
             status='ok',
-            actions_taken=('mount_backend', 'listen_socket', 'restore_running_jobs'),
+            actions_taken=tuple(startup_actions),
             restore_summary=restore_report.summary_fields() if restore_report is not None else {},
         )
     except Exception as exc:
         release_backend_ownership(app)
+        _mark_lifecycle_failed(app, failure_reason=str(exc))
         record_startup_report(
             app,
             trigger='daemon_boot',
@@ -112,6 +121,7 @@ def mark_current_daemon_unmounted(app):
 def release_backend_ownership(app):
     lease = mark_current_daemon_unmounted(app)
     app.socket_server.shutdown()
+    _mark_lifecycle_unmounted(app)
     return lease
 
 
@@ -123,6 +133,15 @@ def execute_project_stop(
     reason: str,
     clear_start_policy: bool,
 ):
+    terminated_jobs = ()
+    _mark_lifecycle_stopping(app, shutdown_intent=reason)
+    try:
+        terminated_jobs = app.dispatcher.terminate_nonterminal_jobs(
+            shutdown_reason=reason,
+            forced=force,
+        )
+    except Exception:
+        terminated_jobs = ()
     try:
         summary = app.runtime_supervisor.stop_all(force=force)
     except Exception as exc:
@@ -133,7 +152,10 @@ def execute_project_stop(
             forced=force,
             reason=reason,
             stopped_agents=(),
-            actions_taken=('stop_all_failed',),
+            actions_taken=(
+                f'terminate_nonterminal_jobs:{len(terminated_jobs)}',
+                'stop_all_failed',
+            ),
             cleanup_summaries=(),
             failure_reason=str(exc),
         )
@@ -152,7 +174,10 @@ def execute_project_stop(
         forced=force,
         reason=reason,
         stopped_agents=tuple(summary.stopped_agents),
-        actions_taken=('request_shutdown',),
+        actions_taken=(
+            f'terminate_nonterminal_jobs:{len(terminated_jobs)}',
+            'request_shutdown',
+        ),
         cleanup_summaries=summary.cleanup_summaries,
         failure_reason=None,
     )
@@ -245,6 +270,109 @@ def effective_poll_interval(poll_interval: float) -> float:
     requested = max(0.0, requested)
     minimum = max(0.0, minimum)
     return max(requested, minimum)
+
+
+def _adopt_existing_runtime_authority(app) -> tuple[str, ...]:
+    if app.lease is None:
+        return ()
+    generation = int(app.lease.generation)
+    adopted: list[str] = []
+    for runtime in app.registry.list_all():
+        if runtime.state not in {AgentState.IDLE, AgentState.BUSY, AgentState.DEGRADED}:
+            continue
+        current_generation = getattr(runtime, 'daemon_generation', None)
+        try:
+            current_generation = int(current_generation) if current_generation is not None else None
+        except Exception:
+            current_generation = None
+        if current_generation == generation and runtime.binding_generation == runtime.runtime_generation:
+            continue
+        app.runtime_service.adopt_runtime_authority(runtime, daemon_generation=generation)
+        adopted.append(runtime.agent_name)
+    return tuple(adopted)
+
+
+def _current_lifecycle(app):
+    lifecycle = app.lifecycle_store.load()
+    if lifecycle is not None:
+        return lifecycle
+    return build_lifecycle(
+        project_id=app.project_id,
+        occurred_at=app.clock(),
+        desired_state='running',
+        phase='unmounted',
+        generation=int(getattr(app.lease, 'generation', 0) or 0),
+        keeper_pid=app.keeper_pid,
+        config_signature=str(app.config_identity.get('config_signature') or '').strip() or None,
+        socket_path=str(app.paths.ccbd_socket_path),
+    )
+
+
+def _mark_lifecycle_mounted(app) -> None:
+    lifecycle = _current_lifecycle(app)
+    namespace_state = app.namespace_state_store.load() if getattr(app, 'namespace_state_store', None) is not None else None
+    app.lifecycle_store.save(
+        lifecycle.with_phase(
+            'mounted',
+            occurred_at=app.clock(),
+            desired_state='running',
+            generation=int(getattr(app.lease, 'generation', 0) or lifecycle.generation),
+            keeper_pid=app.keeper_pid,
+            owner_pid=app.pid,
+            owner_daemon_instance_id=app.daemon_instance_id,
+            config_signature=str(app.config_identity.get('config_signature') or '').strip() or lifecycle.config_signature,
+            socket_path=str(app.paths.ccbd_socket_path),
+            socket_inode=current_socket_inode(app.paths.ccbd_socket_path),
+            namespace_epoch=getattr(namespace_state, 'namespace_epoch', None),
+            last_failure_reason=None,
+            shutdown_intent=None,
+        )
+    )
+
+
+def _mark_lifecycle_stopping(app, *, shutdown_intent: str) -> None:
+    lifecycle = _current_lifecycle(app)
+    app.lifecycle_store.save(
+        lifecycle.with_phase(
+            'stopping',
+            occurred_at=app.clock(),
+            desired_state='stopped',
+            shutdown_intent=shutdown_intent,
+            last_failure_reason=None,
+        )
+    )
+
+
+def _mark_lifecycle_unmounted(app) -> None:
+    lifecycle = _current_lifecycle(app)
+    app.lifecycle_store.save(
+        lifecycle.with_phase(
+            'unmounted',
+            occurred_at=app.clock(),
+            owner_pid=None,
+            owner_daemon_instance_id=None,
+            socket_inode=None,
+            socket_path=str(app.paths.ccbd_socket_path),
+            namespace_epoch=None,
+            last_failure_reason=None,
+        )
+    )
+
+
+def _mark_lifecycle_failed(app, *, failure_reason: str) -> None:
+    lifecycle = _current_lifecycle(app)
+    app.lifecycle_store.save(
+        lifecycle.with_phase(
+            'failed',
+            occurred_at=app.clock(),
+            owner_pid=None,
+            owner_daemon_instance_id=None,
+            socket_inode=None,
+            socket_path=str(app.paths.ccbd_socket_path),
+            namespace_epoch=None,
+            last_failure_reason=failure_reason,
+        )
+    )
 
 
 __all__ = [

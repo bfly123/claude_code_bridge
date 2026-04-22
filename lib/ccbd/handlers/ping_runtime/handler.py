@@ -45,7 +45,8 @@ def build_ping_handler(
         if target == 'all':
             return {
                 'project_id': project_id,
-                'ccbd_state': inspection.lease.mount_state.value if inspection.lease is not None else 'unmounted',
+                'ccbd_state': str(getattr(inspection, 'phase', '') or '').strip()
+                or str(getattr(getattr(getattr(inspection, 'lease', None), 'mount_state', None), 'value', '') or 'unmounted'),
                 'agents': [
                     build_agent_payload(
                         project_id=project_id,

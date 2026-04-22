@@ -144,6 +144,7 @@ def _agent_runtime_from_record(record: dict) -> AgentRuntime:
         managed_by=record.get('managed_by', 'ccbd'),
         binding_source=RuntimeBindingSource(record.get('binding_source', RuntimeBindingSource.PROVIDER_SESSION.value)),
         daemon_generation=(int(record['daemon_generation']) if record.get('daemon_generation') is not None else None),
+        runtime_generation=(int(record['runtime_generation']) if record.get('runtime_generation') is not None else None),
         desired_state=record.get('desired_state'),
         reconcile_state=record.get('reconcile_state'),
         restart_count=int(record.get('restart_count', 0)),

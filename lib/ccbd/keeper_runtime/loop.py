@@ -5,6 +5,8 @@ from pathlib import Path
 from agents.config_identity import project_config_identity_payload
 from agents.config_loader import load_project_config
 from ccbd.models import LeaseHealth
+from ccbd.services.project_namespace_state import ProjectNamespaceStateStore
+from ccbd.services.lifecycle import current_socket_inode, lifecycle_from_inspection
 from ccbd.socket_client import CcbdClient, CcbdClientError
 
 from .records import KeeperState
@@ -47,7 +49,16 @@ def reconcile_once(app, *, state: KeeperState, start_timeout_s: float) -> Keeper
     if restart_backoff_active(state=state, now=now):
         return state
     inspection = app._ownership_guard.inspect()
-    connectable_state = reconcile_connectable_daemon(app, state=state, inspection=inspection, now=now)
+    lifecycle = ensure_project_lifecycle(app, inspection=inspection, now=now)
+    if lifecycle.desired_state != 'running':
+        return state
+    connectable_state = reconcile_connectable_daemon(
+        app,
+        state=state,
+        inspection=inspection,
+        lifecycle=lifecycle,
+        now=now,
+    )
     if connectable_state is not None:
         return connectable_state
     restart_state = restart_state_from_inspection(app, state=state, inspection=inspection, occurred_at=now)
@@ -89,15 +100,68 @@ def shutdown_requested(app, *, project_id: str) -> bool:
     return current_intent is not None and current_intent.project_id == project_id
 
 
-def reconcile_connectable_daemon(app, *, state: KeeperState, inspection, now: str) -> KeeperState | None:
+def ensure_project_lifecycle(app, *, inspection, now: str):
+    lifecycle = app._lifecycle_store.load()
+    if lifecycle is None:
+        lifecycle = lifecycle_from_inspection(
+            project_id=compute_project_id(app.project_root),
+            inspection=inspection,
+            occurred_at=now,
+            config_signature=current_config_signature(app),
+            keeper_pid=app.pid,
+        )
+        app._lifecycle_store.save(lifecycle)
+        return lifecycle
+    if lifecycle.keeper_pid == app.pid:
+        return lifecycle
+    lifecycle = lifecycle.with_updates(keeper_pid=app.pid)
+    app._lifecycle_store.save(lifecycle)
+    return lifecycle
+
+
+def reconcile_connectable_daemon(app, *, state: KeeperState, inspection, lifecycle, now: str) -> KeeperState | None:
     if not inspection.socket_connectable:
         return None
     try:
         if daemon_matches_project_config(app):
+            lease = inspection.lease
+            app._lifecycle_store.save(
+                lifecycle.with_phase(
+                    'mounted',
+                    occurred_at=now,
+                    desired_state='running',
+                    generation=int(getattr(lease, 'generation', 0) or lifecycle.generation),
+                    keeper_pid=app.pid,
+                    owner_pid=int(getattr(lease, 'ccbd_pid', 0) or 0) or None,
+                    owner_daemon_instance_id=str(getattr(lease, 'daemon_instance_id', '') or '').strip() or None,
+                    config_signature=str(getattr(lease, 'config_signature', '') or '').strip() or lifecycle.config_signature,
+                    socket_path=str(getattr(lease, 'socket_path', '') or app.paths.ccbd_socket_path),
+                    socket_inode=current_socket_inode(getattr(lease, 'socket_path', app.paths.ccbd_socket_path)),
+                    namespace_epoch=_current_namespace_epoch(app, fallback=lifecycle.namespace_epoch),
+                    last_failure_reason=None,
+                    shutdown_intent=None,
+                )
+            )
             return state.with_success(occurred_at=now)
         request_shutdown(app)
+        app._lifecycle_store.save(
+            lifecycle.with_phase(
+                'stopping',
+                occurred_at=now,
+                desired_state='running',
+                last_failure_reason=None,
+            )
+        )
         return state.with_restart_attempt(occurred_at=now)
     except Exception as exc:
+        app._lifecycle_store.save(
+            lifecycle.with_phase(
+                'failed',
+                occurred_at=now,
+                desired_state='running',
+                last_failure_reason=f'config_check_failed:{exc}',
+            )
+        )
         return state.with_failure(occurred_at=now, reason=f'config_check_failed:{exc}')
 
 
@@ -140,6 +204,24 @@ def request_shutdown(app) -> None:
         inspection = app._ownership_guard.inspect()
         if inspection.lease is not None and inspection.pid_alive:
             app._terminate_pid_tree(int(inspection.lease.ccbd_pid or 0), timeout_s=1.0)
+
+
+def current_config_signature(app) -> str | None:
+    try:
+        config = load_project_config(app.project_root).config
+    except Exception:
+        return None
+    return str(project_config_identity_payload(config)['config_signature'])
+
+
+def _current_namespace_epoch(app, *, fallback: int | None) -> int | None:
+    try:
+        state = ProjectNamespaceStateStore(app.paths).load()
+    except Exception:
+        state = None
+    if state is not None:
+        return int(state.namespace_epoch)
+    return fallback
 
 
 def cleanup_transient_keeper_files(app, *, lock_path: Path) -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import os
 import time
+import uuid
 
 from agents.config_identity import project_config_identity_payload
 from agents.config_loader import load_project_config
@@ -12,6 +13,7 @@ from ccbd.keeper_runtime import KeeperState, KeeperStateStore, ShutdownIntent, S
 from ccbd.keeper_runtime.loop import cleanup_transient_keeper_files, daemon_matches_project_config, reconcile_once, request_shutdown, run_forever
 from ccbd.keeper_runtime.state import compute_project_id
 from ccbd.keeper_runtime.support import reap_child_processes, try_acquire_keeper_lock
+from ccbd.services.lifecycle import CcbdLifecycleStore, current_socket_inode, lifecycle_from_inspection
 from ccbd.services.mount import MountManager
 from ccbd.services.ownership import OwnershipGuard
 from ccbd.socket_client import CcbdClient, CcbdClientError
@@ -43,6 +45,7 @@ class ProjectKeeper(KeeperAppStateMixin):
             spawn_ccbd_process=spawn_ccbd_process_fn,
             process_exists=process_exists_fn,
             mount_manager=mount_manager,
+            lifecycle_store=CcbdLifecycleStore(paths),
             ownership_guard=OwnershipGuard(paths, mount_manager, clock=clock),
             state_store=KeeperStateStore(paths),
             intent_store=ShutdownIntentStore(paths),
@@ -75,8 +78,34 @@ class ProjectKeeper(KeeperAppStateMixin):
 
 def _spawn_daemon(app: ProjectKeeper, *, state: KeeperState, start_timeout_s: float) -> KeeperState:
     now = app.clock()
+    inspection = app._ownership_guard.inspect()
+    lifecycle = app._lifecycle_store.load()
+    if lifecycle is None:
+        lifecycle = lifecycle_from_inspection(
+            project_id=compute_project_id(app.project_root),
+            inspection=inspection,
+            occurred_at=now,
+            keeper_pid=app.pid,
+        )
     try:
-        load_project_config(app.project_root)
+        config = load_project_config(app.project_root).config
+        config_signature = str(project_config_identity_payload(config)['config_signature'])
+        starting = lifecycle.with_phase(
+            'starting',
+            occurred_at=now,
+            desired_state='running',
+            generation=max(int(lifecycle.generation), int(getattr(getattr(inspection, 'lease', None), 'generation', 0) or 0)) + 1,
+            startup_id=uuid.uuid4().hex,
+            keeper_pid=app.pid,
+            owner_pid=None,
+            owner_daemon_instance_id=None,
+            config_signature=config_signature,
+            socket_path=str(app.paths.ccbd_socket_path),
+            socket_inode=None,
+            last_failure_reason=None,
+            shutdown_intent=None,
+        )
+        app._lifecycle_store.save(starting)
         app._spawn_ccbd_process(
             project_root=app.project_root,
             socket_path=app.paths.ccbd_socket_path,
@@ -84,8 +113,34 @@ def _spawn_daemon(app: ProjectKeeper, *, state: KeeperState, start_timeout_s: fl
             timeout_s=start_timeout_s,
             keeper_pid=app.pid,
         )
+        lease = app._mount_manager.load_state()
+        app._lifecycle_store.save(
+            starting.with_phase(
+                'mounted',
+                occurred_at=app.clock(),
+                generation=int(getattr(lease, 'generation', 0) or starting.generation),
+                owner_pid=int(getattr(lease, 'ccbd_pid', 0) or 0) or None,
+                owner_daemon_instance_id=str(getattr(lease, 'daemon_instance_id', '') or '').strip() or None,
+                config_signature=str(getattr(lease, 'config_signature', '') or '').strip() or config_signature,
+                socket_path=str(getattr(lease, 'socket_path', '') or app.paths.ccbd_socket_path),
+                socket_inode=current_socket_inode(getattr(lease, 'socket_path', app.paths.ccbd_socket_path)),
+                last_failure_reason=None,
+                shutdown_intent=None,
+            )
+        )
         return state.with_success(occurred_at=now)
     except Exception as exc:
+        if 'starting' in locals():
+            app._lifecycle_store.save(
+                starting.with_phase(
+                    'failed',
+                    occurred_at=app.clock(),
+                    owner_pid=None,
+                    owner_daemon_instance_id=None,
+                    socket_inode=None,
+                    last_failure_reason=str(exc),
+                )
+            )
         return state.with_failure(occurred_at=now, reason=str(exc))
 
 

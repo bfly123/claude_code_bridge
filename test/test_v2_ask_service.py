@@ -67,8 +67,8 @@ def test_submit_ask_maps_broadcast_payload_and_submission(monkeypatch: pytest.Mo
     monkeypatch.setattr(ask_service, 'resolve_ask_sender', lambda context, sender: 'agent1')
     monkeypatch.setattr(
         ask_service,
-        'connect_mounted_daemon',
-        lambda context, allow_restart_stale: SimpleNamespace(client=_FakeClient()),
+        'invoke_mounted_daemon',
+        lambda context, allow_restart_stale, request_fn: request_fn(_FakeClient()),
     )
 
     summary = ask_service.submit_ask(
@@ -123,8 +123,8 @@ def test_submit_ask_preserves_explicit_cmd_sender(monkeypatch: pytest.MonkeyPatc
     )
     monkeypatch.setattr(
         ask_service,
-        'connect_mounted_daemon',
-        lambda context, allow_restart_stale: SimpleNamespace(client=_FakeClient()),
+        'invoke_mounted_daemon',
+        lambda context, allow_restart_stale, request_fn: request_fn(_FakeClient()),
     )
 
     ask_service.submit_ask(
@@ -133,6 +133,42 @@ def test_submit_ask_preserves_explicit_cmd_sender(monkeypatch: pytest.MonkeyPatc
     )
 
     assert captured['from_actor'] == 'cmd'
+
+
+def test_submit_ask_translates_client_reset_during_shutdown(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-ask-stopping'
+    project_root.mkdir()
+    context = _build_context(project_root)
+
+    class _FlakyClient:
+        def submit(self, envelope) -> dict:
+            del envelope
+            raise CcbdClientError('socket closed')
+
+    monkeypatch.setattr(
+        ask_service,
+        'load_project_config',
+        lambda project_root: SimpleNamespace(config=SimpleNamespace(agents={'agent1': {}, 'agent2': {}})),
+    )
+    monkeypatch.setattr(ask_service, 'resolve_ask_sender', lambda context, sender: 'agent1')
+    monkeypatch.setattr(
+        'cli.services.daemon.connect_mounted_daemon',
+        lambda context, allow_restart_stale: SimpleNamespace(client=_FlakyClient()),
+    )
+    monkeypatch.setattr(
+        'cli.services.daemon.inspect_daemon',
+        lambda context: (
+            None,
+            None,
+            SimpleNamespace(phase='stopping', desired_state='stopped'),
+        ),
+    )
+
+    with pytest.raises(CcbdServiceError, match='project ccbd is stopping; wait for shutdown to finish'):
+        ask_service.submit_ask(
+            context,
+            ParsedAskCommand(project=None, target='agent1', sender=None, message='hello'),
+        )
 
 
 def test_resolve_ask_sender_defaults_to_cmd_for_project_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

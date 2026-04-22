@@ -5,6 +5,7 @@ from pathlib import Path
 
 from agents.models import AgentState
 from agents.store import AgentRuntimeStore
+from provider_runtime.helper_manifest import clear_helper_manifest
 from cli.services.tmux_cleanup_history import TmuxCleanupHistoryStore
 from cli.services.tmux_project_cleanup import cleanup_project_tmux_orphans_by_socket
 from terminal_runtime.tmux import normalize_socket_name
@@ -66,7 +67,7 @@ def stop_all_project(
             pid_candidates.setdefault(pid, []).extend(sources)
         if runtime is None or agent_name not in configured_agent_names:
             continue
-        registry.upsert(
+        registry.upsert_authority(
             replace(
                 runtime,
                 state=AgentState.STOPPED,
@@ -105,6 +106,8 @@ def stop_all_project(
         tmux_cleanup_history_store_cls=tmux_cleanup_history_store_cls,
     )
     terminate_runtime_pids(project_root=project_root, pid_candidates=pid_candidates)
+    for agent_name in (*configured_agent_names, *extra_agent_names):
+        clear_helper_manifest(paths.agent_helper_path(agent_name))
     actions_taken.append(f'terminate_runtime_pids:{len(pid_candidates)}')
     summary = StopAllSummary(
         project_id=project_id,

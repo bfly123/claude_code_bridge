@@ -95,6 +95,7 @@ def _is_nonblocking_residue(path: Path) -> bool:
     if text.endswith('.log') or text.endswith('.jsonl'):
         return True
     if text in {
+        'ccbd/lifecycle.json',
         'ccbd/startup.lock',
         'ccbd/tmux.sock',
         'ccbd/shutdown-intent.json',

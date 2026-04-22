@@ -3,10 +3,21 @@ from __future__ import annotations
 from dataclasses import replace
 
 from agents.models import AgentState, RuntimeBindingSource, normalize_runtime_binding_source
+from ccbd.services.project_inspection import load_project_daemon_inspection
 
 
 def daemon_health(monitor):
-    return monitor._ownership_guard.inspect()
+    lease_inspection = monitor._ownership_guard.inspect()
+    project_id = str(monitor._project_id or '').strip()
+    lifecycle_store = monitor._lifecycle_store
+    if not project_id or lifecycle_store is None:
+        return lease_inspection
+    return load_project_daemon_inspection(
+        project_id,
+        lease_inspection=lease_inspection,
+        lifecycle_store=lifecycle_store,
+        occurred_at=monitor._clock(),
+    )
 
 
 def check_all(monitor) -> dict[str, str]:
@@ -32,16 +43,25 @@ def runtime_health(monitor, runtime) -> str:
     if pane_status is not None:
         return pane_status
     if runtime.pid is not None and not monitor._pid_exists(runtime.pid):
-        updated = replace(runtime, state=AgentState.DEGRADED, health='orphaned', last_seen_at=monitor._clock())
-        monitor._registry.upsert(updated)
+        updated = _patch_runtime_state(
+            monitor,
+            runtime,
+            state=AgentState.DEGRADED,
+            health='orphaned',
+            last_seen_at=monitor._clock(),
+        )
         return updated.health
     if binding_source is RuntimeBindingSource.EXTERNAL_ATTACH:
         return runtime.health
     if runtime.state is AgentState.DEGRADED:
         return runtime.health
     if runtime.health not in {'healthy', 'restored'}:
-        updated = replace(runtime, health='healthy', last_seen_at=monitor._clock())
-        monitor._registry.upsert(updated)
+        updated = _patch_runtime_state(
+            monitor,
+            runtime,
+            health='healthy',
+            last_seen_at=monitor._clock(),
+        )
         return updated.health
     return runtime.health
 
@@ -53,6 +73,13 @@ def pane_health(monitor, runtime) -> str | None:
     if binding_source is RuntimeBindingSource.EXTERNAL_ATTACH:
         return None
     return monitor._provider_pane_health(runtime)
+
+
+def _patch_runtime_state(monitor, runtime, **updates):
+    if monitor._runtime_service is not None:
+        return monitor._runtime_service.patch_runtime_state(runtime, **updates)
+    updated = replace(runtime, **updates)
+    return monitor._registry.upsert(updated)
 
 
 __all__ = [

@@ -13,6 +13,7 @@ class KeeperAppState:
     spawn_ccbd_process: object
     process_exists: object
     mount_manager: object
+    lifecycle_store: object
     ownership_guard: object
     state_store: object
     intent_store: object
@@ -50,6 +51,10 @@ class KeeperAppStateMixin:
     @property
     def _mount_manager(self):
         return self._runtime_state.mount_manager
+
+    @property
+    def _lifecycle_store(self):
+        return self._runtime_state.lifecycle_store
 
     @property
     def _ownership_guard(self):

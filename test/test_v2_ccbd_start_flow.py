@@ -5,8 +5,10 @@ import threading
 import time
 from types import SimpleNamespace
 
+from agents.models import AgentRuntime, AgentState
 from ccbd.app import CcbdApp
 from ccbd.lifecycle_report_store import CcbdStartupReportStore
+from ccbd.services.lifecycle import build_lifecycle
 from ccbd.start_flow import StartFlowSummary
 from ccbd.start_flow_runtime.service_tmux import project_socket_active_panes
 from ccbd.socket_client import CcbdClient
@@ -14,6 +16,7 @@ from cli.services.provider_binding import AgentBinding
 from cli.services.runtime_launch import RuntimeLaunchResult
 from cli.services.tmux_project_cleanup import ProjectTmuxCleanupSummary
 from project.resolver import bootstrap_project
+from provider_runtime.helper_manifest import load_helper_manifest
 import pytest
 
 
@@ -321,6 +324,70 @@ def test_runtime_supervisor_start_passes_visible_layout_signature_to_namespace(t
         'force_recreate': False,
         'recreate_reason': None,
     }
+
+
+def test_runtime_supervisor_start_syncs_namespace_epoch_into_lifecycle_authority(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-lifecycle-namespace-sync'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('cmd; demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    app = CcbdApp(project_root)
+    app.mount_manager.mark_mounted(
+        project_id=app.project_id,
+        pid=4321,
+        socket_path=app.paths.ccbd_socket_path,
+        generation=3,
+        config_signature=str(app.config_identity['config_signature']),
+    )
+    app.lifecycle_store.save(
+        build_lifecycle(
+            project_id=app.project_id,
+            occurred_at='2026-04-22T00:00:00Z',
+            desired_state='running',
+            phase='mounted',
+            generation=3,
+            keeper_pid=111,
+            owner_pid=4321,
+            config_signature=str(app.config_identity['config_signature']),
+            socket_path=app.paths.ccbd_socket_path,
+            namespace_epoch=None,
+        )
+    )
+
+    monkeypatch.setattr(
+        app.project_namespace,
+        'ensure',
+        lambda **kwargs: SimpleNamespace(
+            tmux_socket_path=str(app.paths.ccbd_tmux_socket_path),
+            tmux_session_name=app.paths.ccbd_tmux_session_name,
+            namespace_epoch=9,
+            created_this_call=False,
+            workspace_recreated_this_call=False,
+        ),
+    )
+    monkeypatch.setattr(
+        'ccbd.supervisor.run_start_flow',
+        lambda **kwargs: StartFlowSummary(
+            project_root=str(project_root),
+            project_id=app.project_id,
+            started=('demo',),
+            socket_path=str(app.paths.ccbd_socket_path),
+        ),
+    )
+
+    app.runtime_supervisor.start(
+        agent_names=('demo',),
+        restore=True,
+        auto_permission=True,
+        interactive_tmux_layout=False,
+        cleanup_tmux_orphans=False,
+    )
+
+    lifecycle = app.lifecycle_store.load()
+
+    assert lifecycle is not None
+    assert lifecycle.generation == 3
+    assert lifecycle.namespace_epoch == 9
 
 
 def test_runtime_supervisor_background_mount_does_not_redefine_namespace_layout_signature(tmp_path: Path, monkeypatch) -> None:
@@ -1134,3 +1201,63 @@ def test_ccbd_start_rolls_back_mount_when_restore_fails(tmp_path: Path, monkeypa
     assert lease is not None
     assert lease.mount_state.value == 'unmounted'
     assert not app.paths.ccbd_socket_path.exists()
+
+
+def test_ccbd_start_daemon_boot_adopts_existing_runtime_authority(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-ccbd-daemon-boot-adopt'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    app = CcbdApp(project_root)
+    runtime_root = app.paths.agent_provider_runtime_dir('demo', 'codex')
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    (runtime_root / 'bridge.pid').write_text('5511\n', encoding='utf-8')
+    old_started_at = '2026-04-20T00:00:00Z'
+    app.registry.upsert(
+        AgentRuntime(
+            agent_name='demo',
+            state=AgentState.IDLE,
+            pid=123,
+            started_at=old_started_at,
+            last_seen_at=old_started_at,
+            runtime_ref='tmux:%1',
+            session_ref='session-1',
+            workspace_path=str(app.paths.workspace_path('demo')),
+            project_id=app.project_id,
+            backend_type='pane-backed',
+            queue_depth=0,
+            socket_path=None,
+            health='healthy',
+            provider='codex',
+            runtime_root=str(runtime_root),
+            runtime_pid=123,
+            terminal_backend='tmux',
+            pane_id='%1',
+            active_pane_id='%1',
+            pane_state='alive',
+            binding_generation=5,
+            runtime_generation=4,
+            daemon_generation=5,
+        )
+    )
+    monkeypatch.setattr(app.ownership_guard, 'verify_or_takeover', lambda **kwargs: 6)
+    monkeypatch.setattr(app.dispatcher, 'restore_running_jobs', lambda: None)
+    monkeypatch.setattr(app.dispatcher, 'last_restore_report', lambda **kwargs: None)
+    monkeypatch.setattr(app.restore_report_store, 'save', lambda report: None)
+
+    lease = app.start()
+    updated = app.registry.get('demo')
+    helper = load_helper_manifest(app.paths.agent_helper_path('demo'))
+
+    assert lease.generation == 6
+    assert updated is not None
+    assert updated.binding_generation == 6
+    assert updated.runtime_generation == 6
+    assert updated.daemon_generation == 6
+    assert updated.started_at != old_started_at
+    assert helper is not None
+    assert helper.runtime_generation == 6
+    assert helper.owner_daemon_generation == 6
+    assert helper.started_at == updated.started_at
+
+    app.request_shutdown()

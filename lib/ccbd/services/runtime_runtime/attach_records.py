@@ -16,6 +16,7 @@ def updated_runtime(existing, *, values: AttachRuntimeValues, timestamp: str, pr
     return replace(
         existing,
         state=values.state,
+        started_at=(timestamp if values.authority_epoch_changed else existing.started_at),
         last_seen_at=timestamp,
         pid=values.runtime_pid,
         workspace_path=values.workspace_path,
@@ -41,6 +42,8 @@ def updated_runtime(existing, *, values: AttachRuntimeValues, timestamp: str, pr
         workspace_epoch=values.workspace_epoch,
         lifecycle_state=values.lifecycle_state,
         binding_generation=values.binding_generation,
+        daemon_generation=values.daemon_generation,
+        runtime_generation=values.runtime_generation,
         managed_by=values.managed_by,
         binding_source=values.binding_source,
     )
@@ -58,7 +61,7 @@ def new_runtime(
         agent_name=spec_name,
         state=values.state,
         pid=values.runtime_pid,
-        started_at=existing.started_at if existing and existing.started_at else timestamp,
+        started_at=timestamp,
         last_seen_at=timestamp,
         runtime_ref=values.runtime_ref,
         session_ref=values.session_ref,
@@ -85,6 +88,8 @@ def new_runtime(
         workspace_epoch=values.workspace_epoch,
         lifecycle_state=values.lifecycle_state,
         binding_generation=values.binding_generation,
+        daemon_generation=values.daemon_generation,
+        runtime_generation=values.runtime_generation,
         managed_by=values.managed_by,
         binding_source=values.binding_source,
     )

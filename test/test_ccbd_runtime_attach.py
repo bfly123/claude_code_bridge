@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from agents.models import AgentRuntime, AgentState, RuntimeBindingSource
+from ccbd.services.runtime import RuntimeService
 from ccbd.services.runtime_attach import resolve_session_fields
 from ccbd.services.runtime_runtime.attach import attach_runtime
 
@@ -50,6 +53,8 @@ def _runtime(**overrides) -> AgentRuntime:
         'pane_title_marker': 'agent1',
         'pane_state': 'alive',
         'binding_generation': 2,
+        'daemon_generation': 2,
+        'runtime_generation': 2,
         'managed_by': 'ccbd',
         'binding_source': RuntimeBindingSource.PROVIDER_SESSION,
     }
@@ -98,7 +103,7 @@ def test_attach_runtime_updates_active_existing_runtime() -> None:
     )
 
     assert updated is registry.last_upsert
-    assert updated.started_at == existing.started_at
+    assert updated.started_at == '2026-04-06T00:00:00Z'
     assert updated.last_seen_at == '2026-04-06T00:00:00Z'
     assert updated.runtime_ref == 'tmux:%9'
     assert updated.terminal_backend == 'tmux'
@@ -108,6 +113,7 @@ def test_attach_runtime_updates_active_existing_runtime() -> None:
     assert updated.runtime_pid == 99
     assert updated.pid == 99
     assert updated.binding_generation == 3
+    assert updated.runtime_generation == 3
     assert updated.queue_depth == 3
     assert updated.socket_path == '/tmp/agent.sock'
     assert updated.project_id == 'proj-1'
@@ -138,5 +144,109 @@ def test_attach_runtime_creates_new_runtime_with_runtime_ref_derived_fields() ->
     assert created.active_pane_id == '%4'
     assert created.session_ref == 'session-4'
     assert created.binding_generation == 1
+    assert created.runtime_generation == 1
     assert created.binding_source is RuntimeBindingSource.PROVIDER_SESSION
     assert created.slot_key == 'agent1'
+
+
+def test_attach_runtime_preserves_runtime_generation_when_identity_is_unchanged() -> None:
+    existing = _runtime(binding_generation=4, runtime_generation=4)
+    registry = _Registry(existing=existing)
+
+    updated = attach_runtime(
+        registry=registry,
+        project_id='proj-1',
+        clock=lambda: '2026-04-06T00:00:00Z',
+        agent_name='agent1',
+        workspace_path='/tmp/ws',
+        backend_type='pane-backed',
+        runtime_ref='tmux:%1',
+        session_ref='session-1',
+        runtime_pid=22,
+        pane_id='%1',
+        active_pane_id='%1',
+    )
+
+    assert updated.started_at == existing.started_at
+    assert updated.binding_generation == 4
+    assert updated.runtime_generation == 4
+
+
+def test_attach_runtime_rolls_authority_epoch_when_daemon_generation_changes() -> None:
+    existing = _runtime(binding_generation=4, runtime_generation=4, daemon_generation=2)
+    registry = _Registry(existing=existing)
+
+    updated = attach_runtime(
+        registry=registry,
+        project_id='proj-1',
+        clock=lambda: '2026-04-06T00:00:00Z',
+        agent_name='agent1',
+        workspace_path='/tmp/ws',
+        backend_type='pane-backed',
+        runtime_ref='tmux:%1',
+        session_ref='session-1',
+        runtime_pid=22,
+        pane_id='%1',
+        active_pane_id='%1',
+        daemon_generation=3,
+    )
+
+    assert updated.started_at == '2026-04-06T00:00:00Z'
+    assert updated.binding_generation == 5
+    assert updated.runtime_generation == 5
+    assert updated.daemon_generation == 3
+
+
+def test_attach_runtime_uses_canonical_epoch_when_existing_generations_diverged() -> None:
+    existing = _runtime(binding_generation=5, runtime_generation=4, daemon_generation=2)
+    registry = _Registry(existing=existing)
+
+    updated = attach_runtime(
+        registry=registry,
+        project_id='proj-1',
+        clock=lambda: '2026-04-06T00:00:00Z',
+        agent_name='agent1',
+        workspace_path='/tmp/ws',
+        backend_type='pane-backed',
+        runtime_ref='tmux:%1',
+        session_ref='session-1',
+        runtime_pid=22,
+        pane_id='%1',
+        active_pane_id='%1',
+        daemon_generation=3,
+    )
+
+    assert updated.started_at == '2026-04-06T00:00:00Z'
+    assert updated.binding_generation == 6
+    assert updated.runtime_generation == 6
+    assert updated.daemon_generation == 3
+
+
+def test_patch_runtime_state_updates_allowed_fields_without_touching_authority() -> None:
+    existing = _runtime(binding_generation=4, runtime_generation=4, daemon_generation=3)
+    registry = _Registry(existing=existing)
+    service = RuntimeService(SimpleNamespace(), registry, 'proj-1', clock=lambda: '2026-04-06T00:00:00Z')
+
+    updated = service.patch_runtime_state(
+        existing,
+        state=AgentState.BUSY,
+        queue_depth=7,
+        last_seen_at='2026-04-06T00:00:00Z',
+    )
+
+    assert updated is registry.last_upsert
+    assert updated.state is AgentState.BUSY
+    assert updated.queue_depth == 7
+    assert updated.binding_generation == 4
+    assert updated.runtime_generation == 4
+    assert updated.daemon_generation == 3
+    assert updated.started_at == existing.started_at
+
+
+def test_patch_runtime_state_rejects_authority_fields() -> None:
+    existing = _runtime(binding_generation=4, runtime_generation=4, daemon_generation=3)
+    registry = _Registry(existing=existing)
+    service = RuntimeService(SimpleNamespace(), registry, 'proj-1', clock=lambda: '2026-04-06T00:00:00Z')
+
+    with pytest.raises(ValueError, match='invalid runtime state patch fields: runtime_generation'):
+        service.patch_runtime_state(existing, runtime_generation=9)

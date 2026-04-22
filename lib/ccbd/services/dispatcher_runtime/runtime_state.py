@@ -19,6 +19,14 @@ def sync_runtime(dispatcher, agent_name: str, *, state: AgentState | None = None
             next_state = runtime.state
     if next_state is AgentState.BUSY and runtime.state is AgentState.STOPPED:
         next_state = AgentState.IDLE
+    if dispatcher._runtime_service is not None:
+        dispatcher._runtime_service.patch_runtime_state(
+            runtime,
+            state=next_state,
+            queue_depth=dispatcher._state.queue_depth(agent_name),
+            last_seen_at=dispatcher._clock(),
+        )
+        return
     updated = replace(
         runtime,
         state=next_state,

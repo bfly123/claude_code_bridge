@@ -12,6 +12,7 @@ from .dispatcher_runtime import (
     prepare_reply_deliveries,
     restore_running_jobs,
     submit_jobs,
+    terminate_nonterminal_jobs,
     tick_jobs,
 )
 from .dispatcher_runtime.facade import DispatcherFacadeMixin
@@ -131,6 +132,9 @@ class JobDispatcher(DispatcherRuntimeStateMixin, DispatcherFacadeMixin):
 
     def restore_running_jobs(self) -> tuple[JobRecord, ...]:
         return restore_running_jobs(self)
+
+    def terminate_nonterminal_jobs(self, *, shutdown_reason: str, forced: bool) -> tuple[JobRecord, ...]:
+        return terminate_nonterminal_jobs(self, shutdown_reason=shutdown_reason, forced=forced)
 
     def last_restore_report(self, *, project_id: str) -> CcbdRestoreReport:
         return build_last_restore_report(self, project_id=project_id)

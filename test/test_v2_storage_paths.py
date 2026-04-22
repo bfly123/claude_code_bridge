@@ -10,6 +10,7 @@ def test_path_layout_uses_project_scoped_locations(tmp_path: Path) -> None:
     layout = PathLayout(tmp_path / 'repo')
     assert layout.ccb_dir == (tmp_path / 'repo' / '.ccb').resolve()
     assert layout.config_path == layout.ccb_dir / 'ccb.config'
+    assert layout.ccbd_lifecycle_path == layout.ccb_dir / 'ccbd' / 'lifecycle.json'
     assert layout.ccbd_lease_path == layout.ccb_dir / 'ccbd' / 'lease.json'
     assert layout.ccbd_socket_path.name in {'ccbd.sock', f'ccbd-{layout.project_socket_key}.sock'}
     assert len(os.fsencode(str(layout.ccbd_socket_path))) <= 100

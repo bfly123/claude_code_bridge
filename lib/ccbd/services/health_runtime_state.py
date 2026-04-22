@@ -7,6 +7,9 @@ from dataclasses import dataclass
 class HealthMonitorRuntimeState:
     registry: object
     ownership_guard: object
+    project_id: str | None
+    lifecycle_store: object | None
+    runtime_service: object | None
     clock: object
     pid_exists: object
     session_bindings: object
@@ -24,8 +27,20 @@ class HealthMonitorRuntimeStateMixin:
         return self._runtime_state.ownership_guard
 
     @property
+    def _project_id(self):
+        return self._runtime_state.project_id
+
+    @property
+    def _lifecycle_store(self):
+        return self._runtime_state.lifecycle_store
+
+    @property
     def _clock(self):
         return self._runtime_state.clock
+
+    @property
+    def _runtime_service(self):
+        return self._runtime_state.runtime_service
 
     @property
     def _pid_exists(self):

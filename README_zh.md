@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/模型皆可控-CF1322?style=for-the-badge" alt="模型皆可控">
 </p>
 
-[![Version](https://img.shields.io/badge/version-6.0.6-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-6.0.7-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 [English](README.md) | **中文**
@@ -98,6 +98,16 @@ cmd; writer:codex, reviewer:claude; qa:gemini(worktree)
 历史说明：下面较旧的发布记录里仍可能出现 `askd`、旧 flag 或已移除命令。这些内容仅作为 changelog 历史保留，不代表当前 CLI 入口。
 
 <details open>
+<summary><b>v6.0.7</b> - 生命周期 authority 与停机稳定性增强</summary>
+
+- **Keeper 持有生命周期 authority**：keeper 现在通过权威 `lifecycle.json`、generation fence 和 namespace epoch 跟踪来推进项目生命周期
+- **Mounted 状态读路径修复**：`ping ccbd` 与 `ping agent` 现在从当前 authority 读取 mounted/runtime 状态，不再在恢复后漂移到旧的失败视图
+- **Shutdown 事务加固**：`ccb kill` 和 `ccb kill -f` 现在会在停机事务里终结所有非终态 job，重启后不会再通过 restore 或 auto-retry 复活旧执行
+- **真实黑盒复现已收口**：真实 `ask -> kill -f -> restart` 路径现在会稳定收口为 `project_shutdown`，不再残留活动执行
+
+</details>
+
+<details>
 <summary><b>v6.0.6</b> - Agent 隔离稳定性增强与 kill 生命周期修复</summary>
 
 - **Agent 隔离稳定性增强**：Codex、Claude、Gemini 的 managed agent 会把会话状态稳定保存在项目级 `.ccb/agents/<agent>/provider-state/...` 下

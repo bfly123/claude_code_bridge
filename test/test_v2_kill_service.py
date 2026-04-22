@@ -303,6 +303,15 @@ def test_kill_project_terminates_runtime_pid_files(tmp_path: Path, monkeypatch) 
 
     runtime_dir = context.paths.agent_provider_runtime_dir('demo', 'codex')
     runtime_dir.mkdir(parents=True, exist_ok=True)
+    helper_path = context.paths.agent_helper_path('demo')
+    helper_path.write_text(
+        (
+            '{"schema_version":1,"record_type":"provider_helper_manifest","agent_name":"demo",'
+            '"runtime_generation":2,"helper_kind":"codex_bridge","leader_pid":111,"pgid":111,'
+            '"started_at":"2026-04-21T00:00:00Z","owner_daemon_generation":5,"state":"running"}\n'
+        ),
+        encoding='utf-8',
+    )
     bridge_pid = runtime_dir / 'bridge.pid'
     codex_pid = runtime_dir / 'codex.pid'
     bridge_pid.write_text('111\n', encoding='utf-8')
@@ -354,6 +363,7 @@ def test_kill_project_terminates_runtime_pid_files(tmp_path: Path, monkeypatch) 
     assert terminated == [111, 222, 333]
     assert bridge_pid.exists() is False
     assert codex_pid.exists() is False
+    assert helper_path.exists() is False
     runtime = AgentRuntimeStore(context.paths).load('demo')
     assert runtime is not None
     assert runtime.state is AgentState.STOPPED

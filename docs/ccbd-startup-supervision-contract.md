@@ -22,6 +22,8 @@ Module/function-level redesign for the project-scoped tmux namespace model lives
 
 Detailed redesign for pane recovery layering and continuous foreground attach lives in [docs/ccbd-pane-recovery-continuous-attach-plan.md](/home/bfly/yunwei/ccb_source/docs/ccbd-pane-recovery-continuous-attach-plan.md).
 
+Detailed lifecycle-state, keeper-authority, and provider-helper ownership sequencing lives in [docs/ccbd-lifecycle-stability-plan.md](/home/bfly/yunwei/ccb_source/docs/ccbd-lifecycle-stability-plan.md).
+
 User-facing config and tmux layout rules live in [docs/ccb-config-layout-contract.md](/home/bfly/yunwei/ccb_source/docs/ccb-config-layout-contract.md). Startup behavior must honor that layout contract rather than inventing its own pane topology.
 
 Managed Codex conversation isolation rules live in [docs/codex-session-isolation-contract.md](/home/bfly/yunwei/ccb_source/docs/codex-session-isolation-contract.md). Startup behavior must honor that provider-state contract rather than inferring Codex identity from shared `work_dir`.
@@ -99,11 +101,18 @@ Out of scope:
 ### 5.2 One Authoritative Backend
 
 - Each project anchor may have at most one authoritative `ccbd` backend.
-- `lease.json` plus startup lock plus socket ownership define backend authority.
+- each project anchor may also have at most one project-scoped `keeper`; different projects must have independent keepers and independent `ccbd` generations
+- keeper is the only authority allowed to advance project lifecycle phase and to spawn a new `ccbd` generation
+- CLI commands may express desired lifecycle state and wait for readiness, but must not compete with keeper by directly owning a second backend-start authority
+- backend authority is split on purpose:
+  - `.ccb/ccbd/lifecycle.json` defines project lifecycle phase and current desired owner generation
+  - `.ccb/ccbd/lease.json` defines liveness for the current `ccbd` generation only
+  - socket ownership proves readiness for that current generation
 - A second `ccbd` may only replace the current one through explicit takeover rules.
 - Once takeover has replaced the recorded lease holder, the previous daemon must treat that lease as lost authority:
   - heartbeat refresh must not succeed against a replaced holder
   - backend-local shutdown or unmount must not rewrite a newer holder's lease
+  - backend-local socket cleanup must not unlink a newer generation's replacement socket
   - stale control-plane helpers must prefer reading current authority over forcing an unmount write
 - Provider-specific background daemons must not become competing project authorities.
 
@@ -120,9 +129,10 @@ Out of scope:
 Authority order must be enforced exactly as follows:
 
 1. `.ccb/ccb.config`
-2. `.ccb/ccbd/lease.json`
-3. `.ccb/ccbd/start-policy.json`
-4. `.ccb/agents/<configured-agent>/runtime.json` for the current daemon generation
+2. `.ccb/ccbd/lifecycle.json`
+3. `.ccb/ccbd/lease.json`
+4. `.ccb/ccbd/start-policy.json`
+5. `.ccb/agents/<configured-agent>/runtime.json` for the current daemon generation
 
 Evidence sources:
 
@@ -142,6 +152,11 @@ Rules:
 
 - evidence may guide recovery
 - residue may guide cleanup
+- managed long-lived provider helpers are slot-scoped runtime resources, not independent authority:
+  - a helper or bridge process group must belong to one configured agent slot and one runtime generation
+  - helper manifests and runtime records may define ownership for cleanup and restart purposes
+  - runtime authority and helper ownership must be written from the same agent-authority update path; later outer-layer field patching must not leave helper ownership on an older daemon/runtime generation
+  - helper pids, detached parents, or process names alone are evidence only
 - configured-agent provider session files are agent-scoped by `.ccb/ccb.config` logical agent name
 - provider-base session files such as `.codex-session` or `.claude-session` are legacy or unscoped evidence only:
   - they must not be reinterpreted as a configured agent's identity
@@ -204,17 +219,23 @@ Runtime start policy rules:
 Startup must be a single project-scoped transaction:
 
 1. inspect anchor state
-2. inspect config state
-3. inspect backend lease/socket/heartbeat state
-4. ensure project tmux namespace
-5. compute desired agents
-6. compute recovery/start plan
-7. commit startup actions
-8. emit startup result and persist startup report
+2. inspect lifecycle state
+3. inspect config state
+4. inspect backend lease/socket/heartbeat state
+5. decide whether the current phase is `unmounted`, `starting`, `mounted`, `stopping`, or `failed`
+6. if startup is required, keeper serializes the new generation under `phase=starting`
+7. the new backend binds and proves socket readiness before being published as mounted authority
+8. ensure project tmux namespace
+9. compute desired agents
+10. compute recovery/start plan
+11. commit startup actions
+12. emit startup result and persist startup report
 
 `start_status: ok` is valid only when:
 
 - the project backend is healthy and authoritative
+- the project lifecycle phase is `mounted`
+- the authoritative mounted generation is the same generation that successfully bound the current project socket
 - the project tmux namespace exists at the project-owned socket/session recorded under `.ccb/ccbd/`
 - the project tmux namespace has the current session-scoped CCB UI contract applied on that project-owned socket/session
 - that project session contains the current namespace window contract:
@@ -235,6 +256,8 @@ It must never mean:
 
 - stale binding accepted as success
 - missing config silently replaced despite existing project state
+- `phase=starting` with only a socket path placeholder but no ready server
+- a mounted lease whose socket is not yet ready for live ping
 - degraded runtime reported as healthy startup completion
 
 Foreground command split:
@@ -358,6 +381,7 @@ Project-socket cleanup rules:
 - startup must clean project-owned orphan panes on the project socket during the startup transaction, not wait for a later manual cleanup path
 - UNIX-socket cleanup must be identity-safe:
   - a daemon may unlink the project socket path only if the current filesystem entry is still the exact socket inode it bound
+  - startup must not blind-unlink an existing project socket path merely because the path exists; it must first prove that the current inode belongs to the same authoritative generation or to a fully invalidated predecessor
   - shutting down an old daemon must never remove a newer daemon's replacement socket path
 
 ### 5.8 Daemon Must Not Stay Dead
@@ -369,14 +393,16 @@ Target architecture:
 - `ccbd` remains the only authoritative project backend
 - a lightweight project-scoped `keeper` process monitors it
 - the keeper may restart `ccbd` after crashes
-- the keeper never owns project runtime authority
+- the keeper is the only authority allowed to initiate a fresh backend generation
+- the keeper never owns project runtime authority inside the mounted backend generation
 - the keeper must reap exited direct children so crashed `ccbd` pids do not linger as zombie evidence
-- keeper/CLI forced takeover is allowed only after the lease has entered a true takeover window:
+- forced takeover is allowed only after the lifecycle state and lease inspection together prove that the previous generation has entered a true takeover window:
   - `MISSING`
   - `UNMOUNTED`
   - `STALE`
 - `DEGRADED` with a live pid plus fresh heartbeat is observation only, not restart authority, even if the project socket is temporarily unreachable
 - therefore temporary UNIX-socket accept stalls during active work must surface as degraded availability, not a keeper-triggered daemon replacement
+- config-check or live-ping timeout against a nominally mounted daemon is degraded observation only unless lifecycle state or ownership proof explicitly marks the generation failed
 - if takeover does occur, any superseded daemon that wakes up again must fail its next lease refresh and exit rather than continuing to serve against stale authority
 
 If keeper is absent, the system can only provide "restart on next `ccb` command", which is weaker than the target contract.
@@ -390,26 +416,33 @@ When `ccb` re-enters a project after an explicit shutdown, startup must first cl
 1. acquire shutdown intent
 2. prevent keeper restart
 3. stop new intake
-4. stop running agent executions
-5. stop all desired agents
-6. destroy the project tmux namespace at the project-owned socket/session
-7. terminate surviving provider runtime pids that outlive namespace destruction
-8. mark configured-agent runtime authority as stopped
-9. unmount backend lease
-10. close socket server
-11. persist shutdown report
+4. terminalize all non-terminal project jobs so no queued/running request survives as restore or retry authority
+5. stop running agent executions
+6. stop all desired agents
+7. destroy the project tmux namespace at the project-owned socket/session
+8. terminate surviving provider runtime pids that outlive namespace destruction
+9. mark configured-agent runtime authority as stopped
+10. unmount backend lease
+11. close socket server
+12. persist shutdown report
 
 Shutdown must be best-effort toward residue and strict toward authority.
 
 That means:
 
 - malformed or unknown residue must not block kill
+- explicit `ccb kill` is a strong management action and must not be blocked merely because the current backend is `DEGRADED` with fresh heartbeat but an unreachable socket
 - configured-agent authority must end in a clean stopped/unmounted state
+- non-terminal jobs must not survive explicit project stop as active restore or automatic retry authority
 - once shutdown intent is acquired, the backend must not run any further reconcile/heartbeat tick that could remount desired agents during the same shutdown transaction
+- once shutdown intent is acquired, new mutating RPC requests such as `submit`, `start`, `restore`, `retry`, or `attach` must be rejected with a stable lifecycle-level stopping error; clients must not surface raw socket reset errors as the user-visible contract
 - local daemon shutdown helpers must not stop at `mark_unmounted()` plus socket close; they must run the same stop-all cleanup transaction first so provider-runtime pid files, namespace state, and configured-agent authority do not survive a backend-local shutdown
 - lease writes that transition backend authority to `unmounted` must be holder-safe:
   - daemon-local shutdown paths may only unmount the lease they still own
   - CLI or keeper cleanup paths acting on an inspected lease must not overwrite a newer holder that took over after inspection
+- long-lived provider helper groups must also be cleaned as part of the same authoritative shutdown transaction:
+  - helper cleanup must be keyed by slot ownership and runtime generation, not by blind global process-name scans
+  - helper orphan sweeping is a safety fuse, not the normal meaning of `ccb kill`
 
 ## 6. Required Runtime States
 
@@ -440,10 +473,27 @@ The following records are required.
 
 Path:
 
+- `.ccb/ccbd/lifecycle.json`
 - `.ccb/ccbd/lease.json`
 - `.ccb/ccbd/state.json`
 
-Required fields:
+Required fields for lifecycle authority:
+
+- `project_id`
+- `desired_state`
+- `phase`
+- `generation`
+- `startup_id`
+- `keeper_pid`
+- `owner_pid`
+- `owner_daemon_instance_id`
+- `socket_path`
+- `config_signature`
+- `phase_started_at`
+- optional `last_failure_reason`
+- optional `shutdown_intent`
+
+Required fields for backend liveness:
 
 - `project_id`
 - `ccbd_pid`
@@ -497,17 +547,58 @@ Path:
 Required fields beyond current baseline:
 
 - `daemon_generation`
+- `runtime_generation`
 - `desired_state`
 - `reconcile_state`
 - `restart_count`
 - `last_reconcile_at`
 - `last_failure_reason`
+- optional `runtime_owner_pid`
+- optional `runtime_owner_pgid`
 - optional `tmux_socket_name`
 - optional `tmux_socket_path`
 
+Required write semantics:
+
+- `started_at`, `binding_generation`, `runtime_generation`, and `daemon_generation` must advance only when a new runtime authority epoch is created
+- a no-op reattach or repeated observation of the same binding within the same daemon generation must not silently bump `binding_generation`
+- when daemon generation changes, the resulting runtime authority must remain self-consistent even if the binding facts are otherwise reused
+- runtime authority writes must go through the explicit agent-authority path (`attach` / authority-adopt / authority-mutate equivalents), not through generic outer-layer state patching
+- generic runtime state patching may update operational fields such as `state`, `health`, queue/reconcile markers, and last-seen timestamps, but must not mutate epoch/binding ownership fields
+- registry persistence must reject non-authority writes that attempt to change authority-owned fields for an existing runtime record
+
 Unknown agent directories under `.ccb/agents/` are residue unless they are present in current config.
 
-### 7.5 Keeper State
+### 7.5 Provider Helper Ownership
+
+Path:
+
+- `.ccb/agents/<agent>/helper.json`
+
+Required purpose:
+
+- record long-lived slot-scoped provider helper ownership such as bridge processes
+- make helper cleanup generation-safe and slot-safe
+
+Minimum content:
+
+- `agent_name`
+- `runtime_generation`
+- `helper_kind`
+- `leader_pid`
+- `pgid`
+- `started_at`
+- optional `owner_daemon_generation`
+- optional `state`
+
+Required write semantics:
+
+- helper ownership must be derived from the final persisted runtime authority for that slot
+- `owner_daemon_generation` must match the runtime authority that currently owns that helper group
+- helper `started_at` must reflect the current runtime authority epoch, not a superseded slot generation
+- helper manifest writes must use canonical persisted `runtime_generation`; they must not silently fall back to `binding_generation`, pane facts, or pid residue
+
+### 7.6 Keeper State
 
 Path:
 
@@ -529,7 +620,7 @@ Minimum content:
 - optional `last_restart_at`
 - optional `last_failure_reason`
 
-### 7.6 Shutdown Intent
+### 7.7 Shutdown Intent
 
 Path:
 
@@ -546,7 +637,7 @@ Minimum content:
 - `requested_by_pid`
 - `reason`
 
-### 7.7 Diagnostics Bundle
+### 7.8 Diagnostics Bundle
 
 Command:
 

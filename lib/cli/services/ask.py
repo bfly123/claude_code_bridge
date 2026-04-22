@@ -13,7 +13,7 @@ from cli.render import render_watch_batch, write_lines
 from .ask_runtime import AskSummary, exit_code_for_ask_status, write_ask_output
 from .ask_runtime.submission import submit_ask as _submit_ask_impl
 from .ask_runtime.watch import watch_ask_job as _watch_ask_job_impl
-from .daemon import CcbdServiceError, connect_mounted_daemon
+from .daemon import CcbdServiceError, connect_mounted_daemon, invoke_mounted_daemon
 
 
 def submit_ask(context, command) -> AskSummary:
@@ -22,7 +22,7 @@ def submit_ask(context, command) -> AskSummary:
         command,
         load_project_config_fn=load_project_config,
         resolve_ask_sender_fn=resolve_ask_sender,
-        connect_mounted_daemon_fn=connect_mounted_daemon,
+        invoke_mounted_daemon_fn=invoke_mounted_daemon,
     )
 
 

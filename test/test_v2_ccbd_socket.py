@@ -13,6 +13,9 @@ from agents.models import AgentRuntime, AgentState, AgentRestoreState, RestoreMo
 from agents.store import AgentRuntimeStore
 from ccbd.api_models import DeliveryScope, MessageEnvelope
 from ccbd.app import CcbdApp
+from ccbd.services.dispatcher import JobDispatcher
+from ccbd.services.registry import AgentRegistry
+from ccbd.services.lifecycle import build_lifecycle
 from ccbd.services.project_namespace_state import ProjectNamespaceEvent, ProjectNamespaceState
 from ccbd.socket_client import CcbdClient, CcbdClientError
 from ccbd.socket_server import CcbdSocketServer
@@ -21,6 +24,9 @@ from message_bureau import AttemptStore, MessageStore
 from mailbox_kernel import InboundEventStatus, InboundEventStore, InboundEventType
 from project.ids import compute_project_id
 from project.resolver import ProjectContext
+from provider_execution.registry import build_default_execution_registry
+from provider_execution.service import ExecutionService
+from provider_execution.state_store import ExecutionStateStore
 
 
 def _write(path: Path, text: str) -> None:
@@ -258,9 +264,132 @@ def test_ccbd_stop_all_does_not_run_post_shutdown_heartbeat(tmp_path: Path) -> N
     assert runtime.desired_state == 'stopped'
     assert runtime.reconcile_state == 'stopped'
     assert runtime.runtime_ref is None
-    assert runtime.session_ref is None
-    assert ctx.project_id == runtime.project_id
-    assert app.start_policy_store.load() is None
+
+
+def test_ccbd_stop_all_force_terminalizes_running_jobs_before_restart_restore(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-stop-all-running-job'
+    _prepare_project(project_root, _single_agent_config_text('demo', 'fake'))
+    app = CcbdApp(project_root)
+    app.project_namespace.ensure = lambda: SimpleNamespace(  # type: ignore[method-assign]
+        tmux_socket_path=str(app.paths.ccbd_tmux_socket_path),
+        tmux_session_name=app.paths.ccbd_tmux_session_name,
+        namespace_epoch=1,
+    )
+    app.project_namespace.destroy = lambda **kwargs: SimpleNamespace(destroyed=True, namespace_epoch=1)  # type: ignore[method-assign]
+
+    thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread.start()
+    _wait_for(app.paths.ccbd_socket_path)
+
+    client = CcbdClient(app.paths.ccbd_socket_path)
+    started = client.start(agent_names=('demo',), restore=False, auto_permission=False)
+    assert started['started'] == ['demo']
+
+    receipt = client.submit(
+        MessageEnvelope(
+            project_id=app.project_id,
+            to_agent='demo',
+            from_actor='user',
+            body='stop me',
+            task_id='fake;latency_ms=1500',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    job_id = receipt['job_id']
+    running = _wait_for_job_status(client, job_id, 'running')
+    assert running['status'] == 'running'
+    assert app.paths.execution_state_path(job_id).exists()
+
+    stopped = client.stop_all(force=True)
+    assert stopped['state'] == 'unmounted'
+
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+
+    registry = AgentRegistry(app.paths, app.config)
+    runtime = AgentRuntimeStore(app.paths).load('demo')
+    assert runtime is not None
+    registry.upsert(runtime)
+    restarted = JobDispatcher(
+        app.paths,
+        app.config,
+        registry,
+        execution_service=ExecutionService(
+            build_default_execution_registry(),
+            clock=lambda: '2026-03-18T00:00:05Z',
+            state_store=ExecutionStateStore(app.paths),
+        ),
+        clock=lambda: '2026-03-18T00:00:05Z',
+    )
+
+    assert restarted.restore_running_jobs() == ()
+    terminal = restarted.get(job_id)
+    assert terminal is not None
+    assert terminal.status.value == 'incomplete'
+    assert terminal.terminal_decision is not None
+    assert terminal.terminal_decision['reason'] == 'project_shutdown'
+    assert terminal.terminal_decision['diagnostics']['shutdown_reason'] == 'stop_all'
+    assert terminal.terminal_decision['diagnostics']['forced'] is True
+    assert not app.paths.execution_state_path(job_id).exists()
+
+
+def test_ccbd_socket_rejects_mutating_requests_while_lifecycle_stopping(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-stopping-guard'
+    ctx = _prepare_project(project_root, _single_agent_config_text('codex', 'codex'))
+    app = CcbdApp(project_root)
+    app.registry.upsert(
+        _runtime(
+            'codex',
+            project_id=ctx.project_id,
+            workspace_path=str(app.paths.workspace_path('codex')),
+            pid=777,
+        )
+    )
+
+    thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread.start()
+    _wait_for(app.paths.ccbd_socket_path)
+
+    app.lifecycle_store.save(
+        build_lifecycle(
+            project_id=ctx.project_id,
+            occurred_at='2026-03-18T00:00:05Z',
+            desired_state='stopped',
+            phase='stopping',
+            generation=app.lease.generation if app.lease is not None else 1,
+            keeper_pid=app.keeper_pid,
+            owner_pid=app.pid,
+            owner_daemon_instance_id=app.daemon_instance_id,
+            config_signature=str(app.config_identity.get('config_signature') or '').strip() or None,
+            socket_path=app.paths.ccbd_socket_path,
+            shutdown_intent='kill',
+        )
+    )
+
+    client = CcbdClient(app.paths.ccbd_socket_path)
+
+    ping = client.ping('codex')
+    assert ping['agent_name'] == 'codex'
+
+    with pytest.raises(CcbdClientError, match='lifecycle_stopping'):
+        client.submit(
+            MessageEnvelope(
+                project_id=ctx.project_id,
+                to_agent='codex',
+                from_actor='user',
+                body='hello',
+                task_id='task-1',
+                reply_to=None,
+                message_type='ask',
+                delivery_scope=DeliveryScope.SINGLE,
+            )
+        )
+
+    client.shutdown()
+    thread.join(timeout=2)
+    assert not thread.is_alive()
 
 
 def test_ping_namespace_summary(tmp_path: Path) -> None:

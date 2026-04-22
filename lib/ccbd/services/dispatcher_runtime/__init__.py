@@ -10,6 +10,7 @@ from .reply_delivery import prepare_reply_deliveries
 from .records import append_event, append_job, get_job, latest_for_agent, rebuild_dispatcher_state
 from .restore import build_last_restore_report, restore_running_jobs
 from .routing import build_watch_payload, resolve_targets, resolve_watch_target, validate_sender, validate_targets_available
+from .shutdown import terminate_nonterminal_jobs
 from .runtime_state import sync_runtime
 from .state import DispatcherState
 from .submission_models import _JobDraft, _message_for_agent, _SubmissionPlan
@@ -47,6 +48,7 @@ __all__ = [
     'retry_attempt',
     'restore_running_jobs',
     'submit_jobs',
+    'terminate_nonterminal_jobs',
     'sync_runtime',
     'tick_jobs',
     'validate_sender',

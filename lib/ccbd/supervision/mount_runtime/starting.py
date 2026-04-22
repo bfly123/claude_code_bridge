@@ -17,8 +17,9 @@ def build_starting_runtime(
 ):
     spec = registry.spec_for(agent_name)
     workspace_path = str(layout.workspace_path(agent_name, workspace_root=spec.workspace_root))
+    generation = generation_getter()
     if runtime is None:
-        return registry.upsert(
+        return registry.upsert_authority(
             replace(
                 runtime_service.attach(
                     agent_name=agent_name,
@@ -33,29 +34,49 @@ def build_starting_runtime(
                 state=AgentState.STARTING,
                 health='starting',
                 lifecycle_state='starting',
-                daemon_generation=generation_getter(),
+                daemon_generation=generation,
                 desired_state='mounted',
                 reconcile_state='starting',
                 last_reconcile_at=attempted_at,
             )
         )
 
+    current = runtime
+    if authority_adopt_required(runtime, generation=generation):
+        current = runtime_service.adopt_runtime_authority(
+            runtime,
+            daemon_generation=generation,
+        )
+
     candidate = replace(
-        runtime,
+        current,
         state=AgentState.STARTING,
         health='starting',
-        workspace_path=runtime.workspace_path or workspace_path,
-        backend_type=runtime.backend_type or spec.runtime_mode.value,
-        provider=runtime.provider or spec.provider,
+        workspace_path=current.workspace_path or workspace_path,
+        backend_type=current.backend_type or spec.runtime_mode.value,
+        provider=current.provider or spec.provider,
         lifecycle_state='starting',
-        daemon_generation=generation_getter(),
+        daemon_generation=current.daemon_generation,
         desired_state='mounted',
         reconcile_state='starting',
         last_reconcile_at=attempted_at,
     )
-    if candidate == runtime:
-        return runtime
-    return registry.upsert(candidate)
+    if candidate == current:
+        return current
+    return registry.upsert_authority(candidate)
+
+
+def authority_adopt_required(runtime, *, generation: int | None) -> bool:
+    if generation is None:
+        return False
+    if runtime.state not in {AgentState.IDLE, AgentState.BUSY, AgentState.DEGRADED}:
+        return False
+    current_generation = getattr(runtime, 'daemon_generation', None)
+    try:
+        current_generation = int(current_generation) if current_generation is not None else None
+    except Exception:
+        current_generation = None
+    return current_generation != int(generation)
 
 
 __all__ = ["build_starting_runtime"]

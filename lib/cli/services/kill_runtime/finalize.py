@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from provider_runtime.helper_manifest import clear_helper_manifest
+
 
 def finalize_kill(
     context,
@@ -27,6 +29,8 @@ def finalize_kill(
         project_root=context.project.project_root,
         pid_candidates=preparation.pid_candidates,
     )
+    for agent_name in (*preparation.configured_agent_names, *preparation.extra_agent_names):
+        clear_helper_manifest(context.paths.agent_helper_path(agent_name))
     if cleanup_summaries:
         tmux_cleanup_history_store_cls(context.paths).append(
             tmux_cleanup_event_cls(

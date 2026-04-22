@@ -11,6 +11,7 @@ from ccbd.lifecycle_report_store import CcbdShutdownReportStore, CcbdStartupRepo
 from ccbd.restore_report_store import CcbdRestoreReportStore
 from ccbd.services import (
     AgentRegistry,
+    CcbdLifecycleStore,
     HealthMonitor,
     JobDispatcher,
     JobHeartbeatService,
@@ -35,6 +36,7 @@ from provider_execution.state_store import ExecutionStateStore
 from storage.paths import PathLayout
 
 from .handlers import register_handlers
+from .request_guard import rejection_for_request
 
 APP_REQUEST_TIMEOUT_S = 0.0
 JOB_HEARTBEAT_SILENCE_START_AFTER_S = 600.0
@@ -54,6 +56,7 @@ def initialize_app(app, project_root: str | Path, *, clock, pid: int | None) -> 
     app.daemon_instance_id = uuid.uuid4().hex
     app.provider_catalog = build_default_provider_catalog()
     app.mount_manager = MountManager(app.paths, clock=app.clock)
+    app.lifecycle_store = CcbdLifecycleStore(app.paths)
     app.restore_report_store = CcbdRestoreReportStore(app.paths)
     app.startup_report_store = CcbdStartupReportStore(app.paths)
     app.shutdown_report_store = CcbdShutdownReportStore(app.paths)
@@ -63,7 +66,14 @@ def initialize_app(app, project_root: str | Path, *, clock, pid: int | None) -> 
     app.ownership_guard = OwnershipGuard(app.paths, app.mount_manager, clock=app.clock)
     app.registry = AgentRegistry(app.paths, app.config)
     app.restore_store = AgentRestoreStore(app.paths)
-    app.runtime_service = RuntimeService(app.paths, app.registry, app.project_id, app.restore_store, clock=app.clock)
+    app.runtime_service = RuntimeService(
+        app.paths,
+        app.registry,
+        app.project_id,
+        app.restore_store,
+        daemon_generation_getter=lambda: app.lease.generation if app.lease is not None else None,
+        clock=app.clock,
+    )
     app.project_namespace = ProjectNamespaceController(app.paths, app.project_id, clock=app.clock)
     app.runtime_supervisor = RuntimeSupervisor(
         project_root=app.project_root,
@@ -128,10 +138,14 @@ def initialize_app(app, project_root: str | Path, *, clock, pid: int | None) -> 
     app.health_monitor = HealthMonitor(
         app.registry,
         app.ownership_guard,
+        project_id=app.project_id,
+        lifecycle_store=app.lifecycle_store,
+        runtime_service=app.runtime_service,
         clock=app.clock,
         namespace_state_store=app.namespace_state_store,
     )
     app.socket_server = CcbdSocketServer(app.paths.ccbd_socket_path)
+    app.socket_server.set_request_guard(lambda op: rejection_for_request(app, op))
     app.lease = None
     register_handlers(app)
 

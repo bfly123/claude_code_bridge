@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from provider_runtime.helper_manifest import load_helper_manifest
+
 from .procfs import read_pid_file, read_proc_cmdline
 from .utils import coerce_pid, resolved_runtime_roots
 
@@ -19,6 +21,10 @@ def collect_pid_candidates(agent_dir: Path, *, runtime, fallback_to_agent_dir: b
             if pid is None:
                 continue
             candidates.setdefault(pid, []).append(pid_path)
+    helper_path = agent_dir / 'helper.json'
+    helper = _load_helper_manifest_best_effort(helper_path)
+    if helper is not None:
+        candidates.setdefault(helper.leader_pid, []).append(helper_path)
     return candidates
 
 
@@ -51,3 +57,10 @@ def collect_project_process_candidates(
 
 
 __all__ = ['collect_pid_candidates', 'collect_project_process_candidates']
+
+
+def _load_helper_manifest_best_effort(path: Path):
+    try:
+        return load_helper_manifest(path)
+    except Exception:
+        return None

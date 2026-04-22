@@ -44,6 +44,7 @@ class AgentRuntime:
     managed_by: str = 'ccbd'
     binding_source: RuntimeBindingSource = RuntimeBindingSource.PROVIDER_SESSION
     daemon_generation: int | None = None
+    runtime_generation: int | None = None
     desired_state: str | None = None
     reconcile_state: str | None = None
     restart_count: int = 0
@@ -92,6 +93,7 @@ class AgentRuntime:
             'managed_by': self.managed_by,
             'binding_source': self.binding_source.value,
             'daemon_generation': self.daemon_generation,
+            'runtime_generation': self.runtime_generation,
             'desired_state': self.desired_state,
             'reconcile_state': self.reconcile_state,
             'restart_count': self.restart_count,

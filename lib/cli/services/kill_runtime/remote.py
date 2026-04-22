@@ -74,20 +74,30 @@ def await_remote_shutdown(
     while time.time() < deadline:
         _, _, inspection = inspect_daemon_fn(context)
         last_inspection = inspection
-        if not inspection.socket_connectable and inspection.health in {
-            lease_health_cls.MISSING,
-            lease_health_cls.UNMOUNTED,
+        if _inspection_phase(inspection) == 'unmounted' or (
+            not inspection.socket_connectable and inspection.health in {
+                lease_health_cls.MISSING,
+                lease_health_cls.UNMOUNTED,
             lease_health_cls.STALE,
-        }:
+            }
+        ):
             break
         time.sleep(0.05)
-    lease = None if last_inspection is None else last_inspection.lease
     return kill_summary_cls(
         project_id=context.project.project_id,
-        state=lease.mount_state.value if lease is not None else 'unmounted',
+        state='unmounted' if last_inspection is None else _inspection_phase(last_inspection),
         socket_path=str(context.paths.ccbd_socket_path),
         forced=force,
     )
+
+
+def _inspection_phase(inspection) -> str:
+    phase = str(getattr(inspection, 'phase', '') or '').strip()
+    if phase:
+        return phase
+    lease = getattr(inspection, 'lease', None)
+    mount_state = str(getattr(getattr(lease, 'mount_state', None), 'value', '') or '').strip()
+    return mount_state or 'unmounted'
 
 
 __all__ = ['await_remote_shutdown', 'request_remote_stop', 'resolve_shutdown_summary']

@@ -105,7 +105,9 @@ def test_ccb_start_restarts_dead_daemon_on_subsequent_start(tmp_path: Path) -> N
     assert 'agents: demo' in start_1.stdout
 
     lease_path = project_root / '.ccb' / 'ccbd' / 'lease.json'
+    lifecycle_path = project_root / '.ccb' / 'ccbd' / 'lifecycle.json'
     lease_before = json.loads(lease_path.read_text(encoding='utf-8'))
+    lifecycle_before = json.loads(lifecycle_path.read_text(encoding='utf-8'))
     stale_pid = int(lease_before['ccbd_pid'])
     os.kill(stale_pid, signal.SIGTERM)
     _wait_for_pid_exit(stale_pid)
@@ -123,8 +125,14 @@ def test_ccb_start_restarts_dead_daemon_on_subsequent_start(tmp_path: Path) -> N
     assert 'agents: demo' in start_2.stdout
 
     lease_after = json.loads(lease_path.read_text(encoding='utf-8'))
+    lifecycle_after = json.loads(lifecycle_path.read_text(encoding='utf-8'))
     assert int(lease_after['ccbd_pid']) != stale_pid
     assert int(lease_after['generation']) == int(lease_before['generation']) + 1
+    assert lifecycle_before['desired_state'] == 'running'
+    assert lifecycle_before['phase'] == 'mounted'
+    assert lifecycle_after['desired_state'] == 'running'
+    assert lifecycle_after['phase'] == 'mounted'
+    assert int(lifecycle_after['generation']) == int(lifecycle_before['generation']) + 1
 
     ps = _run_ccb(['ps'], cwd=project_root)
     assert ps.returncode == 0, ps.stderr
@@ -133,3 +141,6 @@ def test_ccb_start_restarts_dead_daemon_on_subsequent_start(tmp_path: Path) -> N
 
     kill = _run_ccb(['kill', '-f'], cwd=project_root)
     assert kill.returncode == 0, kill.stderr
+    lifecycle_killed = json.loads(lifecycle_path.read_text(encoding='utf-8'))
+    assert lifecycle_killed['desired_state'] == 'stopped'
+    assert lifecycle_killed['phase'] == 'unmounted'

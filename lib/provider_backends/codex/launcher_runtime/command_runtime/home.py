@@ -205,12 +205,12 @@ def _prepare_managed_home(source_home: Path, target_home: Path) -> None:
     (target_home / 'sessions').mkdir(parents=True, exist_ok=True)
     target_config = target_home / 'config.toml'
     if _source_config_valid(source_home / 'config.toml'):
-        _copy_if_missing(source_home / 'config.toml', target_config)
+        _sync_file(source_home / 'config.toml', target_config)
     elif not target_config.exists():
         target_config.write_text('# ccb agent-local codex config\n', encoding='utf-8')
-    _copy_auth_file(source_home / 'auth.json', target_home / 'auth.json')
-    _copytree_if_missing(source_home / 'skills', target_home / 'skills')
-    _copytree_if_missing(source_home / 'commands', target_home / 'commands')
+    _sync_auth_file(source_home / 'auth.json', target_home / 'auth.json')
+    _sync_tree(source_home / 'skills', target_home / 'skills')
+    _sync_tree(source_home / 'commands', target_home / 'commands')
 
 
 def _source_config_valid(config_path: Path) -> bool:
@@ -228,7 +228,7 @@ def _source_config_valid(config_path: Path) -> bool:
         return False
 
 
-def _copy_auth_file(source: Path, target: Path) -> None:
+def _sync_auth_file(source: Path, target: Path) -> None:
     if not source.is_file():
         return
     try:
@@ -237,8 +237,8 @@ def _copy_auth_file(source: Path, target: Path) -> None:
         pass
 
 
-def _copy_if_missing(source: Path, target: Path) -> None:
-    if target.exists() or not source.is_file():
+def _sync_file(source: Path, target: Path) -> None:
+    if not source.is_file():
         return
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -247,12 +247,12 @@ def _copy_if_missing(source: Path, target: Path) -> None:
         pass
 
 
-def _copytree_if_missing(source: Path, target: Path) -> None:
-    if target.exists() or not source.is_dir():
+def _sync_tree(source: Path, target: Path) -> None:
+    if not source.is_dir():
         return
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
-        shutil.copytree(source, target)
+        shutil.copytree(source, target, dirs_exist_ok=True)
     except Exception:
         pass
 

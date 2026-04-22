@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ccbd.services.project_inspection import ProjectDaemonInspection
 from ..tmux_project_cleanup import ProjectTmuxCleanupSummary
 
 
@@ -20,6 +21,7 @@ class DaemonHandle:
 class LocalPingSummary:
     project_id: str
     mount_state: str
+    desired_state: str
     health: str
     generation: int | None
     socket_path: str | None
@@ -29,6 +31,8 @@ class LocalPingSummary:
     heartbeat_fresh: bool
     takeover_allowed: bool
     reason: str
+    last_failure_reason: str | None = None
+    shutdown_intent: str | None = None
 
 
 @dataclass(frozen=True)
@@ -46,4 +50,5 @@ __all__ = [
     'DaemonHandle',
     'KillSummary',
     'LocalPingSummary',
+    'ProjectDaemonInspection',
 ]

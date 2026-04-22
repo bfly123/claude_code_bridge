@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Every_Model_Controllable-CF1322?style=for-the-badge" alt="Every Model Controllable">
 </p>
 
-[![Version](https://img.shields.io/badge/version-6.0.6-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-6.0.7-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 **English** | [Chinese](README_zh.md)
@@ -92,6 +92,16 @@ This layout means:
 Historical note: older release notes below may mention `askd`, legacy flags, or removed commands. Those references are kept only as changelog history and do not redefine the current CLI surface.
 
 <details open>
+<summary><b>v6.0.7</b> - Lifecycle Authority & Shutdown Stability</summary>
+
+- **Keeper-Owned Lifecycle Authority**: keeper now owns lifecycle progression through authoritative `lifecycle.json`, generation fencing, and namespace epoch tracking
+- **Mounted-State Read Fixes**: `ping ccbd` and `ping agent` now report current mounted state from live authority instead of stale failure residue after recovery
+- **Shutdown Transaction Hardening**: `ccb kill` and `ccb kill -f` now terminate non-terminal jobs during shutdown so restart cannot resurrect old executions via restore or auto-retry
+- **Real Blackbox Repro Closed**: the real `ask -> kill -f -> restart` lifecycle repro now converges cleanly to `project_shutdown` without lingering active execution
+
+</details>
+
+<details>
 <summary><b>v6.0.6</b> - Agent Isolation Stability & Kill Lifecycle Fix</summary>
 
 - **Agent Isolation Stability**: Codex, Claude, and Gemini managed agents keep their session state under project-scoped `.ccb/agents/<agent>/provider-state/...`

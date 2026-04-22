@@ -15,6 +15,7 @@ class CcbdSocketServer:
     def __init__(self, socket_path: str | Path) -> None:
         self._socket_path = Path(socket_path)
         self._handlers: dict[str, callable] = {}
+        self._request_guard = None
         self._server = None
         self._bound_socket_stat: tuple[int, int] | None = None
         self._stop_event = threading.Event()
@@ -27,6 +28,9 @@ class CcbdSocketServer:
         if op in self._handlers:
             raise ValueError(f'duplicate handler for op {op!r}')
         self._handlers[op] = handler
+
+    def set_request_guard(self, guard) -> None:
+        self._request_guard = guard
 
     def listen(self) -> None:
         listen_server(self)

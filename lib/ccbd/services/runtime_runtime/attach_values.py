@@ -40,6 +40,7 @@ def resolve_attach_runtime_values(
     window_id: str | None,
     workspace_epoch: int | None,
     lifecycle_state: str | None,
+    daemon_generation: int | None,
     managed_by: str | None,
     binding_source: str | RuntimeBindingSource | None,
 ) -> AttachRuntimeValues:
@@ -62,6 +63,29 @@ def resolve_attach_runtime_values(
     next_health = health or (existing.health if existing is not None else 'healthy')
     next_state = state_for_attach(existing.state if existing is not None else None, next_health)
     pane_id_value = preferred_pane_id(existing, pane_id=pane_id, runtime_ref_value=runtime_ref_value)
+    runtime_root_value = preferred_text(existing, 'runtime_root', runtime_root)
+    runtime_pid_value = next_runtime_pid(existing, runtime_pid=runtime_pid, pid=pid)
+    terminal_backend_value = preferred_terminal_backend(existing, terminal_backend=terminal_backend, runtime_ref_value=runtime_ref_value)
+    active_pane_id_value = preferred_active_pane_id(existing, active_pane_id=active_pane_id, pane_id_value=pane_id_value)
+    tmux_socket_name_value = preferred_text(existing, 'tmux_socket_name', tmux_socket_name)
+    tmux_socket_path_value = preferred_text(existing, 'tmux_socket_path', tmux_socket_path)
+    daemon_generation_value = next_daemon_generation(existing, daemon_generation=daemon_generation)
+    authority_epoch_changed = runtime_authority_changed(
+        existing,
+        runtime_ref=runtime_ref_value,
+        session_ref=session_ref_value,
+        runtime_root=runtime_root_value,
+        runtime_pid=runtime_pid_value,
+        pane_id=pane_id_value,
+        active_pane_id=active_pane_id_value,
+        tmux_socket_name=tmux_socket_name_value,
+        tmux_socket_path=tmux_socket_path_value,
+        daemon_generation=daemon_generation_value,
+    )
+    binding_generation, runtime_generation = next_authority_epoch_generations(
+        existing,
+        authority_epoch_changed=authority_epoch_changed,
+    )
     return AttachRuntimeValues(
         backend_type=backend_type,
         runtime_ref=runtime_ref_value,
@@ -70,22 +94,25 @@ def resolve_attach_runtime_values(
         state=next_state,
         health=next_health,
         provider=next_provider(existing, spec, provider),
-        runtime_root=preferred_text(existing, 'runtime_root', runtime_root),
-        runtime_pid=next_runtime_pid(existing, runtime_pid=runtime_pid, pid=pid),
-        terminal_backend=preferred_terminal_backend(existing, terminal_backend=terminal_backend, runtime_ref_value=runtime_ref_value),
+        runtime_root=runtime_root_value,
+        runtime_pid=runtime_pid_value,
+        terminal_backend=terminal_backend_value,
         pane_id=pane_id_value,
-        active_pane_id=preferred_active_pane_id(existing, active_pane_id=active_pane_id, pane_id_value=pane_id_value),
+        active_pane_id=active_pane_id_value,
         pane_title_marker=preferred_text(existing, 'pane_title_marker', pane_title_marker),
         pane_state=preferred_text(existing, 'pane_state', pane_state),
-        tmux_socket_name=preferred_text(existing, 'tmux_socket_name', tmux_socket_name),
-        tmux_socket_path=preferred_text(existing, 'tmux_socket_path', tmux_socket_path),
+        tmux_socket_name=tmux_socket_name_value,
+        tmux_socket_path=tmux_socket_path_value,
         session_file=session_file_value,
         session_id=session_id_value,
         slot_key=preferred_slot_key(existing, spec_name=spec.name, slot_key=slot_key),
         window_id=preferred_text(existing, 'window_id', window_id),
         workspace_epoch=preferred_workspace_epoch(existing, workspace_epoch=workspace_epoch),
         lifecycle_state=next_lifecycle_state(existing, lifecycle_state=lifecycle_state, next_state=next_state),
-        binding_generation=(existing.binding_generation + 1) if existing is not None else 1,
+        binding_generation=binding_generation,
+        runtime_generation=runtime_generation,
+        daemon_generation=daemon_generation_value,
+        authority_epoch_changed=authority_epoch_changed,
         managed_by=preferred_text(existing, 'managed_by', managed_by, default='ccbd') or 'ccbd',
         binding_source=binding_source_for_attach(existing, explicit=binding_source),
     )
@@ -155,6 +182,75 @@ def next_lifecycle_state(existing, *, lifecycle_state: str | None, next_state) -
         or (existing.lifecycle_state if existing is not None else None)
         or next_state.value
     )
+
+
+def next_authority_epoch_generations(
+    existing,
+    *,
+    authority_epoch_changed: bool,
+) -> tuple[int, int]:
+    if existing is None:
+        return 1, 1
+    current_binding = positive_generation(getattr(existing, 'binding_generation', None))
+    current_runtime = positive_generation(getattr(existing, 'runtime_generation', None))
+    current_epoch = max(current_binding, current_runtime)
+    if authority_epoch_changed:
+        next_epoch = current_epoch + 1 if current_epoch > 0 else 1
+        return next_epoch, next_epoch
+    binding_generation = current_binding if current_binding > 0 else 1
+    runtime_generation = current_runtime if current_runtime > 0 else binding_generation
+    return binding_generation, runtime_generation
+
+
+def positive_generation(value: object) -> int:
+    try:
+        generation = int(value or 0)
+    except Exception:
+        return 0
+    return generation if generation > 0 else 0
+
+
+def next_daemon_generation(existing, *, daemon_generation: int | None) -> int | None:
+    if daemon_generation is not None:
+        return int(daemon_generation)
+    if existing is None:
+        return None
+    current = getattr(existing, 'daemon_generation', None)
+    return int(current) if current is not None else None
+
+
+def runtime_authority_changed(
+    existing,
+    *,
+    runtime_ref: str | None,
+    session_ref: str | None,
+    runtime_root: str | None,
+    runtime_pid: int | None,
+    pane_id: str | None,
+    active_pane_id: str | None,
+    tmux_socket_name: str | None,
+    tmux_socket_path: str | None,
+    daemon_generation: int | None,
+) -> bool:
+    if existing is None:
+        return True
+    identity_changed = any(
+        (
+            runtime_ref != getattr(existing, 'runtime_ref', None),
+            session_ref != getattr(existing, 'session_ref', None),
+            runtime_root != getattr(existing, 'runtime_root', None),
+            runtime_pid != getattr(existing, 'runtime_pid', None),
+            pane_id != getattr(existing, 'pane_id', None),
+            active_pane_id != getattr(existing, 'active_pane_id', None),
+            tmux_socket_name != getattr(existing, 'tmux_socket_name', None),
+            tmux_socket_path != getattr(existing, 'tmux_socket_path', None),
+        )
+    )
+    current_daemon_generation = getattr(existing, 'daemon_generation', None)
+    daemon_generation_changed = daemon_generation != (
+        int(current_daemon_generation) if current_daemon_generation is not None else None
+    )
+    return identity_changed or daemon_generation_changed
 
 
 __all__ = ['resolve_attach_runtime_values']

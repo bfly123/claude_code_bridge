@@ -21,6 +21,9 @@ class AgentRuntimePathMixin:
     def agent_runtime_path(self, agent_name: str) -> Path:
         return self.agent_dir(agent_name) / 'runtime.json'
 
+    def agent_helper_path(self, agent_name: str) -> Path:
+        return self.agent_dir(agent_name) / 'helper.json'
+
     def agent_provider_path(self, agent_name: str) -> Path:
         return self.agent_dir(agent_name) / 'provider.json'
 

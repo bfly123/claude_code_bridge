@@ -7,6 +7,8 @@ from agents.config_identity import project_config_identity_payload
 from agents.config_loader import load_project_config
 from ccbd.keeper import KeeperState, KeeperStateStore, ProjectKeeper, ShutdownIntent, ShutdownIntentStore
 from ccbd.models import CcbdLease, LeaseHealth, LeaseInspection, MountState
+from ccbd.services.lifecycle import CcbdLifecycleStore, build_lifecycle
+from ccbd.services.project_namespace_state import ProjectNamespaceState, ProjectNamespaceStateStore
 from cli.context import CliContext
 from cli.models import ParsedStartCommand
 import cli.services.daemon as daemon_service
@@ -100,6 +102,17 @@ def test_project_keeper_spawns_missing_daemon(tmp_path: Path) -> None:
             pid_alive=False,
             heartbeat_fresh=False,
             reason='lease_missing',
+        )
+    )
+    CcbdLifecycleStore(keeper.paths).save(
+        build_lifecycle(
+            project_id=ctx.project.project_id,
+            occurred_at='2026-04-02T00:00:00Z',
+            desired_state='running',
+            phase='unmounted',
+            generation=0,
+            keeper_pid=777,
+            socket_path=ctx.paths.ccbd_socket_path,
         )
     )
     state = KeeperState(
@@ -205,6 +218,67 @@ def test_project_keeper_restarts_stale_unreachable_daemon(tmp_path: Path, monkey
     assert next_state.last_failure_reason is None
 
 
+def test_project_keeper_preserves_namespace_epoch_when_confirming_mounted_daemon(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-mounted-namespace'
+    ctx = _context(project_root, 'agent1:codex\n')
+    keeper = ProjectKeeper(project_root, pid=890)
+    keeper._ownership_guard = SimpleNamespace(
+        inspect=lambda: _inspection(
+            ctx,
+            health=LeaseHealth.HEALTHY,
+            socket_connectable=True,
+            pid_alive=True,
+            heartbeat_fresh=True,
+            reason='healthy',
+        )
+    )
+    ProjectNamespaceStateStore(keeper.paths).save(
+        ProjectNamespaceState(
+            project_id=ctx.project.project_id,
+            namespace_epoch=6,
+            tmux_socket_path=str(ctx.paths.ccbd_tmux_socket_path),
+            tmux_session_name=ctx.paths.ccbd_tmux_session_name,
+            layout_version=3,
+            control_window_name='__ccb_ctl',
+            control_window_id='@0',
+            workspace_window_name='ccb',
+            workspace_window_id='@1',
+            workspace_epoch=1,
+            ui_attachable=True,
+            last_started_at='2026-04-22T00:00:00Z',
+        )
+    )
+    lifecycle_store = CcbdLifecycleStore(keeper.paths)
+    lifecycle_store.save(
+        build_lifecycle(
+            project_id=ctx.project.project_id,
+            occurred_at='2026-04-22T00:00:00Z',
+            desired_state='running',
+            phase='starting',
+            generation=1,
+            keeper_pid=890,
+            socket_path=ctx.paths.ccbd_socket_path,
+            namespace_epoch=None,
+        )
+    )
+    monkeypatch.setattr('ccbd.keeper_runtime.loop.daemon_matches_project_config', lambda app: True)
+    state = KeeperState(
+        project_id=ctx.project.project_id,
+        keeper_pid=890,
+        started_at='2026-04-22T00:00:00Z',
+        last_check_at='2026-04-22T00:00:00Z',
+        state='running',
+    )
+
+    next_state = keeper._reconcile_once(state=state, start_timeout_s=0.1)
+    lifecycle = lifecycle_store.load()
+
+    assert next_state.last_failure_reason is None
+    assert lifecycle is not None
+    assert lifecycle.phase == 'mounted'
+    assert lifecycle.namespace_epoch == 6
+
+
 def test_project_keeper_stops_when_shutdown_intent_exists(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-stop'
     ctx = _context(project_root, 'agent1:codex\n')
@@ -296,7 +370,7 @@ def test_ensure_daemon_started_waits_for_keeper_started_backend(monkeypatch, tmp
             ),
         ]
     )
-    spawn_calls: list[Path] = []
+    running_intents: list[str] = []
 
     class FakeClient:
         def __init__(self, socket_path, *, timeout_s=None) -> None:
@@ -311,13 +385,13 @@ def test_ensure_daemon_started_waits_for_keeper_started_backend(monkeypatch, tmp
 
     monkeypatch.setattr(daemon_service, 'inspect_daemon', lambda context: (None, None, next(inspections)))
     monkeypatch.setattr(daemon_service, 'CcbdClient', FakeClient)
+    monkeypatch.setattr(daemon_service, '_record_running_intent', lambda context: running_intents.append(context.project.project_id))
     monkeypatch.setattr(daemon_service, '_ensure_keeper_started', lambda context: True)
-    monkeypatch.setattr(daemon_service, '_spawn_ccbd_process', lambda context: spawn_calls.append(context.project.project_root))
 
     handle = daemon_service.ensure_daemon_started(ctx)
 
     assert handle.started is True
-    assert spawn_calls == []
+    assert running_intents == [ctx.project.project_id]
 
 
 def test_shutdown_daemon_records_intent_and_terminates_keeper(tmp_path: Path, monkeypatch) -> None:
@@ -359,8 +433,12 @@ def test_shutdown_daemon_records_intent_and_terminates_keeper(tmp_path: Path, mo
 
     summary = daemon_service.shutdown_daemon(ctx, force=False)
     intent = ShutdownIntentStore(layout).load()
+    lifecycle = CcbdLifecycleStore(layout).load()
 
     assert summary.state == 'unmounted'
     assert terminated == [654]
     assert intent is not None
     assert intent.reason == 'kill'
+    assert lifecycle is not None
+    assert lifecycle.desired_state == 'stopped'
+    assert lifecycle.phase == 'unmounted'

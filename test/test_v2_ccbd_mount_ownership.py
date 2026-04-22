@@ -12,6 +12,7 @@ from ccbd.services.health import HealthMonitor
 from ccbd.services.mount import MountManager
 from ccbd.services.ownership import OwnershipConflictError, OwnershipGuard
 from ccbd.services.project_namespace_state import ProjectNamespaceState, ProjectNamespaceStateStore
+from ccbd.services.runtime import RuntimeService
 from agents.models import (
     AgentRuntime,
     AgentSpec,
@@ -416,15 +417,26 @@ def test_health_monitor_marks_orphaned_runtime(tmp_path: Path) -> None:
     config = _provider_config('codex')
     registry = AgentRegistry(layout, config)
     registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=99999))
+    original = registry.get('codex')
     manager = MountManager(layout, clock=lambda: '2026-03-18T00:00:00Z', uid_getter=lambda: 1000, boot_id_getter=lambda: 'boot-1')
     guard = OwnershipGuard(layout, manager, clock=lambda: '2026-03-18T00:00:00Z', pid_exists=lambda pid: False, socket_probe=lambda path: False)
-    monitor = HealthMonitor(registry, guard, clock=lambda: '2026-03-18T00:00:10Z', pid_exists=lambda pid: False)
+    runtime_service = RuntimeService(layout, registry, ctx.project_id, clock=lambda: '2026-03-18T00:00:10Z')
+    monitor = HealthMonitor(
+        registry,
+        guard,
+        runtime_service=runtime_service,
+        clock=lambda: '2026-03-18T00:00:10Z',
+        pid_exists=lambda pid: False,
+    )
 
     assert monitor.collect_orphans() == ('codex',)
     runtime = registry.get('codex')
     assert runtime is not None
     assert runtime.state is AgentState.DEGRADED
     assert runtime.health == 'orphaned'
+    assert original is not None
+    assert runtime.binding_generation == original.binding_generation
+    assert runtime.runtime_generation == original.runtime_generation
 
 
 def test_health_monitor_marks_dead_tmux_pane_degraded_without_rebinding(tmp_path: Path) -> None:
@@ -1082,7 +1094,7 @@ def test_ccbd_heartbeat_starts_missing_agent_and_drains_queue(tmp_path: Path, mo
         interactive_tmux_layout: bool = True,
     ):
         seen.append((agent_names, restore, auto_permission, cleanup_tmux_orphans, interactive_tmux_layout))
-        app.registry.upsert(
+        app.registry.upsert_authority(
             replace(
                 _runtime('codex', project_id=ctx.project_id, layout=app.paths, pid=1234),
                 pid=None,
@@ -1149,7 +1161,7 @@ def test_ccbd_heartbeat_uses_persisted_start_policy_for_recovery_mount(tmp_path:
         interactive_tmux_layout: bool = True,
     ):
         seen.append((agent_names, restore, auto_permission, cleanup_tmux_orphans, interactive_tmux_layout))
-        app.registry.upsert(
+        app.registry.upsert_authority(
             replace(
                 _runtime('codex', project_id=ctx.project_id, layout=app.paths, pid=1234),
                 pid=None,
@@ -1272,7 +1284,7 @@ def test_ccbd_foreign_pane_reflow_uses_persisted_start_policy(tmp_path: Path, mo
         )
         refreshed = app.registry.get('codex')
         assert refreshed is not None
-        app.registry.upsert(
+        app.registry.upsert_authority(
             replace(
                 refreshed,
                 state=AgentState.IDLE,

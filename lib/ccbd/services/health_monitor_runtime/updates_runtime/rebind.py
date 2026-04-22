@@ -31,6 +31,22 @@ def rebind_runtime(
         force_session_ref_update=force_session_ref_update,
     )
     updated_fields = _updated_runtime_fields(runtime=runtime, facts=facts)
+    if monitor._runtime_service is not None:
+        rebound = monitor._runtime_service.mutate_runtime_authority(
+            runtime,
+            pid=_next_pid(runtime=runtime, facts=facts),
+            session_ref=next_session_ref,
+            health=_next_health(runtime),
+            pane_id=pane_id or runtime.pane_id,
+            active_pane_id=pane_id or runtime.active_pane_id,
+            pane_state='alive',
+            **updated_fields,
+        )
+        return monitor._runtime_service.patch_runtime_state(
+            rebound,
+            state=_next_state(runtime),
+            last_seen_at=monitor._clock(),
+        )
     updated = replace(
         runtime,
         state=_next_state(runtime),
@@ -43,6 +59,9 @@ def rebind_runtime(
         last_seen_at=monitor._clock(),
         **updated_fields,
     )
+    upsert_authority = getattr(monitor._registry, 'upsert_authority', None)
+    if callable(upsert_authority):
+        return upsert_authority(updated)
     return monitor._registry.upsert(updated)
 
 

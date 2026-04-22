@@ -89,6 +89,8 @@ When `ccb` starts a managed Codex agent:
 - it must ensure `CODEX_SESSION_ROOT == CODEX_HOME/sessions`
 - it must create the managed home and session root before launching Codex
 - it must materialize required Codex config and credential projections into the managed home without treating them as session identity
+- it must refresh inheritable Codex config, auth, skills, and commands projections into the managed home on each managed launch so source-home updates become visible after restart
+- when API inheritance is enabled, it must pass the current inheritable Codex API environment into the managed Codex process at launch time rather than relying on stale one-time projection state
 - it must write the effective `codex_home` and `codex_session_root` into the agent session file
 - it must not rely on global `~/.codex/sessions` as the default managed session namespace
 

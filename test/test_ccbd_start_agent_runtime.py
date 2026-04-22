@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 from ccbd.start_runtime.agent_runtime import start_agent_runtime
 from cli.services.provider_binding import AgentBinding
 from cli.services.runtime_launch import RuntimeLaunchResult
+from project.ids import compute_project_id
+from project.resolver import ProjectContext
+from storage.paths import PathLayout
 
 
 class _RuntimeService:
@@ -16,12 +20,14 @@ class _RuntimeService:
         self.attach_calls.append(kwargs)
         binding_source = SimpleNamespace(value=kwargs['binding_source'])
         return SimpleNamespace(
+            agent_name=kwargs['agent_name'],
             runtime_ref=kwargs['runtime_ref'],
             session_ref=kwargs['session_ref'],
             lifecycle_state=kwargs['lifecycle_state'],
             desired_state=None,
             reconcile_state=None,
             binding_source=binding_source,
+            provider='codex',
             terminal_backend=kwargs['terminal_backend'],
             tmux_socket_name=kwargs['tmux_socket_name'],
             tmux_socket_path=kwargs['tmux_socket_path'],
@@ -30,6 +36,10 @@ class _RuntimeService:
             pane_state=kwargs['pane_state'],
             runtime_pid=kwargs['runtime_pid'],
             runtime_root=kwargs['runtime_root'],
+            runtime_generation=kwargs.get('binding_generation', 1),
+            daemon_generation=7,
+            started_at='2026-04-21T00:00:00Z',
+            last_seen_at='2026-04-21T00:00:01Z',
         )
 
     def restore(self, agent_name: str):
@@ -157,3 +167,53 @@ def test_start_agent_runtime_relaunches_and_tracks_project_socket_pane() -> None
     assert execution.runtime_pane_id == '%7'
     assert execution.project_socket_active_pane_id == '%7'
     assert runtime_service.attach_calls[-1]['runtime_ref'] == 'tmux:%7'
+
+
+def test_start_agent_runtime_uses_runtime_service_for_helper_ownership(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    config_dir = project_root / '.ccb'
+    config_dir.mkdir(parents=True)
+    context = SimpleNamespace(
+        paths=PathLayout(project_root),
+        project=ProjectContext(
+            cwd=project_root,
+            project_root=project_root,
+            config_dir=config_dir,
+            project_id=compute_project_id(project_root),
+            source='test',
+        ),
+    )
+    runtime_service = _RuntimeService()
+    launched_binding = _binding(
+        runtime_ref='tmux:%7',
+        session_ref='session-7',
+        pane_id='%7',
+        active_pane_id='%7',
+        runtime_root=str(tmp_path / 'runtime'),
+    )
+    runtime_dir = Path(launched_binding.runtime_root)
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / 'bridge.pid').write_text('5511\n', encoding='utf-8')
+
+    start_agent_runtime(
+        context=context,
+        command=SimpleNamespace(restore=False),
+        runtime_service=runtime_service,
+        agent_name='agent1',
+        spec=SimpleNamespace(provider='codex', runtime_mode=SimpleNamespace(value='pane-backed')),
+        plan=SimpleNamespace(workspace_path='/tmp/ws'),
+        binding=None,
+        raw_binding=None,
+        stale_binding=False,
+        assigned_pane_id='%7',
+        style_index=0,
+        project_id=context.project.project_id,
+        tmux_socket_path='/tmp/ccb.sock',
+        namespace_epoch=1,
+        ensure_agent_runtime_fn=lambda *args, **kwargs: RuntimeLaunchResult(launched=True, binding=launched_binding),
+        launch_binding_hint_fn=lambda **kwargs: None,
+        relabel_project_namespace_pane_fn=lambda **kwargs: '%7',
+        same_tmux_socket_path_fn=lambda left, right: left == right,
+    )
+
+    assert runtime_service.attach_calls

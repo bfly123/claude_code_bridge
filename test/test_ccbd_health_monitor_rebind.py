@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 from agents.models import AgentRuntime, AgentState
@@ -55,7 +56,11 @@ def test_rebind_runtime_uses_provider_facts_and_clears_degraded_state() -> None:
     monitor = SimpleNamespace(
         _provider_runtime_facts=lambda runtime, session, binding, pane_id_override=None: facts,
         _clock=lambda: '2026-04-06T00:00:00Z',
-        _registry=SimpleNamespace(upsert=lambda updated: captured.setdefault('runtime', updated)),
+        _registry=SimpleNamespace(upsert=lambda updated: (_ for _ in ()).throw(AssertionError('fallback registry path should not be used'))),
+        _runtime_service=SimpleNamespace(
+            mutate_runtime_authority=lambda runtime, **updates: captured.setdefault('authority', replace(runtime, **updates)),
+            patch_runtime_state=lambda runtime, **updates: captured.setdefault('runtime', replace(runtime, **updates)),
+        ),
     )
     binding = SimpleNamespace(session_id_attr='session_id', session_path_attr='session_path')
 
@@ -69,6 +74,9 @@ def test_rebind_runtime_uses_provider_facts_and_clears_degraded_state() -> None:
     )
 
     assert updated is captured['runtime']
+    assert captured['authority'].state is AgentState.DEGRADED
+    assert captured['authority'].runtime_ref == 'tmux:%9'
+    assert captured['authority'].session_ref == 'fact-session'
     assert updated.state is AgentState.IDLE
     assert updated.health == 'healthy'
     assert updated.pid == 33
@@ -87,6 +95,7 @@ def test_rebind_runtime_falls_back_to_session_binding_when_facts_missing(monkeyp
         _provider_runtime_facts=lambda runtime, session, binding, pane_id_override=None: None,
         _clock=lambda: '2026-04-06T00:00:00Z',
         _registry=SimpleNamespace(upsert=lambda updated: updated),
+        _runtime_service=None,
     )
     binding = SimpleNamespace(session_id_attr='session_id', session_path_attr='session_path')
     monkeypatch.setattr(

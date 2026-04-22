@@ -3,6 +3,7 @@ from __future__ import annotations
 from .dispatcher import JobDispatcher
 from .health import HealthMonitor
 from .job_heartbeat import JobHeartbeatService
+from .lifecycle import CcbdLifecycle, CcbdLifecycleStore
 from .mount import MountManager
 from .ownership import OwnershipConflictError, OwnershipGuard
 from .registry import AgentRegistry
@@ -14,6 +15,8 @@ __all__ = [
     'HealthMonitor',
     'JobDispatcher',
     'JobHeartbeatService',
+    'CcbdLifecycle',
+    'CcbdLifecycleStore',
     'MountManager',
     'OwnershipConflictError',
     'OwnershipGuard',

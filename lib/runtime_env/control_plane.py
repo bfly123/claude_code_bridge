@@ -4,6 +4,9 @@ import os
 
 
 _CONTROL_PLANE_ALLOWLIST = {
+    'ANTHROPIC_API_KEY',
+    'ANTHROPIC_AUTH_TOKEN',
+    'ANTHROPIC_BASE_URL',
     'CCB_BACKEND_ENV',
     'CCB_CCBD_MIN_POLL_INTERVAL_S',
     'CCB_DEBUG',
@@ -15,11 +18,20 @@ _CONTROL_PLANE_ALLOWLIST = {
     'CCB_TMUX_SOCKET',
     'CCB_TMUX_SOCKET_PATH',
     'CCB_VERSION',
+    'GEMINI_API_KEY',
+    'GOOGLE_API_BASE',
+    'GOOGLE_API_KEY',
+    'GOOGLE_GENAI_USE_VERTEXAI',
     'HOME',
     'LANG',
     'LC_ALL',
     'LC_MESSAGES',
     'LOCALAPPDATA',
+    'OPENAI_API_BASE',
+    'OPENAI_API_KEY',
+    'OPENAI_BASE_URL',
+    'OPENAI_ORG_ID',
+    'OPENAI_ORGANIZATION',
     'PATH',
     'PYTHONPATH',
     'PYTHONUNBUFFERED',
@@ -57,9 +69,12 @@ def control_plane_env(*, extra: dict[str, str] | None = None) -> dict[str, str]:
     for key, value in os.environ.items():
         if key in _CONTROL_PLANE_BLOCKED_EXACT:
             continue
+        if key in _CONTROL_PLANE_ALLOWLIST:
+            env[key] = value
+            continue
         if any(key.startswith(prefix) for prefix in _CONTROL_PLANE_BLOCKED_PREFIXES):
             continue
-        if key in _CONTROL_PLANE_ALLOWLIST or key.startswith(('PYTHON', 'VIRTUAL_ENV', 'CONDA')):
+        if key.startswith(('PYTHON', 'VIRTUAL_ENV', 'CONDA')):
             env[key] = value
     if extra:
         for key, value in extra.items():

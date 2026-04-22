@@ -78,6 +78,10 @@ class CcbdMailboxPathMixin:
 
 class CcbdMountPathMixin:
     @property
+    def ccbd_lifecycle_path(self):
+        return self.ccbd_dir / 'lifecycle.json'
+
+    @property
     def ccbd_lease_path(self):
         return self.ccbd_dir / 'lease.json'
 

@@ -12,6 +12,7 @@ _PROVIDER_STATE_SECRET_FILENAMES = {'auth.json'}
 def project_root_sources(context) -> tuple[tuple[str, Path], ...]:
     items: list[tuple[str, Path]] = [
         ('project-config', context.paths.config_path),
+        ('ccbd-authority', context.paths.ccbd_lifecycle_path),
         ('ccbd-authority', context.paths.ccbd_lease_path),
         ('ccbd-authority', context.paths.ccbd_keeper_path),
         ('ccbd-authority', context.paths.ccbd_shutdown_intent_path),

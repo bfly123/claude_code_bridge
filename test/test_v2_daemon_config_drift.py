@@ -8,6 +8,8 @@ from agents.config_identity import project_config_identity_payload
 from agents.config_loader import load_project_config
 from ccbd.keeper import KeeperState, KeeperStateStore
 from ccbd.models import CcbdLease, LeaseHealth, LeaseInspection, MountState
+from ccbd.services.lifecycle import CcbdLifecycleStore, build_lifecycle
+from ccbd.services.mount import MountManager
 from ccbd.socket_client import CcbdClientError
 from cli.context import CliContext
 from cli.models import ParsedStartCommand
@@ -126,7 +128,8 @@ def test_ensure_daemon_started_restarts_healthy_daemon_on_config_drift(monkeypat
     )
 
     shutdown_calls: list[str] = []
-    spawn_calls: list[Path] = []
+    keeper_calls: list[Path] = []
+    running_intents: list[str] = []
     client_payloads = iter(
         [
             {
@@ -156,14 +159,15 @@ def test_ensure_daemon_started_restarts_healthy_daemon_on_config_drift(monkeypat
 
     monkeypatch.setattr(daemon_service, 'inspect_daemon', lambda context: (None, None, next(inspections)))
     monkeypatch.setattr(daemon_service, 'CcbdClient', FakeClient)
-    monkeypatch.setattr(daemon_service, '_ensure_keeper_started', lambda context: False)
-    monkeypatch.setattr(daemon_service, '_spawn_ccbd_process', lambda context: spawn_calls.append(context.project.project_root))
+    monkeypatch.setattr(daemon_service, '_record_running_intent', lambda context: running_intents.append(context.project.project_id))
+    monkeypatch.setattr(daemon_service, '_ensure_keeper_started', lambda context: keeper_calls.append(context.project.project_root) or False)
 
     handle = daemon_service.ensure_daemon_started(ctx)
 
     assert handle.started is True
     assert shutdown_calls == ['old-signature']
-    assert spawn_calls == [ctx.project.project_root]
+    assert running_intents == [ctx.project.project_id]
+    assert keeper_calls
 
 
 def test_connect_compatible_daemon_does_not_shutdown_on_transient_ping_timeout(
@@ -237,7 +241,8 @@ def test_ensure_daemon_started_waits_for_degraded_unreachable_daemon_with_fresh_
     )
 
     restart_calls: list[str] = []
-    spawn_calls: list[Path] = []
+    keeper_calls: list[Path] = []
+    running_intents: list[str] = []
 
     class FakeClient:
         def __init__(self, socket_path, *, timeout_s=None) -> None:
@@ -252,19 +257,20 @@ def test_ensure_daemon_started_waits_for_degraded_unreachable_daemon_with_fresh_
 
     monkeypatch.setattr(daemon_service, 'inspect_daemon', lambda context: (None, None, next(inspections)))
     monkeypatch.setattr(daemon_service, 'CcbdClient', FakeClient)
-    monkeypatch.setattr(daemon_service, '_ensure_keeper_started', lambda context: False)
+    monkeypatch.setattr(daemon_service, '_record_running_intent', lambda context: running_intents.append(context.project.project_id))
+    monkeypatch.setattr(daemon_service, '_ensure_keeper_started', lambda context: keeper_calls.append(context.project.project_root) or False)
     monkeypatch.setattr(
         daemon_service,
         '_restart_unreachable_daemon',
         lambda context, inspection: restart_calls.append(inspection.reason),
     )
-    monkeypatch.setattr(daemon_service, '_spawn_ccbd_process', lambda context: spawn_calls.append(context.project.project_root))
 
     handle = daemon_service.ensure_daemon_started(ctx)
 
     assert handle.started is False
     assert restart_calls == []
-    assert spawn_calls == []
+    assert running_intents == [ctx.project.project_id]
+    assert keeper_calls == [ctx.project.project_root]
 
 
 def test_ensure_daemon_started_restarts_stale_unreachable_daemon_with_live_pid(
@@ -305,7 +311,8 @@ def test_ensure_daemon_started_restarts_stale_unreachable_daemon_with_live_pid(
     )
 
     restart_calls: list[str] = []
-    spawn_calls: list[Path] = []
+    keeper_calls: list[Path] = []
+    running_intents: list[str] = []
 
     class FakeClient:
         def __init__(self, socket_path, *, timeout_s=None) -> None:
@@ -320,19 +327,20 @@ def test_ensure_daemon_started_restarts_stale_unreachable_daemon_with_live_pid(
 
     monkeypatch.setattr(daemon_service, 'inspect_daemon', lambda context: (None, None, next(inspections)))
     monkeypatch.setattr(daemon_service, 'CcbdClient', FakeClient)
-    monkeypatch.setattr(daemon_service, '_ensure_keeper_started', lambda context: False)
+    monkeypatch.setattr(daemon_service, '_record_running_intent', lambda context: running_intents.append(context.project.project_id))
+    monkeypatch.setattr(daemon_service, '_ensure_keeper_started', lambda context: keeper_calls.append(context.project.project_root) or False)
     monkeypatch.setattr(
         daemon_service,
         '_restart_unreachable_daemon',
         lambda context, inspection: restart_calls.append(inspection.reason),
     )
-    monkeypatch.setattr(daemon_service, '_spawn_ccbd_process', lambda context: spawn_calls.append(context.project.project_root))
 
     handle = daemon_service.ensure_daemon_started(ctx)
 
     assert handle.started is True
     assert restart_calls == ['heartbeat_stale,socket_unreachable']
-    assert spawn_calls == [ctx.project.project_root]
+    assert running_intents == [ctx.project.project_id]
+    assert keeper_calls
 
 
 def test_restart_unreachable_daemon_does_not_unmount_replaced_lease_holder(
@@ -452,6 +460,96 @@ def test_connect_mounted_daemon_restarts_unmounted_daemon_when_recovery_allowed(
     assert handle is expected_handle
 
 
+def test_connect_mounted_daemon_waits_when_lifecycle_is_starting(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-starting-recover'
+    ctx = _context(project_root, 'agent1:codex\n')
+    inspection = SimpleNamespace(
+        phase='starting',
+        desired_state='running',
+        health=LeaseHealth.MISSING,
+        socket_connectable=False,
+        pid_alive=False,
+        heartbeat_fresh=False,
+        takeover_allowed=True,
+        reason='lease_missing',
+        lease=None,
+        last_failure_reason=None,
+    )
+    expected_handle = daemon_service.DaemonHandle(client=None, inspection=inspection, started=True)
+
+    monkeypatch.setattr(daemon_service, 'inspect_daemon', lambda context: (None, None, inspection))
+    monkeypatch.setattr(daemon_service, 'ensure_daemon_started', lambda context: expected_handle)
+
+    handle = daemon_service.connect_mounted_daemon(ctx, allow_restart_stale=True)
+
+    assert handle is expected_handle
+
+
+def test_connect_mounted_daemon_does_not_restart_when_lifecycle_desired_stopped(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-stopped-no-recover'
+    ctx = _context(project_root, 'agent1:codex\n')
+    inspection = SimpleNamespace(
+        phase='unmounted',
+        desired_state='stopped',
+        health=LeaseHealth.UNMOUNTED,
+        socket_connectable=False,
+        pid_alive=False,
+        heartbeat_fresh=False,
+        takeover_allowed=True,
+        reason='lease_unmounted',
+        lease=None,
+        last_failure_reason=None,
+    )
+
+    monkeypatch.setattr(daemon_service, 'inspect_daemon', lambda context: (None, None, inspection))
+    monkeypatch.setattr(
+        daemon_service,
+        'ensure_daemon_started',
+        lambda context: (_ for _ in ()).throw(AssertionError('should not autostart while desired_state=stopped')),
+    )
+
+    with pytest.raises(daemon_service.CcbdServiceError, match='project ccbd is unmounted; run `ccb` first'):
+        daemon_service.connect_mounted_daemon(ctx, allow_restart_stale=True)
+
+
+def test_inspect_daemon_prefers_lifecycle_phase_over_lease_mount_state(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-lifecycle-inspection'
+    ctx = _context(project_root, 'agent1:codex\n')
+    lifecycle_store = CcbdLifecycleStore(ctx.paths)
+    lifecycle_store.save(
+        build_lifecycle(
+            project_id=ctx.project.project_id,
+            occurred_at='2026-04-21T00:00:00Z',
+            desired_state='running',
+            phase='starting',
+            generation=7,
+            keeper_pid=4321,
+            socket_path=ctx.paths.ccbd_socket_path,
+        )
+    )
+    manager = MountManager(ctx.paths)
+    manager.mark_mounted(
+        project_id=ctx.project.project_id,
+        pid=1234,
+        socket_path=ctx.paths.ccbd_socket_path,
+        generation=3,
+    )
+    manager.mark_unmounted()
+
+    _manager, _guard, inspection = daemon_service.inspect_daemon(ctx)
+
+    assert inspection.phase == 'starting'
+    assert inspection.desired_state == 'running'
+    assert inspection.generation == 7
+    assert inspection.health is LeaseHealth.UNMOUNTED
+
+
 def test_ensure_daemon_started_surfaces_keeper_failure_reason_when_startup_stalls(
     monkeypatch,
     tmp_path: Path,
@@ -481,8 +579,8 @@ def test_ensure_daemon_started_surfaces_keeper_failure_reason_when_startup_stall
     )
 
     monkeypatch.setattr(daemon_service, 'inspect_daemon', lambda context: (None, None, inspection))
+    monkeypatch.setattr(daemon_service, '_record_running_intent', lambda context: None)
     monkeypatch.setattr(daemon_service, '_ensure_keeper_started', lambda context: False)
-    monkeypatch.setattr(daemon_service, '_spawn_ccbd_process', lambda context: None)
     monkeypatch.setattr(daemon_service, '_DEF_START_TIMEOUT_S', 0.0)
 
     with pytest.raises(

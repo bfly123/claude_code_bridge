@@ -1452,6 +1452,48 @@ def test_codex_launcher_build_start_cmd_uses_materialized_profile_home(monkeypat
     assert (profile_home / 'sessions').is_dir()
 
 
+def test_codex_launcher_build_start_cmd_exports_inherited_api_env(monkeypatch, tmp_path: Path) -> None:
+    runtime_dir = tmp_path / 'runtime'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv('OPENAI_API_KEY', 'env-key')
+    monkeypatch.setenv('OPENAI_BASE_URL', 'https://api.example.test/v1')
+
+    spec = _spec('agent1')
+    command = ParsedStartCommand(project=None, agent_names=('agent1',), restore=False, auto_permission=False)
+
+    cmd = codex_launcher.build_start_cmd(command, spec, runtime_dir, 'sess-inherit-api')
+
+    assert f'OPENAI_API_KEY={shlex.quote("env-key")}' in cmd
+    assert f'OPENAI_BASE_URL={shlex.quote("https://api.example.test/v1")}' in cmd
+
+
+def test_codex_launcher_build_start_cmd_refreshes_managed_home_projection(monkeypatch, tmp_path: Path) -> None:
+    runtime_dir = tmp_path / 'runtime'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    source_home = tmp_path / 'source-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    (source_home / 'config.toml').write_text('model = "gpt-5"\n', encoding='utf-8')
+    (source_home / 'auth.json').write_text('{"OPENAI_API_KEY":"old-key"}\n', encoding='utf-8')
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+
+    spec = _spec('agent1')
+    command = ParsedStartCommand(project=None, agent_names=('agent1',), restore=False, auto_permission=False)
+
+    codex_launcher.build_start_cmd(command, spec, runtime_dir, 'sess-refresh-1')
+
+    isolated_home = runtime_dir / 'codex-state' / 'home'
+    assert (isolated_home / 'config.toml').read_text(encoding='utf-8') == 'model = "gpt-5"\n'
+    assert (isolated_home / 'auth.json').read_text(encoding='utf-8') == '{"OPENAI_API_KEY":"old-key"}\n'
+
+    (source_home / 'config.toml').write_text('model = "gpt-5.1"\n', encoding='utf-8')
+    (source_home / 'auth.json').write_text('{"OPENAI_API_KEY":"new-key"}\n', encoding='utf-8')
+
+    codex_launcher.build_start_cmd(command, spec, runtime_dir, 'sess-refresh-2')
+
+    assert (isolated_home / 'config.toml').read_text(encoding='utf-8') == 'model = "gpt-5.1"\n'
+    assert (isolated_home / 'auth.json').read_text(encoding='utf-8') == '{"OPENAI_API_KEY":"new-key"}\n'
+
+
 def test_codex_launcher_build_start_cmd_reuses_legacy_codex_home_from_persisted_start_cmd(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-codex-legacy-home'
     runtime_dir = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-runtime' / 'codex'

@@ -1255,6 +1255,7 @@ def test_dispatcher_delivers_failed_reply_to_sender_when_claude_hits_pre_anchor_
     class FakeSession:
         data = {}
         claude_session_path = str(tmp_path / 'claude-session.jsonl')
+        claude_projects_root = None
         work_dir = str(layout.workspace_path('claude'))
 
         def ensure_pane(self):
@@ -1807,7 +1808,7 @@ def test_dispatcher_tick_keeps_degraded_agent_queued_until_recovered(tmp_path: P
         runtime_ref='tmux:%1',
         session_ref='/tmp/codex-session.json',
     )
-    registry.upsert(recovered_runtime)
+    registry.upsert_authority(recovered_runtime)
     dispatcher.reconcile_runtime_views()
 
     started = dispatcher.tick()

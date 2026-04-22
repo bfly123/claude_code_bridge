@@ -28,6 +28,21 @@ def mark_degraded(monitor, runtime, *, health: str, session=None, binding=None):
                     updated_fields['session_ref'] = bound_session_ref
     next_pane_id = str(updated_fields.get('pane_id') or runtime.pane_id or '').strip() or None
     next_pane_state, next_active_pane_id = pane_state_for_health(runtime, health, pane_id=next_pane_id)
+    if monitor._runtime_service is not None:
+        current = runtime
+        if updated_fields:
+            current = monitor._runtime_service.mutate_runtime_authority(
+                runtime,
+                **updated_fields,
+            )
+        return monitor._runtime_service.patch_runtime_state(
+            current,
+            state=AgentState.DEGRADED,
+            health=health,
+            pane_state=next_pane_state,
+            active_pane_id=next_active_pane_id,
+            last_seen_at=monitor._clock(),
+        )
     updated = replace(
         runtime,
         state=AgentState.DEGRADED,
@@ -37,7 +52,7 @@ def mark_degraded(monitor, runtime, *, health: str, session=None, binding=None):
         last_seen_at=monitor._clock(),
         **updated_fields,
     )
-    return monitor._registry.upsert(updated)
+    return monitor._registry.upsert_authority(updated)
 
 
 __all__ = ['mark_degraded']

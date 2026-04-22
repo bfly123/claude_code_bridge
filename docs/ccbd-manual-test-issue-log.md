@@ -639,6 +639,146 @@
 - 复测结论：
   - 待补
 
+### ISSUE-014
+
+- 状态：`open-observed`
+- 标题：`restart 与并发 start 后，runtime/helper 代际与启动时间 authority 出现漂移`
+- 根因分类：`identity-authority`
+- 测试场景：
+  - 在 `/home/bfly/yunwei/test_ccb` 执行 `start -> kill -> start`
+  - 在 `/home/bfly/yunwei/ccb_test2` 对同一空 anchor 并发执行两次 `ccb`
+- 最小复现：
+  - `/home/bfly/yunwei/test_ccb`：
+    - 执行 `/home/bfly/yunwei/ccb_source/ccb`
+    - 执行 `/home/bfly/yunwei/ccb_source/ccb kill`
+    - 再执行 `/home/bfly/yunwei/ccb_source/ccb`
+    - 读取 `.ccb/ccbd/lifecycle.json`
+    - 读取 `.ccb/agents/agent1/runtime.json`
+    - 读取 `.ccb/agents/agent1/helper.json`
+  - `/home/bfly/yunwei/ccb_test2`：
+    - 对同一目录并发执行两次 `/home/bfly/yunwei/ccb_source/ccb`
+    - 读取 `.ccb/ccbd/lifecycle.json`
+    - 读取 `.ccb/agents/agent1/runtime.json`
+- 预期结果：
+  - restart 后新的 runtime/helper authority 应完整切换到当前 generation
+  - `started_at`、`owner_daemon_generation`、`binding_generation` 应与当前 lifecycle / daemon generation 自洽
+  - 同一项目并发 start 最终只能收敛为一套 generation，且不应留下“代际部分更新”的 authority
+- 实际结果：
+  - `/home/bfly/yunwei/test_ccb/.ccb/ccbd/lifecycle.json` 显示 `generation: 2`
+  - 但 `/home/bfly/yunwei/test_ccb/.ccb/agents/agent1/runtime.json` 中新 `runtime_pid=4125663` 的同时，`started_at` 仍是上一代首次启动时间 `2026-04-22T00:37:35.631517Z`
+  - `/home/bfly/yunwei/test_ccb/.ccb/agents/agent1/helper.json` 中新 `leader_pid=4125736`、`runtime_generation=2`，但 `started_at` 仍为上一代时间，且 `owner_daemon_generation` 仍为 `null`
+  - `/home/bfly/yunwei/ccb_test2/.ccb/ccbd/lifecycle.json` 仍为 `generation: 1`
+  - 但 `/home/bfly/yunwei/ccb_test2/.ccb/agents/agent1/runtime.json` 已出现 `binding_generation: 2`，同时 `daemon_generation: 1`、`runtime_generation: 1`
+- 2026-04-22 继续复测：
+  - `/home/bfly/yunwei/ccb_test2` 执行 `ccb kill -> ccb -> ccb ask agent1 "只回复：RESTART_OK"` 后，`doctor` 显示 `ccbd_generation: 3`
+  - 但 `.ccb/agents/agent1/runtime.json` 变为 `binding_generation: 4`、`daemon_generation: 3`、`runtime_generation: 3`
+  - `.ccb/agents/agent1/helper.json` 为 `runtime_generation: 3`、`owner_daemon_generation: 3`
+  - 同目录下 `agent2`、`agent3` 也同样出现 `binding_generation: 4`、`daemon_generation: 3`
+  - `/home/bfly/yunwei/test_ccb` 在正常 mounted 状态下未出现该偏差，`binding_generation/daemon_generation/runtime_generation` 仍保持 `5/5/5`
+- 影响范围：
+  - restart 后的 authority 可解释性
+  - diagnostics / doctor 对“当前这条 runtime/helper 属于哪一代 daemon”的判读
+  - 同项目并发 start 的代际一致性验证
+- 继续观察：
+  - 问题并非“所有项目必现”，更像是某些 restore/rebind 路径上仍存在单独推进 binding generation 的写回
+- 初步判断：
+  - 主生命周期本身能收敛，但 authority 写回存在“部分字段按新代更新、部分字段沿用旧代”的问题
+  - 更像是 restart/rebind 路径的 authority 回写不完整，而不是实际重复拉起了第二套 backend
+- 根因：
+  - 待补
+- 系统性修复方案：
+  - 明确 runtime/helper authority 的字段归属：哪些字段属于“binding 重建”、哪些属于“daemon generation 切换”
+  - 将 restart/rebind 回写收敛为单一 helper/runtime 更新入口，避免部分字段复用旧记录
+  - 为 `started_at`、`owner_daemon_generation`、`binding_generation` 增加一致性断言与回归测试
+- 回归测试：
+  - 待补：`start -> kill -> start` 后 runtime/helper authority 全字段切换到新 generation
+  - 待补：同项目双 `ccb` 并发时，最终 authority 不出现 `binding_generation > daemon_generation`
+- 复测结论：
+  - 待补
+
+### ISSUE-015
+
+- 状态：`fixed-retested`
+- 标题：`kill 与新的 ask 并发时，ask 侧直接暴露 connection reset by peer`
+- 根因分类：`daemon-lifecycle`
+- 测试场景：`在 mounted 项目中并发执行 ccb kill 与 ccb ask agent1`
+- 最小复现：
+  - 在 `/home/bfly/yunwei/test_ccb` 保持项目 mounted
+  - 并发执行：
+    - `/home/bfly/yunwei/ccb_source/ccb kill`
+    - `/home/bfly/yunwei/ccb_source/ccb ask agent1 "只回复：RACE_OK"`
+  - 随后执行 `/home/bfly/yunwei/ccb_source/ccb doctor`
+- 预期结果：
+  - 新的 `ask` 应等待停机结果，或返回明确的 `shutting_down/project_unmounted` 类错误
+  - 不应触发第二条启动链，也不应把底层 socket 断开原样泄漏给 CLI
+- 实际结果：
+  - `kill` 正常返回 `kill_status: ok`
+  - 并发 `ask` 直接失败：`error: [Errno 104] Connection reset by peer`
+  - 事后 `/home/bfly/yunwei/test_ccb/.ccb/ccbd/lifecycle.json` 维持 `generation: 2`、`phase: unmounted`
+  - `doctor` 也显示没有生成新的 backend generation，说明没有发生双启动，但用户面暴露了未归一化的 socket 错误
+- 影响范围：
+  - `kill` 与 `ask` 并发的用户体验与可诊断性
+  - keeper/shutdown fence 对前台 CLI 的错误语义稳定性
+- 初步判断：
+  - 停机收口本身是对的，但 CLI 与 daemon 之间缺少“正在停机”的显式协议化响应
+- 根因：
+  - 待补
+- 系统性修复方案：
+  - 在 shutdown intent 建立后，对新 `ask` 返回稳定的生命周期错误码，而不是底层 `ECONNRESET`
+  - keeper / socket client 增加“stop in progress”判定与错误翻译
+  - 为 `kill` 与 `ask` 并发增加黑盒竞态回归
+- 回归测试：
+  - 待补：`ccb kill` 与新的 `ccb ask` 并发时，`ask` 返回确定性错误且不产生新 generation
+- 复测结论：
+  - 2026-04-22 黑盒复测：在 `/home/bfly/yunwei/test_ccb` 并发执行 `ccb kill` 与 `ccb ask agent1 "只回复：RACE_OK"` 时，`ask` 不再暴露 `Connection reset by peer`
+  - 当前稳定返回：`error: project ccbd is unmounted; run \`ccb\` first`
+  - 事后项目保持 `unmounted`，且未观察到错误新 generation 产生
+
+### ISSUE-016
+
+- 状态：`open-observed`
+- 标题：`keeper 在 daemon_boot 接管后推进 lifecycle generation，但 agent runtime/helper authority 仍停留在上一代`
+- 根因分类：`identity-authority`
+- 测试场景：`mounted 项目中直接强杀 owner_pid，让 keeper 走 daemon_boot 自恢复`
+- 最小复现：
+  - 在 `/home/bfly/yunwei/test_ccb` 保持项目 mounted
+  - 读取 `.ccb/ccbd/lifecycle.json`，确认 `generation: 5`
+  - 对其中 `owner_pid` 执行 `kill -9`
+  - 执行 `/home/bfly/yunwei/ccb_source/ccb doctor`
+  - 读取 `.ccb/ccbd/lifecycle.json`
+  - 读取 `.ccb/agents/agent1/runtime.json`
+  - 读取 `.ccb/agents/agent1/helper.json`
+  - 再执行一次 `/home/bfly/yunwei/ccb_source/ccb`，确认是否自愈
+- 预期结果：
+  - keeper 接管后的新 daemon generation 应同步成为 agent runtime/helper authority 的当前代
+  - 至少 `daemon_generation`、`runtime_generation`、`binding_generation`、`owner_daemon_generation` 应与 lifecycle generation 自洽
+- 实际结果：
+  - `doctor` 显示 keeper 已恢复项目，并进入 `ccbd_generation: 6`
+  - `ccbd_startup_last_trigger: daemon_boot`
+  - `.ccb/ccbd/lifecycle.json` 显示 `generation: 6`
+  - 但 `.ccb/agents/agent1/runtime.json` 仍为 `binding_generation: 5`、`runtime_generation: 5`，只有 `daemon_generation` 被推进到 `6`
+  - `.ccb/agents/agent1/helper.json` 仍为 `runtime_generation: 5`，仅 `owner_daemon_generation: 6`
+  - 随后执行一次 `ccb` 返回 `ccbd_started: false`，上述 authority 仍不自愈
+  - 同时 `ccb ask agent1 "只回复：AFTER_SIGKILL"` 可以完成，说明运行面可用，但 authority 已失真
+- 影响范围：
+  - keeper/daemon_boot 接管后的代际可解释性
+  - diagnostics/doctor 对“当前 agent 是否属于当前 daemon generation”的判读
+  - 后续基于 generation 的恢复、清理与一致性断言
+- 初步判断：
+  - keeper 接管只推进了 daemon/lifecycle authority，没有对已恢复 agent 的 runtime/helper authority 做同源回写
+  - 这是 lifecycle 接管和 agent restore authority 之间的系统边界问题，不是单个 provider 执行失败
+- 根因：
+  - 待补
+- 系统性修复方案：
+  - 将 `daemon_boot` 接管后的 agent restore 统一走与正常 startup 相同的 authority 收敛路径
+  - 禁止出现“lifecycle 属于新代、runtime/helper 仍属于旧代”的混合记录
+  - 增加 keeper 接管场景下的 generation 一致性断言与黑盒回归
+- 回归测试：
+  - 待补：强杀 `owner_pid` 后 keeper 接管，runtime/helper/lifecycle generation 全量自洽
+  - 待补：keeper 接管后重复执行 `ccb` 不会留下旧代 authority
+- 复测结论：
+  - 待补
+
 ## 6. 关闭标准
 
 问题只有同时满足以下条件才关闭：

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v6.0.7 (2026-04-22)
+
+### Lifecycle Authority & Shutdown Stability
+
+- **Keeper-Owned Lifecycle Authority**: project lifecycle is now anchored around keeper-owned `lifecycle.json`, clearer generation ownership, and stricter namespace epoch authority
+- **Mounted-State Read Path Fixes**: `ping ccbd` and `ping <agent>` now read mounted/runtime state from current authority instead of drifting to stale failure views after restart or recovery
+- **Shutdown Transaction Hardening**: `ccb kill` and `ccb kill -f` now terminalize non-terminal jobs inside the same shutdown transaction so in-flight work cannot reappear as restore or auto-retry authority after restart
+- **Real Blackbox Validation**: real-project lifecycle repro on `ask -> kill -f -> restart` now converges to `project_shutdown` with no lingering active execution
+
 ## v6.0.6 (2026-04-21)
 
 ### 🔒 Agent Isolation Stability & Foreground Kill Lifecycle

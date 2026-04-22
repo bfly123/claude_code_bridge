@@ -30,6 +30,9 @@ class AttachRuntimeValues:
     workspace_epoch: int | None
     lifecycle_state: str | None
     binding_generation: int
+    runtime_generation: int
+    daemon_generation: int | None
+    authority_epoch_changed: bool
     managed_by: str
     binding_source: RuntimeBindingSource
 

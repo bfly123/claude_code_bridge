@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from provider_runtime.helper_cleanup import terminate_helper_manifest_path
+
 
 def terminate_runtime_pids(
     *,
@@ -17,8 +19,15 @@ def terminate_runtime_pids(
             merged_candidates.setdefault(pid, []).extend(sources)
     for pid in sorted(merged_candidates):
         hint_paths = tuple(dict.fromkeys(merged_candidates[pid]))
+        has_helper_manifest = any(getattr(path, 'name', '') == 'helper.json' for path in hint_paths)
+        helper_reaped = _terminate_helper_groups(
+            hint_paths,
+            is_pid_alive_fn=is_pid_alive_fn,
+            terminate_pid_tree_fn=terminate_pid_tree_fn,
+        )
         if not is_pid_alive_fn(pid):
-            remove_pid_files_fn(hint_paths)
+            if helper_reaped or not has_helper_manifest:
+                remove_pid_files_fn(hint_paths)
             continue
         if not pid_matches_project_fn(pid, project_root=project_root, hint_paths=hint_paths):
             continue
@@ -27,3 +36,20 @@ def terminate_runtime_pids(
 
 
 __all__ = ['terminate_runtime_pids']
+
+
+def _terminate_helper_groups(
+    hint_paths,
+    *,
+    is_pid_alive_fn,
+    terminate_pid_tree_fn,
+) -> bool:
+    del is_pid_alive_fn
+    del terminate_pid_tree_fn
+    reaped = False
+    for path in hint_paths:
+        if getattr(path, 'name', '') != 'helper.json':
+            continue
+        if terminate_helper_manifest_path(path):
+            reaped = True
+    return reaped

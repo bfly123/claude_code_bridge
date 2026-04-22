@@ -197,6 +197,47 @@ def test_runtime_supervision_loop_recovers_idle_degraded_agent(tmp_path: Path) -
     assert events[1].daemon_generation == 7
 
 
+def test_runtime_supervision_loop_adopts_canonical_epoch_when_daemon_generation_changes(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-supervision-adopt'
+    project_root.mkdir()
+    ctx = bootstrap_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex')
+    registry = AgentRegistry(layout, config)
+    runtime_service = RuntimeService(
+        layout,
+        registry,
+        ctx.project_id,
+        clock=lambda: '2026-03-18T00:00:10Z',
+    )
+    runtime = _runtime('codex', project_id=ctx.project_id, layout=layout, pid=101, health='healthy')
+    runtime.binding_generation = 3
+    runtime.runtime_generation = 2
+    runtime.daemon_generation = 2
+    registry.upsert(runtime)
+    loop = RuntimeSupervisionLoop(
+        project_id=ctx.project_id,
+        layout=layout,
+        config=config,
+        registry=registry,
+        runtime_service=runtime_service,
+        clock=lambda: '2026-03-18T00:00:10Z',
+        generation_getter=lambda: 3,
+    )
+
+    statuses = loop.reconcile_once()
+
+    assert statuses == {'codex': 'healthy'}
+    updated = registry.get('codex')
+    assert updated is not None
+    assert updated.started_at == '2026-03-18T00:00:10Z'
+    assert updated.binding_generation == 4
+    assert updated.runtime_generation == 4
+    assert updated.daemon_generation == 3
+    assert updated.desired_state == 'mounted'
+    assert updated.reconcile_state == 'steady'
+
+
 def test_runtime_supervision_loop_reflows_after_local_replacement_when_project_namespace_is_safe(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-supervision-reflow'
     project_root.mkdir()
@@ -232,7 +273,7 @@ def test_runtime_supervision_loop_reflows_after_local_replacement_when_project_n
         remount_calls.append(reason)
         refreshed = registry.get('codex')
         assert refreshed is not None
-        registry.upsert(
+        registry.upsert_authority(
             AgentRuntime(
                 **{
                     **refreshed.__dict__,
@@ -336,7 +377,7 @@ def test_runtime_supervision_loop_mounts_missing_runtime(tmp_path: Path) -> None
         current = registry.get(agent_name)
         assert current is not None
         seen_starting.append(current.state)
-        registry.upsert(
+        registry.upsert_authority(
             AgentRuntime(
                 **{
                     **_runtime(agent_name, project_id=ctx.project_id, layout=layout, pid=101, health='healthy').__dict__,
@@ -391,7 +432,7 @@ def test_runtime_supervision_loop_remounts_foreign_pane_binding(tmp_path: Path) 
 
     def _mount(agent_name: str) -> None:
         calls.append(agent_name)
-        registry.upsert(
+        registry.upsert_authority(
             AgentRuntime(
                 **{
                     **_runtime(agent_name, project_id=ctx.project_id, layout=layout, pid=202, health='healthy').__dict__,
@@ -448,7 +489,7 @@ def test_runtime_supervision_loop_reflows_project_namespace_on_foreign_namespace
         remount_calls.append(reason)
         refreshed = registry.get('codex')
         assert refreshed is not None
-        registry.upsert(
+        registry.upsert_authority(
             AgentRuntime(
                 **{
                     **refreshed.__dict__,

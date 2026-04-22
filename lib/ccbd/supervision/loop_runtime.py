@@ -22,23 +22,42 @@ def resolved_runtime(ctx: RuntimeSupervisionContext, agent_name: str):
 
 def align_runtime_authority(ctx: RuntimeSupervisionContext, runtime):
     next_generation = ctx.generation_getter()
-    daemon_generation = runtime.daemon_generation if next_generation is None else next_generation
+    aligned = runtime
+    if authority_adopt_required(runtime, next_generation=next_generation):
+        aligned = ctx.runtime_service.adopt_runtime_authority(
+            runtime,
+            daemon_generation=next_generation,
+        )
+    daemon_generation = aligned.daemon_generation if next_generation is None else next_generation
     desired_state = 'stopped' if runtime.state is AgentState.STOPPED else 'mounted'
-    reconcile_state = resolved_reconcile_state(runtime)
+    reconcile_state = resolved_reconcile_state(aligned)
     return upsert_if_changed(
         ctx,
-        runtime,
+        aligned,
         daemon_generation=daemon_generation,
         desired_state=desired_state,
         reconcile_state=reconcile_state,
     )
 
 
+def authority_adopt_required(runtime, *, next_generation: int | None) -> bool:
+    if next_generation is None:
+        return False
+    if runtime.state not in {AgentState.IDLE, AgentState.BUSY, AgentState.DEGRADED}:
+        return False
+    current_generation = getattr(runtime, 'daemon_generation', None)
+    try:
+        current_generation = int(current_generation) if current_generation is not None else None
+    except Exception:
+        current_generation = None
+    return current_generation != int(next_generation)
+
+
 def upsert_if_changed(ctx: RuntimeSupervisionContext, runtime, **updates):
     candidate = replace(runtime, **updates)
     if candidate == runtime:
         return runtime
-    return ctx.registry.upsert(candidate)
+    return ctx.registry.upsert_authority(candidate)
 
 
 def build_starting_runtime(

@@ -15,7 +15,7 @@ def submit_ask(
     *,
     load_project_config_fn: Callable,
     resolve_ask_sender_fn: Callable,
-    connect_mounted_daemon_fn: Callable,
+    invoke_mounted_daemon_fn: Callable,
 ) -> AskSummary:
     config = load_project_config_fn(context.project.project_root).config
     normalized_target = _normalize_target(command.target)
@@ -23,19 +23,21 @@ def submit_ask(
     sender = resolve_ask_sender_fn(context, command.sender)
     normalized_sender = _normalize_sender(sender)
     _validate_sender(normalized_sender, config.agents, cmd_enabled=bool(getattr(config, 'cmd_enabled', False)))
-    handle = connect_mounted_daemon_fn(context, allow_restart_stale=True)
-    assert handle.client is not None
-    payload = handle.client.submit(
-        MessageEnvelope(
-            project_id=context.project.project_id,
-            to_agent=normalized_target,
-            from_actor=normalized_sender,
-            body=command.message,
-            task_id=command.task_id,
-            reply_to=command.reply_to,
-            message_type=command.mode or 'ask',
-            delivery_scope=_delivery_scope(command.target),
-            silence_on_success=command.silence,
+    payload = invoke_mounted_daemon_fn(
+        context,
+        allow_restart_stale=True,
+        request_fn=lambda client: client.submit(
+            MessageEnvelope(
+                project_id=context.project.project_id,
+                to_agent=normalized_target,
+                from_actor=normalized_sender,
+                body=command.message,
+                task_id=command.task_id,
+                reply_to=command.reply_to,
+                message_type=command.mode or 'ask',
+                delivery_scope=_delivery_scope(command.target),
+                silence_on_success=command.silence,
+            )
         )
     )
     return _summary_from_payload(context.project.project_id, payload)

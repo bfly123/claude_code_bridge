@@ -13,7 +13,6 @@ class DaemonStartState:
     started: bool = False
     incompatible_restart_requested: bool = False
     unreachable_restart_requested: bool = False
-    direct_spawn_requested: bool = False
 
 
 def poll_daemon_start_iteration(
@@ -25,7 +24,6 @@ def poll_daemon_start_iteration(
     connect_compatible_daemon_fn,
     should_restart_unreachable_daemon_fn,
     restart_unreachable_daemon_fn,
-    spawn_ccbd_process_fn,
 ) -> DaemonHandle | None:
     _manager, _guard, inspection = inspect_daemon_fn(context)
     handle = maybe_connect_daemon(
@@ -49,7 +47,6 @@ def poll_daemon_start_iteration(
         inspection,
         state=state,
         ensure_keeper_started_fn=ensure_keeper_started_fn,
-        spawn_ccbd_process_fn=spawn_ccbd_process_fn,
     )
     return None
 
@@ -61,7 +58,7 @@ def maybe_connect_daemon(
     state: DaemonStartState,
     connect_compatible_daemon_fn,
 ) -> DaemonHandle | None:
-    if not inspection.socket_connectable:
+    if _phase(inspection) != 'mounted' or not inspection.socket_connectable:
         return None
     handle = connect_compatible_daemon_fn(
         context,
@@ -86,6 +83,8 @@ def maybe_restart_unreachable_daemon(
 ) -> bool:
     if state.unreachable_restart_requested:
         return False
+    if _phase(inspection) not in {'mounted', 'failed'}:
+        return False
     if not should_restart_unreachable_daemon_fn(inspection):
         return False
     restart_unreachable_daemon_fn(context, inspection)
@@ -100,16 +99,17 @@ def maybe_request_spawn(
     *,
     state: DaemonStartState,
     ensure_keeper_started_fn,
-    spawn_ccbd_process_fn,
 ) -> None:
+    if _desired_state(inspection) != 'running':
+        return
+    if _phase(inspection) not in {'unmounted', 'failed'}:
+        return
     if inspection.health not in {LeaseHealth.MISSING, LeaseHealth.UNMOUNTED, LeaseHealth.STALE}:
         return
     state.started = True
-    if state.keeper_started or state.direct_spawn_requested:
+    if state.keeper_started:
         return
-    spawn_ccbd_process_fn(context)
     state.keeper_started = bool(ensure_keeper_started_fn(context))
-    state.direct_spawn_requested = True
 
 
 def finalize_daemon_start(
@@ -121,12 +121,40 @@ def finalize_daemon_start(
     incompatible_daemon_error_fn,
 ) -> DaemonHandle:
     _manager, _guard, inspection = inspect_daemon_fn(context)
-    handle = connect_compatible_daemon_fn(context, inspection, restart_on_mismatch=False)
-    if handle is not None:
-        return DaemonHandle(client=handle.client, inspection=inspection, started=started)
-    if inspection.socket_connectable:
-        raise CcbdServiceError(incompatible_daemon_error_fn())
+    phase = _phase(inspection)
+    if phase == 'mounted':
+        handle = connect_compatible_daemon_fn(context, inspection, restart_on_mismatch=False)
+        if handle is not None:
+            return DaemonHandle(client=handle.client, inspection=inspection, started=started)
+        if inspection.socket_connectable:
+            raise CcbdServiceError(incompatible_daemon_error_fn())
+    if phase == 'starting':
+        raise CcbdServiceError('ccbd is unavailable: lifecycle_starting')
+    if phase == 'stopping':
+        raise CcbdServiceError('ccbd is unavailable: lifecycle_stopping')
+    failure_reason = str(getattr(inspection, 'last_failure_reason', '') or '').strip()
+    if phase == 'failed' and failure_reason:
+        raise CcbdServiceError(f'ccbd is unavailable: {inspection.reason}; lifecycle_failure: {failure_reason}')
     raise CcbdServiceError(f'ccbd is unavailable: {inspection.reason}')
+
+
+def _phase(inspection) -> str:
+    phase = str(getattr(inspection, 'phase', '') or '').strip()
+    if phase:
+        return phase
+    health = getattr(inspection, 'health', None)
+    if health in {LeaseHealth.MISSING, LeaseHealth.UNMOUNTED}:
+        return 'unmounted'
+    if health is LeaseHealth.HEALTHY:
+        return 'mounted'
+    return 'failed'
+
+
+def _desired_state(inspection) -> str:
+    desired_state = str(getattr(inspection, 'desired_state', '') or '').strip()
+    if desired_state:
+        return desired_state
+    return 'running'
 
 
 __all__ = [

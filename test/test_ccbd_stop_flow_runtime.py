@@ -7,6 +7,7 @@ from ccbd.stop_flow_runtime.pid_cleanup import collect_pid_candidates
 from ccbd.stop_flow_runtime.pid_cleanup import collect_project_process_candidates
 from ccbd.stop_flow_runtime.pid_cleanup import terminate_runtime_pids
 from ccbd.stop_flow_runtime.runtime_records import extra_agent_dir_names
+from runtime_pid_cleanup.termination import terminate_runtime_pids as terminate_runtime_pids_impl
 
 
 def test_extra_agent_dir_names_skips_configured_names(tmp_path: Path) -> None:
@@ -37,6 +38,23 @@ def test_collect_pid_candidates_uses_runtime_root_and_force_fallback(tmp_path: P
     assert candidates[123] == [agent_dir / 'runtime.json']
     assert candidates[456] == [provider_runtime_dir / 'fallback.pid']
     assert candidates[789] == [dedicated_runtime_root / 'codex.pid']
+
+
+def test_collect_pid_candidates_includes_helper_manifest_leader_pid(tmp_path: Path) -> None:
+    agent_dir = tmp_path / '.ccb' / 'agents' / 'agent1'
+    agent_dir.mkdir(parents=True)
+    (agent_dir / 'helper.json').write_text(
+        (
+            '{"schema_version":1,"record_type":"provider_helper_manifest","agent_name":"agent1",'
+            '"runtime_generation":3,"helper_kind":"codex_bridge","leader_pid":654,"pgid":654,'
+            '"started_at":"2026-04-21T00:00:00Z","owner_daemon_generation":9,"state":"running"}\n'
+        ),
+        encoding='utf-8',
+    )
+
+    candidates = collect_pid_candidates(agent_dir, runtime=None, fallback_to_agent_dir=False)
+
+    assert candidates[654] == [agent_dir / 'helper.json']
 
 
 def test_collect_project_process_candidates_matches_ccb_runtime_cmdline(tmp_path: Path) -> None:
@@ -82,6 +100,45 @@ def test_terminate_runtime_pids_includes_project_process_scan(tmp_path: Path, mo
     collect_fn = seen['collect_project_process_candidates_fn']
     assert collect_fn(project_root) == {321: [project_root / '.ccb']}
     assert seen['pid_candidates'] == {123: [project_root / 'hint.pid']}
+
+
+def test_terminate_runtime_pids_reaps_helper_group_from_manifest(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo'
+    helper_path = project_root / '.ccb' / 'agents' / 'agent1' / 'helper.json'
+    helper_path.parent.mkdir(parents=True)
+    helper_path.write_text(
+        (
+            '{"schema_version":1,"record_type":"provider_helper_manifest","agent_name":"agent1",'
+            '"runtime_generation":2,"helper_kind":"codex_bridge","leader_pid":777,"pgid":888,'
+            '"started_at":"2026-04-21T00:00:00Z","owner_daemon_generation":5,"state":"running"}\n'
+        ),
+        encoding='utf-8',
+    )
+    hint_pid = project_root / 'hint.pid'
+    hint_pid.write_text('777\n', encoding='utf-8')
+    killed: list[tuple[int, int]] = []
+    removed: list[tuple[Path, ...]] = []
+
+    monkeypatch.setattr('provider_runtime.helper_cleanup.os.name', 'posix')
+    monkeypatch.setattr('provider_runtime.helper_cleanup.os.killpg', lambda pgid, sig: killed.append((pgid, int(sig))) or None)
+    monkeypatch.setattr('provider_runtime.helper_cleanup.os.getpgrp', lambda: 999)
+    monkeypatch.setattr(
+        'provider_runtime.helper_cleanup.os.kill',
+        lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()) if sig == 0 else None,
+    )
+
+    terminate_runtime_pids_impl(
+        project_root=project_root,
+        pid_candidates={777: [helper_path, hint_pid]},
+        is_pid_alive_fn=lambda pid: False,
+        pid_matches_project_fn=lambda pid, project_root, hint_paths: True,
+        terminate_pid_tree_fn=lambda pid, timeout_s, is_pid_alive_fn: True,
+        remove_pid_files_fn=lambda paths: removed.append(tuple(paths)),
+    )
+
+    assert killed[0][0] == 888
+    assert removed == [(helper_path, hint_pid)]
+    assert helper_path.exists() is False
 
 
 __all__ = []

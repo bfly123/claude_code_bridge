@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ccbd.socket_client import CcbdClientError
 from cli.context import CliContext
 from cli.models import ParsedRetryCommand
 
-from .daemon import connect_mounted_daemon
+from .daemon import invoke_mounted_daemon
 
 
 @dataclass(frozen=True)
@@ -22,14 +21,11 @@ class RetrySummary:
 
 
 def retry_attempt(context: CliContext, command: ParsedRetryCommand) -> RetrySummary:
-    handle = connect_mounted_daemon(context, allow_restart_stale=True)
-    assert handle.client is not None
-    try:
-        payload = handle.client.retry(command.target)
-    except CcbdClientError:
-        handle = connect_mounted_daemon(context, allow_restart_stale=True)
-        assert handle.client is not None
-        payload = handle.client.retry(command.target)
+    payload = invoke_mounted_daemon(
+        context,
+        allow_restart_stale=True,
+        request_fn=lambda client: client.retry(command.target),
+    )
     return RetrySummary(
         project_id=context.project.project_id,
         target=payload['target'],

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shlex
 from pathlib import Path
 from typing import Callable
@@ -74,11 +75,13 @@ def _codex_args(command, spec, runtime_dir: Path, *, provider_start_parts_fn, lo
 
 
 def _env_map(runtime_dir: Path, launch_session_id: str, *, spec, profile, codex_home_overrides: dict[str, str]) -> dict[str, str]:
+    inherited_api_env = _inherited_api_env(profile=profile)
     explicit_env: dict[str, str] = {}
     if profile is not None:
         explicit_env.update(profile.env)
     explicit_env.update(spec.env)
     return {
+        **inherited_api_env,
         **explicit_env,
         'CODEX_RUNTIME_DIR': str(runtime_dir),
         'CODEX_INPUT_FIFO': str(runtime_dir / 'input.fifo'),
@@ -86,6 +89,23 @@ def _env_map(runtime_dir: Path, launch_session_id: str, *, spec, profile, codex_
         'CODEX_TERMINAL': 'tmux',
         **codex_home_overrides,
         **caller_context_env(actor=spec.name, runtime_dir=runtime_dir, launch_session_id=launch_session_id),
+    }
+
+
+def _inherited_api_env(*, profile) -> dict[str, str]:
+    if profile is not None and not profile.inherit_api:
+        return {}
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key in {
+            'OPENAI_API_KEY',
+            'OPENAI_BASE_URL',
+            'OPENAI_API_BASE',
+            'OPENAI_ORG_ID',
+            'OPENAI_ORGANIZATION',
+        }
+        and str(value).strip()
     }
 
 
