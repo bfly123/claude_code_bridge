@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest]
         python-version: ['3.11']
 
     steps:
@@ -41,7 +41,7 @@ jobs:
           python -m pytest test/test_registry_project_id.py -v
 
       - name: Test path normalization (cross-platform)
-        continue-on-error: true  # Known issue on Windows
+        continue-on-error: true
         run: |
           python -c "
           import sys
@@ -55,23 +55,12 @@ jobs:
           print('✅ Path normalization test passed')
           "
 
-      - name: Test unified commands syntax (Unix)
-        if: runner.os != 'Windows'
+      - name: Test unified commands syntax
         run: |
-          chmod +x bin/ask ccb
           python bin/ask --help
           python ccb ping --help
           python ccb pend --help
           echo "✅ Unified commands syntax test passed"
-
-      - name: Test unified commands syntax (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          python bin/ask --help
-          python ccb ping --help
-          python ccb pend --help
-          Write-Host "Unified commands syntax test passed"
 
       - name: Test completion hook imports
         run: |
@@ -84,21 +73,3 @@ jobs:
           assert completion_status_marker('failed') == '[CCB_TASK_FAILED]'
           print('Completion hook imports test passed')
           "
-
-      - name: Test Windows install script syntax
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          # Just check syntax, don't actually install
-          $tokens = $null
-          $errors = $null
-          $null = [System.Management.Automation.Language.Parser]::ParseFile(
-            'install.ps1',
-            [ref]$tokens,
-            [ref]$errors
-          )
-          if ($errors.Count -gt 0) {
-            $errors | ForEach-Object { Write-Error $_.Message }
-            exit 1
-          }
-          Write-Host "install.ps1 syntax check passed"

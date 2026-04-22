@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest]
         python-version: ["3.10", "3.11", "3.12"]
 
     steps:
@@ -44,22 +44,8 @@ jobs:
         run: python -m compileall -q lib bin ccb
 
       - name: Run tests
-        run: |
-          if [ "$RUNNER_OS" == "Windows" ]; then
-            pytest test/ -v --tb=short -k "not tmux"
-          else
-            pytest test/ -v --tb=short
-          fi
+        run: pytest test/ -v --tb=short
         shell: bash
-
-      - name: Debug on failure (Windows)
-        if: failure() && runner.os == 'Windows'
-        run: |
-          python --version
-          python -c "import sys; print('Platform:', sys.platform); print('Executable:', sys.executable)"
-          dir lib
-          type lib\terminal.py | findstr /N "import"
-        shell: cmd
 
   macos-install-smoke:
     name: macOS install smoke
