@@ -636,22 +636,34 @@ write_install_metadata() {
     return
   fi
 
-  "$PYTHON_BIN" - <<PY
+  CCB_META_VERSION="$version" \
+  CCB_META_COMMIT="$commit" \
+  CCB_META_DATE="$date" \
+  CCB_META_BUILD_TIME="$build_time" \
+  CCB_META_PLATFORM="$platform_name" \
+  CCB_META_ARCH="$arch_name" \
+  CCB_META_CHANNEL="$channel" \
+  CCB_META_SOURCE_KIND="$source_kind" \
+  CCB_META_INSTALL_MODE="$install_mode" \
+  CCB_META_INSTALLED_AT="$installed_at" \
+  CCB_META_INSTALL_PREFIX="$INSTALL_PREFIX" \
+  "$PYTHON_BIN" - <<'PY'
 from pathlib import Path
 import json
+import os
 
-install_prefix = Path("$INSTALL_PREFIX")
+install_prefix = Path(os.environ["CCB_META_INSTALL_PREFIX"])
 payload = {
-    "version": ${version@Q},
-    "commit": ${commit@Q},
-    "date": ${date@Q},
-    "build_time": ${build_time@Q},
-    "platform": ${platform_name@Q},
-    "arch": ${arch_name@Q},
-    "channel": ${channel@Q},
-    "source_kind": ${source_kind@Q},
-    "install_mode": ${install_mode@Q},
-    "installed_at": ${installed_at@Q},
+    "version": os.environ.get("CCB_META_VERSION", ""),
+    "commit": os.environ.get("CCB_META_COMMIT", ""),
+    "date": os.environ.get("CCB_META_DATE", ""),
+    "build_time": os.environ.get("CCB_META_BUILD_TIME", ""),
+    "platform": os.environ.get("CCB_META_PLATFORM", ""),
+    "arch": os.environ.get("CCB_META_ARCH", ""),
+    "channel": os.environ.get("CCB_META_CHANNEL", ""),
+    "source_kind": os.environ.get("CCB_META_SOURCE_KIND", ""),
+    "install_mode": os.environ.get("CCB_META_INSTALL_MODE", ""),
+    "installed_at": os.environ.get("CCB_META_INSTALLED_AT", ""),
 }
 
 version_text = str(payload["version"] or "").strip()
