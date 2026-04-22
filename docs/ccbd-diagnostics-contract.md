@@ -121,15 +121,15 @@ Paths:
 
 Rules:
 
-- `ipc.json` records the latest persisted backend ipc facts such as `ipc_kind`, `ipc_ref`, `backend_family`, and `backend_impl`
-- `state.json` records the latest persisted project tmux namespace facts
+- `ipc.json` records the latest persisted backend ipc facts such as `ipc_kind`, `ipc_ref`, `backend_family`, `backend_impl`, and latest `updated_at`
+- `state.json` records the latest persisted project namespace facts such as `namespace_epoch`, `session_name`, `backend_ref`, `window_id`, `layout_version`, `visible_layout_signature`, and latest lifecycle summary when known
 - `start-policy.json` records the persisted project recovery startup policy, including inherited `auto_permission` and forced recovery-restore semantics
 - `lifecycle.jsonl` records namespace creation/destruction and later runtime lifecycle events
 - `heartbeats/<subject-kind>/*.json` records non-lease heartbeat state for long-lived supervised subjects such as running jobs; these files are diagnostics/evidence, not backend ownership authority
 - daemon lease heartbeat and subject heartbeat must remain separate concepts and separate files
 - `doctor` and bundle export must include these records when present
 - `ping('ccbd')` and `doctor` should surface start-policy summary fields when available
-- `ping('ccbd')` and `doctor` must surface namespace summary fields such as epoch, tmux socket path, session name, and latest lifecycle event when available
+- `ping('ccbd')` and `doctor` must surface namespace summary fields such as epoch, backend family/impl, backend ref, ipc kind/ref, session name, and latest lifecycle event when available
 - malformed namespace diagnostics must surface as diagnostics errors, not silently disappear
 
 ### 3.6 Doctor Read Path
@@ -139,8 +139,8 @@ Rules:
 Rules:
 
 - it must summarize current backend inspection plus latest persisted reports
-- it should surface persisted `ipc_ref`, `ipc_state`, and `ipc_updated_at` when available
-- agent binding diagnostics must include both `tmux_socket_name` and `tmux_socket_path` when known so project-scoped namespace bugs can be diagnosed from logs alone
+- it should surface persisted `ipc_kind`, `ipc_ref`, `backend_family`, `backend_impl`, `ipc_state`, `ipc_updated_at`, `job_id`, and `job_owner_pid` when available
+- agent binding diagnostics must include namespace binding metadata such as `backend_family`, `backend_impl`, `backend_ref`, legacy `tmux_socket_name` / `tmux_socket_path`, `ipc_kind`, `ipc_ref`, `job_id`, and `job_owner_pid` when known so project-scoped namespace bugs can be diagnosed from logs alone
 - it must not crash only because one diagnostics artifact is missing or malformed
 - malformed diagnostics files must surface as diagnostics errors, not silent omission
 

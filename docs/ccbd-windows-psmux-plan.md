@@ -613,7 +613,19 @@ Windows 版 diagnostics 应明确包含：
 
 ## 13. 分阶段实施方案
 
+当前阶段状态：
+
+- P0: 已完成
+- P1: 已完成
+- P2: 已完成
+- P3: 已完成
+- P4: 代码已完成，Windows 真机黑盒验证待补
+- P5: 待完成
+- P6: 已完成
+
 ### P0. Windows `psmux` capability 探针
+
+状态：已完成。
 
 目标：
 
@@ -631,6 +643,8 @@ Windows 版 diagnostics 应明确包含：
 
 ### P1. 抽象层收口
 
+状态：已完成。
+
 目标：
 
 - 把当前代码中分散的 tmux 假设收束到 `mux backend contract`
@@ -646,6 +660,8 @@ Windows 版 diagnostics 应明确包含：
 - 上层主链路不再直接依赖 Unix tmux 特性名
 
 ### P2. Windows IPC 与 runtime ownership
+
+状态：已完成。
 
 目标：
 
@@ -665,6 +681,8 @@ Windows 版 diagnostics 应明确包含：
 
 ### P3. `PsmuxBackend` 实现
 
+状态：已完成。
+
 目标：
 
 - 在 `mux backend contract` 下实现 `psmux` backend
@@ -680,6 +698,8 @@ Windows 版 diagnostics 应明确包含：
 - namespace 创建、attach、pane 操作可通过统一接口完成
 
 ### P4. Windows namespace lifecycle 接入
+
+状态：代码已完成，Windows 真机黑盒验证待补。
 
 目标：
 
@@ -699,6 +719,8 @@ Windows 版 diagnostics 应明确包含：
 
 ### P5. Supervision 与黑盒稳定性
 
+状态：待完成。
+
 目标：
 
 - 把现有 Linux 版的 supervision contract 复用到 Windows
@@ -716,6 +738,8 @@ Windows 版 diagnostics 应明确包含：
 - 黑盒行为与当前 tmux 版语义一致
 
 ### P6. 文档与契约升级
+
+状态：已完成。
 
 目标：
 

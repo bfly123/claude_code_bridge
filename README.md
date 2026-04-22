@@ -1,6 +1,6 @@
 <div align="center">
 
-# CCB v6(Linux) - Infinite Parallel Agents Edition
+# CCB v6 - Infinite Parallel Agents Edition
 
 **Native multi-agent runtime for terminal split panes**
 **Claude · Codex · Gemini · OpenCode · Droid**
@@ -499,7 +499,7 @@ cd claude_code_bridge
 
 > Use this if your Claude/Codex/Gemini runs natively on Windows.
 
-> Native Windows mux runtime is being redesigned around `psmux`. The stable split-pane path in this branch is still Linux/macOS/WSL + `tmux`.
+> Native Windows is supported through `psmux` as the tmux-family mux backend. Install PowerShell 7+ and `psmux`, then run `install.ps1` in the same native Windows environment as your agent CLIs.
 
 ```powershell
 git clone https://github.com/bfly123/claude_code_bridge.git
@@ -508,6 +508,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 install
 ```
 
 - The installer prefers `pwsh.exe` (PowerShell 7+) when available, otherwise `powershell.exe`.
+- Native Windows split-pane runtime requires `psmux` on PATH (for example `winget install marlocarlo.psmux`).
 
 </details>
 
@@ -561,7 +562,7 @@ Rules:
 - Cmd pane participates in the layout as the first extra pane and does not change which AI runs in the current pane.
 
 ### Update
-CCB v6 currently supports `ccb update` only on Linux/WSL. A major upgrade fully replaces the installed runtime. On the first `ccb` inside an older project, CCB preserves `.ccb/ccb.config`, clears the rest of the old `.ccb` state, and rebuilds locally.
+CCB v6 supports `ccb update` on Linux/WSL and native Windows. Linux/WSL uses `install.sh`; native Windows hands off to `install.ps1`. A major upgrade fully replaces the installed runtime. On the first `ccb` inside an older project, CCB preserves `.ccb/ccb.config`, clears the rest of the old `.ccb` state, and rebuilds locally.
 
 ```bash
 ccb update              # Update to the latest stable release
@@ -585,9 +586,9 @@ Note: The installers also install OS-specific `SKILL.md` variants for Claude/Cod
 
 ### 1) Current backend status
 
-- The active multi-pane runtime in this branch is `tmux` only.
-- Stable split-pane usage today means Linux/macOS/WSL with `tmux`.
-- Native Windows mux support is being redesigned around `psmux`; see [docs/ccbd-windows-psmux-plan.md](docs/ccbd-windows-psmux-plan.md).
+- Linux/macOS/WSL use `tmux` as the active mux backend.
+- Native Windows uses `psmux` as the active mux backend.
+- The user-facing `.ccb/ccb.config`, attach, kill, and supervision flow stay the same across platforms; see [docs/ccbd-windows-psmux-plan.md](docs/ccbd-windows-psmux-plan.md) for implementation details.
 
 ### 2) How to Identify Your Environment
 
@@ -604,13 +605,13 @@ Determine based on **how you installed/run Claude Code/Codex**:
 
 ### 3) Recommended path today
 
-- If you want the stable split-pane/runtime supervision path, run `ccb` and all agent CLIs inside WSL, then use `tmux`.
-- If your tools currently run natively on Windows, keep that environment consistent, but treat native split-pane orchestration as transitional until `psmux` lands.
+- If your tools already run in WSL, keep `ccb` and all agent CLIs together in WSL and use `tmux`.
+- If your tools run natively on Windows, keep that environment consistent and install both PowerShell 7+ and `psmux`. Native Windows now uses the same project-scoped lifecycle model through `psmux`.
 
 ### 4) Troubleshooting: `ccb` Not Starting Correctly
 
 - **Most common:** Environment mismatch (ccb in WSL but codex in native Windows, or vice versa)
-- **tmux not available:** Install `tmux` in the environment where you run `ccb`
+- **Mux backend not available:** Install `tmux` in Linux/macOS/WSL, or install PowerShell 7+ plus `psmux` in native Windows
 - **Terminal not refreshed:** Restart the shell after installation so PATH changes are visible
 
 </details>
@@ -701,12 +702,12 @@ Internal control-plane commands still exist for model-side orchestration and aut
 
 ### Cross-Platform Support
 - **Linux/macOS/WSL**: Uses `tmux` as terminal backend
-- **Native Windows**: Mux runtime is being redesigned around `psmux`; this branch no longer ships a parallel legacy native backend
+- **Native Windows**: Uses `psmux` as the tmux-family terminal backend
 
 ### Completion Hook
 - Notifies caller upon task completion
 - Supports caller-targeted completion notifications (`claude`/`codex`/`droid`)
-- Compatible with the tmux backend used by the current branch
+- Compatible with the active tmux-family backend used by the current branch
  - Foreground ask suppresses the hook unless `CCB_COMPLETION_HOOK_ENABLED` is set
 
 ---
@@ -764,7 +765,7 @@ The legacy mail subsystem has been removed from the repo. The current runtime is
 ## 📋 Requirements
 
 - **Python 3.10+**
-- **Terminal:** `tmux`
+- **Terminal:** `tmux` (Linux/macOS/WSL) or `psmux` + PowerShell 7 (native Windows)
 
 ---
 
@@ -782,9 +783,9 @@ ccb reinstall
 
 <div align="center">
 
-**Stable runtime:** Linux/macOS/WSL + tmux
+**Stable runtime:** Linux/macOS/WSL + `tmux`
 
-**Native Windows mux:** planned around `psmux`
+**Native Windows runtime:** Windows + PowerShell 7+ + `psmux`
 
 ---
 

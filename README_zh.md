@@ -1,6 +1,6 @@
 <div align="center">
 
-# CCB v6(Linux) - 无限并发 agents 版本
+# CCB v6 - 无限并发 agents 版本
 
 **终端分屏原生多 Agent Runtime**
 **Claude · Codex · Gemini · OpenCode · Droid**
@@ -463,13 +463,16 @@ cd claude_code_bridge
 
 > 如果你的 Claude/Codex/Gemini 运行在 Windows 原生环境，请使用此方式。
 
-> 当前分屏运行的稳定主路径仍是 Linux/macOS/WSL + `tmux`。原生 Windows mux 正在按 `psmux` 方向重构。
+> 原生 Windows 已支持通过 `psmux` 作为 tmux-family mux backend 运行。请先安装 PowerShell 7+ 和 `psmux`，再在与 agent CLI 相同的原生 Windows 环境里执行 `install.ps1`。
 
 ```powershell
 git clone https://github.com/bfly123/claude_code_bridge.git
 cd claude_code_bridge
 powershell -ExecutionPolicy Bypass -File .\install.ps1 install
 ```
+
+- 安装脚本优先使用 `pwsh.exe`（PowerShell 7+），否则回退到 `powershell.exe`。
+- 原生 Windows 分屏 runtime 需要 `psmux` 在 PATH 中（例如 `winget install marlocarlo.psmux`）。
 
 </details>
 
@@ -523,7 +526,7 @@ agent1:codex,agent2:codex,agent3:claude,cmd
 - cmd pane 作为第一个额外 pane 参与布局，不会改变当前 pane 对应的 AI
 
 ### 后续更新
-CCB v6 目前只有 Linux/WSL 支持 `ccb update`。major 升级会整体替换已安装 runtime；旧项目第一次执行 `ccb` 时，会保留 `.ccb/ccb.config`，清理其余旧 `.ccb` 状态后再原地重建。
+CCB v6 现已支持 Linux/WSL 与原生 Windows 的 `ccb update`。Linux/WSL 走 `install.sh`，原生 Windows 走 `install.ps1`。major 升级会整体替换已安装 runtime；旧项目第一次执行 `ccb` 时，会保留 `.ccb/ccb.config`，清理其余旧 `.ccb` 状态后再原地重建。
 
 ```bash
 ccb update              # 更新 ccb 到最新稳定版本
@@ -547,9 +550,9 @@ ccb reinstall           # 清理后重新安装
 
 ### 1) 当前后端状态
 
-- 当前分屏 runtime 已收口为 `tmux` 单一路径。
-- 现阶段稳定使用方式是 Linux/macOS/WSL + `tmux`。
-- 原生 Windows mux 方案正在围绕 `psmux` 设计，见 [docs/ccbd-windows-psmux-plan.md](docs/ccbd-windows-psmux-plan.md)。
+- Linux/macOS/WSL 使用 `tmux` 作为当前 mux backend。
+- 原生 Windows 使用 `psmux` 作为当前 mux backend。
+- 用户侧 `.ccb/ccb.config`、attach、kill、supervision 语义保持一致；实现细节见 [docs/ccbd-windows-psmux-plan.md](docs/ccbd-windows-psmux-plan.md)。
 
 ### 2) 判断方法：你到底是在 WSL 还是原生 Windows？
 
@@ -565,8 +568,8 @@ ccb reinstall           # 清理后重新安装
 
 ### 3) 当前推荐路径
 
-- 如果你要使用当前稳定的分屏与守护逻辑，请把 `ccb` 和所有 agent CLI 都放在 WSL 里运行，并使用 `tmux`。
-- 如果你现在必须跑在原生 Windows，请保持环境一致，但原生分屏编排仍属于过渡态，直到 `psmux` 路线落地。
+- 如果你的工具已经跑在 WSL，就把 `ccb` 和所有 agent CLI 都放在 WSL 里运行，并使用 `tmux`。
+- 如果你的工具跑在原生 Windows，就保持环境一致，并安装 PowerShell 7+ 与 `psmux`。原生 Windows 现在通过 `psmux` 复用同一套项目级生命周期模型。
 
 #### 3.1 在 WSL 中运行 `install.sh` 安装
 
@@ -595,8 +598,8 @@ ccb
 
 - **最主要原因：搞错 WSL 和原生环境（装/跑不在同一侧）**
   - 例子：你在 WSL 里装了 `ccb`，但 `codex` 在原生 Windows 跑；或反过来。此时两边的路径、会话目录、管道/窗格检测都对不上，启动大概率失败。
-- **tmux 不可用或找不到**
-  - 当前分屏 runtime 依赖 `tmux`；如果 `tmux` 不在 PATH，pane 编排与检测会失败。
+- **mux backend 不可用或找不到**
+  - Linux/macOS/WSL 需要 `tmux`；原生 Windows 需要 PowerShell 7+ 与 `psmux`。任一缺失都会导致 pane 编排与检测失败。
 - **PATH/终端未刷新**
   - 安装后请重启 shell，再运行 `ccb`。
 
@@ -690,12 +693,12 @@ CCB v6 面向用户的公开项目运行工作流只保留这 5 个主命令：
 
 ### 跨平台支持
 - **Linux/macOS/WSL**: 使用 `tmux` 作为终端后端
-- **原生 Windows**: mux runtime 正在按 `psmux` 重构；当前分支不再保留并行 legacy native backend
+- **原生 Windows**: 使用 `psmux` 作为 tmux-family 终端后端
 
 ### Completion Hook
 - 任务完成后自动通知发起者
 - 支持按 caller 定向回调目标 (claude/codex/droid)
-- 兼容当前分支使用的 tmux 后端
+- 兼容当前分支使用的 tmux-family 后端
  - 前台 ask 默认关闭 hook，除非设置 `CCB_COMPLETION_HOOK_ENABLED`
 
 ---
@@ -717,7 +720,7 @@ CCB v6 面向用户的公开项目运行工作流只保留这 5 个主命令：
 ## 📋 环境要求
 
 - **Python 3.10+**
-- **终端软件：** `tmux`
+- **终端软件：** Linux/macOS/WSL 使用 `tmux`；原生 Windows 使用 PowerShell 7 + `psmux`
 
 ---
 

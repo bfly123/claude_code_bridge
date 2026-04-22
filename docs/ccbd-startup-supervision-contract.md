@@ -18,11 +18,11 @@ The repo-local agent memory file [AGENTS.md](/home/bfly/yunwei/ccb_source/AGENTS
 
 Diagnostics-specific rules live in [docs/ccbd-diagnostics-contract.md](/home/bfly/yunwei/ccb_source/docs/ccbd-diagnostics-contract.md). Startup/shutdown behavior and diagnostics must evolve together.
 
-Module/function-level redesign for the project-scoped tmux namespace model lives in [docs/ccbd-project-namespace-lifecycle-plan.md](/home/bfly/yunwei/ccb_source/docs/ccbd-project-namespace-lifecycle-plan.md).
+Module/function-level redesign for the project-scoped mux namespace model lives in [docs/ccbd-project-namespace-lifecycle-plan.md](/home/bfly/yunwei/ccb_source/docs/ccbd-project-namespace-lifecycle-plan.md).
 
 Detailed redesign for pane recovery layering and continuous foreground attach lives in [docs/ccbd-pane-recovery-continuous-attach-plan.md](/home/bfly/yunwei/ccb_source/docs/ccbd-pane-recovery-continuous-attach-plan.md).
 
-User-facing config and tmux layout rules live in [docs/ccb-config-layout-contract.md](/home/bfly/yunwei/ccb_source/docs/ccb-config-layout-contract.md). Startup behavior must honor that layout contract rather than inventing its own pane topology.
+User-facing config and mux layout rules live in [docs/ccb-config-layout-contract.md](/home/bfly/yunwei/ccb_source/docs/ccb-config-layout-contract.md). Startup behavior must honor that layout contract rather than inventing its own pane topology.
 
 ## 2. Problem Statement
 
@@ -38,7 +38,7 @@ But those pieces do not currently form a single always-on control-plane contract
 
 The main failure mode is structural:
 
-- startup authority is split across config, lease, runtime store, provider session files, and tmux facts
+- startup authority is split across config, lease, runtime store, provider session files, and mux namespace facts
 - runtime recovery is partially implemented but only executed on some paths
 - pane death can mark an agent degraded without triggering a daemon-owned reconciliation loop
 - shutdown behavior is split between server-side and CLI fallback logic
@@ -119,7 +119,7 @@ Authority order must be enforced exactly as follows:
 Evidence sources:
 
 - provider session files
-- tmux pane liveness
+- mux pane liveness
 - provider-runtime pid files
 - runtime-root contents
 
@@ -167,7 +167,7 @@ Startup must be a single project-scoped transaction:
 1. inspect anchor state
 2. inspect config state
 3. inspect backend lease/socket/heartbeat state
-4. ensure project tmux namespace
+4. ensure project mux namespace
 5. compute desired agents
 6. compute recovery/start plan
 7. commit startup actions
@@ -176,13 +176,13 @@ Startup must be a single project-scoped transaction:
 `start_status: ok` is valid only when:
 
 - the project backend is healthy and authoritative
-- the project tmux namespace exists at the project-owned socket/session recorded under `.ccb/ccbd/`
-- the project tmux namespace has the current session-scoped CCB UI contract applied on that project-owned socket/session
+- the project namespace exists at the authoritative backend/session recorded under `.ccb/ccbd/`
+- the project namespace has the current session-scoped CCB UI contract applied on that authoritative backend/session
 - that project session contains the current namespace window contract:
   - one control window used as the long-lived session anchor
   - one workspace window used as the visible pane layout anchor
-- project-generated tmux identifiers must remain tmux-target-safe:
-  - project namespace session names must be normalized before use as tmux targets
+- project-generated namespace identifiers must remain mux-target-safe:
+  - project namespace session names must be normalized before use as tmux-family targets
   - transient workspace reflow operations must address windows by tmux `window_id`, not temporary dotted window names
 - config is valid for the current anchor
 - desired agents have reached an acceptable mounted state
@@ -202,7 +202,7 @@ Foreground command split:
 
 - `ccb`
   - ensures backend authority
-  - ensures the project tmux namespace
+  - ensures the project mux namespace
   - ensures desired agents are mounted
   - plain `ccb` is the default interactive start path and implicitly includes `-a -r`
   - does not itself define UI attachment success
@@ -223,7 +223,7 @@ Foreground command split:
 
 Project namespace compatibility:
 
-- namespace `layout_version` covers visible pane topology and project-socket tmux UI contract, not just split geometry
+- namespace `layout_version` covers visible pane topology and project-namespace mux UI contract, not just split geometry
 - project namespace state must also persist the current visible layout signature produced from `.ccb/ccb.config` after foreground pruning
 - when stored namespace `layout_version` differs from the current code contract, startup must recreate the project namespace rather than trying to mutate a stale session in place
 - when the stored visible layout signature differs from the desired visible layout signature for the current foreground start, startup must recreate the project namespace rather than incrementally splitting an old pane tree
@@ -232,13 +232,13 @@ Project namespace compatibility:
 - startup must not rely on "real shell first, respawn later" behavior for the `cmd` pane, because that leaves stale prompt residue and can surface zsh no-newline `%` markers
 - `cmd`-anchored projects must treat exact project-namespace pane membership as the reuse gate for pane-backed bindings
 - for project-namespace reuse, exact membership means:
-  - same project-owned tmux socket
+  - same authoritative backend ref for the project namespace (tmux socket path on Unix, named server ref on native Windows)
   - same authoritative tmux session
   - same logical `slot_key`
   - same current authoritative workspace `window_id`
-- agent-only legacy layouts with `cmd` disabled may reuse instance-scoped provider session evidence when that session file does not explicitly declare a conflicting tmux socket
+- agent-only legacy layouts with `cmd` disabled may reuse instance-scoped provider session evidence when that session file does not explicitly declare a conflicting backend ref
 - that legacy reuse exception is narrow:
-  - if the session file explicitly declares a tmux socket and it is not the project socket, startup must reject it
+  - if the session file explicitly declares a backend ref and it is not the project namespace ref, startup must reject it
   - if same-socket pane inspection proves the pane belongs to a detached sibling session or foreign project identity, startup must reject it
   - inferred default-server socket facts must not override an otherwise valid instance-scoped legacy binding
 
@@ -275,7 +275,7 @@ When a desired agent's pane dies, the daemon must reconcile it in the background
 2. inspect provider session and terminal facts
 3. if `ensure_pane()` can recover the pane, rebind runtime authority in place
 4. if the original pane target is gone but the current project workspace window is still healthy, local recovery must create the replacement pane inside that current workspace window and immediately rebind it to the same logical `slot_key`
-5. otherwise, if the project tmux session is still healthy and namespace-level repair is needed, reflow the workspace window inside that same session and relaunch the configured layout there
+5. otherwise, if the project namespace session is still healthy and namespace-level repair is needed, reflow the workspace window inside that same session and relaunch the configured layout there
 6. otherwise, if runtime facts prove session-level corruption and full project-wide reflow is safe, recreate the project namespace and relaunch the configured layout
 7. otherwise tear down stale binding authority
 8. relaunch runtime through the normal launch path
@@ -288,26 +288,26 @@ Important rule:
 - `cmd` recovery must first try session-preserving local slot replacement inside the current workspace window before escalating to project reflow
 - ordinary `pane-dead` / `pane-missing` recovery must not use project-server destruction as the first-line path
 - pane-backed runtime authority must carry `slot_key`, current workspace `window_id`, and `workspace_epoch`; pane id is evidence, not identity
-- local replacement must target the authoritative current workspace window for that project session, not whichever tmux target the provider backend would create by default
+- local replacement must target the authoritative current workspace window for that project session, not whichever backend target the provider runtime would create by default
 - if local replacement changes pane id inside a project-owned namespace and project-wide reflow is currently safe, the daemon must immediately continue into session-preserving workspace reflow so the pane returns to canonical layout position
 - session-preserving workspace reflow is the first namespace-level escalation for `pane_recovery:*`
 - if local replacement cannot restore `cmd`, `cmd` slot recovery must escalate through that same session-preserving `pane_recovery:*` reflow path, with `pane_recovery:cmd` as the canonical reason
-- if pane recovery is done by project-namespace reflow, pane position must return to the canonical layout derived from `.ccb/ccb.config`, not whichever slot tmux happens to assign during local recovery
-- workspace reflow must preserve the tmux server and tmux session; only the workspace window may be replaced
+- if pane recovery is done by project-namespace reflow, pane position must return to the canonical layout derived from `.ccb/ccb.config`, not whichever slot the active mux backend happens to assign during local recovery
+- workspace reflow must preserve the mux server/session; only the workspace window may be replaced
 - recovery must always use restore semantics even if the original foreground `ccb` invocation did not pass `-r`
 - recovery must inherit `auto_permission` from the persisted project start policy rather than falling back to hardcoded defaults
 
 Project-namespace reflow safety rules:
 
 - project-wide full reflow is an escalation path, not the default response to ordinary pane death
-- session-preserving workspace reflow is allowed only when the affected runtime belongs to the project-owned tmux socket/session recorded under `.ccb/ccbd/`
+- session-preserving workspace reflow is allowed only when the affected runtime belongs to the project-owned namespace recorded under `.ccb/ccbd/`
 - full project reflow is allowed only when the session itself is no longer a trustworthy repair boundary
 - only reflow when no other configured agent is currently `BUSY`
 - if reflow is not safe, fall back to local provider recovery rather than disrupting unrelated work
 
 Project-socket cleanup rules:
 
-- startup must compute the authoritative active pane set for the current project-owned tmux socket
+- startup must compute the authoritative active pane set for the current project-owned namespace backend ref
 - same-socket pane/session residue is evidence only; it must not be silently tolerated just because it lives on the project socket
 - startup must clean project-owned orphan panes on the project socket during the startup transaction, not wait for a later manual cleanup path
 
@@ -342,7 +342,7 @@ When `ccb` re-enters a project after an explicit shutdown, startup must first cl
 3. stop new intake
 4. stop running agent executions
 5. stop all desired agents
-6. destroy the project tmux namespace at the project-owned socket/session
+6. destroy the project mux namespace at the project-owned backend/session
 7. terminate surviving provider runtime pids that outlive namespace destruction
 8. mark configured-agent runtime authority as stopped
 9. unmount backend lease
@@ -395,14 +395,20 @@ Required fields:
 - `project_id`
 - `ccbd_pid`
 - `namespace_epoch`
-- `tmux_socket_path`
-- `tmux_session_name`
+- `backend_family`
+- `backend_impl`
+- `ipc_kind`
+- `ipc_ref`
+- `session_name`
 - `socket_path`
 - `generation`
 - `started_at`
 - `last_heartbeat_at`
 - `mount_state`
 - `config_signature`
+- optional `backend_ref`
+- optional `tmux_socket_path`
+- optional `tmux_session_name`
 - optional `keeper_pid`
 - optional `daemon_instance_id`
 
@@ -449,6 +455,14 @@ Required fields beyond current baseline:
 - `restart_count`
 - `last_reconcile_at`
 - `last_failure_reason`
+- optional `backend_family`
+- optional `backend_impl`
+- optional `backend_ref`
+- optional `session_name`
+- optional `ipc_kind`
+- optional `ipc_ref`
+- optional `job_id`
+- optional `job_owner_pid`
 - optional `tmux_socket_name`
 - optional `tmux_socket_path`
 
