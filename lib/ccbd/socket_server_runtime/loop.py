@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import socket
 import time
 
 
@@ -13,14 +12,16 @@ def serve_forever(server, *, poll_interval: float = 0.2, on_tick=None) -> None:
         if runtime_socket is None:
             break
         timeout = next_timeout(next_tick_at=next_tick_at, on_tick=on_tick)
-        runtime_socket.settimeout(timeout)
         try:
-            conn, _ = runtime_socket.accept()
-        except socket.timeout:
+            conn = runtime_socket.accept(timeout)
+        except TimeoutError:
             next_tick_at = run_tick_if_needed(on_tick=on_tick, next_tick_at=next_tick_at, interval=interval)
             continue
         except OSError:
             break
+        if conn is None:
+            next_tick_at = run_tick_if_needed(on_tick=on_tick, next_tick_at=next_tick_at, interval=interval)
+            continue
         with conn:
             handled_op = server._handle_connection(conn)
         if server._stop_event.is_set():

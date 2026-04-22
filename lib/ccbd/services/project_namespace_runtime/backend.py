@@ -1,9 +1,27 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
+import shutil
 
+from terminal_runtime.env import default_shell, is_wsl, is_windows
 
 _PLACEHOLDER_CMD = 'while :; do sleep 3600; done'
+_PLACEHOLDER_CMD_WINDOWS = 'while ($true) { Start-Sleep -Seconds 3600 }'
+
+
+def _placeholder_spawn_args(backend) -> list[str]:
+    backend_impl = str(getattr(backend, 'backend_impl', '') or '').strip().lower()
+    if os.name == 'nt' and backend_impl == 'psmux':
+        shell, shell_flag = default_shell(is_wsl_fn=is_wsl, is_windows_fn=is_windows)
+        placeholder = _PLACEHOLDER_CMD_WINDOWS
+        if shell == 'pwsh':
+            return ['pwsh', '-NoLogo', shell_flag, placeholder]
+        if shell == 'powershell':
+            return ['powershell', '-NoLogo', shell_flag, placeholder]
+        resolved = shutil.which('powershell') or 'powershell'
+        return [resolved, '-NoLogo', '-Command', placeholder]
+    return ['sh', '-lc', _PLACEHOLDER_CMD]
 
 
 @dataclass(frozen=True)
@@ -38,15 +56,7 @@ def create_session(backend, *, session_name: str, project_root, window_name: str
     ]
     if str(window_name or '').strip():
         args.extend(['-n', str(window_name).strip()])
-    args.extend(
-        [
-            '-c',
-            str(project_root),
-            'sh',
-            '-lc',
-            _PLACEHOLDER_CMD,
-        ]
-    )
+    args.extend(['-c', str(project_root), *_placeholder_spawn_args(backend)])
     backend._tmux_run(args, check=True)  # type: ignore[attr-defined]
 
 
@@ -106,9 +116,7 @@ def create_window(backend, *, session_name: str, window_name: str, project_root,
             window_name,
             '-c',
             str(project_root),
-            'sh',
-            '-lc',
-            _PLACEHOLDER_CMD,
+            *_placeholder_spawn_args(backend),
         ],
         check=True,
     )  # type: ignore[attr-defined]
@@ -179,7 +187,15 @@ def window_root_pane(backend, *, target_window: str) -> str:
     return pane_id
 
 
-def kill_server(backend) -> bool:
+def kill_server(backend, *, session_name: str | None = None) -> bool:
+    session_text = str(session_name or '').strip()
+    if session_text:
+        killer = getattr(backend, 'kill_session', None)
+        if callable(killer):
+            try:
+                return bool(killer(session_text))
+            except Exception:
+                pass
     try:
         backend._tmux_run(['kill-server'], check=False, capture=True)  # type: ignore[attr-defined]
         return True

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
 import os
+from pathlib import Path
 
 from ccbd.api_models import RpcRequest
 from .socket_client_runtime import (
@@ -16,20 +16,27 @@ from .socket_client_runtime import (
 
 
 class CcbdClient:
-    def __init__(self, socket_path: str | Path, *, timeout_s: float | None = None) -> None:
-        self._socket_path = Path(socket_path)
+    def __init__(
+        self,
+        socket_path: str | Path,
+        *,
+        timeout_s: float | None = None,
+        ipc_kind: str | None = None,
+    ) -> None:
+        self._socket_path = socket_path
         self._timeout_s = _resolve_timeout(timeout_s)
+        self._ipc_kind = str(ipc_kind or '').strip() or None
 
     def request(self, op: str, payload: dict | None = None) -> dict:
         req = RpcRequest(op=op, request=payload or {})
         try:
-            sock = connect_socket(self._socket_path, timeout_s=self._timeout_s)
-        except OSError as exc:
+            sock = connect_socket(self._socket_path, timeout_s=self._timeout_s, ipc_kind=self._ipc_kind)
+        except (OSError, TimeoutError) as exc:
             raise CcbdClientError(str(exc)) from exc
         try:
             send_request(sock, req)
             raw = recv_response_line(sock)
-        except OSError as exc:
+        except (OSError, TimeoutError) as exc:
             raise CcbdClientError(str(exc)) from exc
         finally:
             sock.close()

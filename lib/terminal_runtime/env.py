@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import os
-import platform
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 import re
+
+
+_TRUE_VALUES = {'1', 'true', 'yes', 'on'}
 
 
 def env_float(name: str, default: float) -> float:
@@ -37,7 +40,12 @@ def sanitize_filename(value: str) -> str:
 
 
 def is_windows() -> bool:
-    return platform.system() == "Windows"
+    return os.name == "nt" or sys.platform == "win32"
+
+
+def experimental_windows_native_enabled() -> bool:
+    raw = str(os.environ.get('CCB_EXPERIMENTAL_WINDOWS_NATIVE') or '').strip().lower()
+    return raw in _TRUE_VALUES
 
 
 def subprocess_kwargs() -> dict:

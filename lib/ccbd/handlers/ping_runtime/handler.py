@@ -24,7 +24,12 @@ def build_ping_handler(
 ):
     def handle(payload: dict) -> dict:
         target = str(payload.get('target') or '').strip().lower()
-        health_monitor.check_all()
+        if target == 'all':
+            health_monitor.check_all()
+        elif target not in {'', 'ccbd'}:
+            runtime = registry.get(target)
+            if runtime is not None:
+                health_monitor._runtime_health(runtime)
         inspection = health_monitor.daemon_health()
         execution_summary = execution_state_store.summary() if execution_state_store is not None else {}
         restore_summary = load_restore_summary(restore_report_store)

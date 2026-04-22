@@ -4,13 +4,14 @@ import json
 from pathlib import Path
 
 _TAIL_SUFFIXES = {'.log', '.jsonl', '.txt', '.yaml', '.yml'}
-_COPY_SUFFIXES = {'.json', '.pid'}
+_COPY_SUFFIXES = {'.json', '.pid', '.id'}
 
 
 def project_root_sources(context) -> tuple[tuple[str, Path], ...]:
     items: list[tuple[str, Path]] = [
         ('project-config', context.paths.config_path),
         ('ccbd-authority', context.paths.ccbd_lease_path),
+        ('ccbd-authority', context.paths.ccbd_ipc_path),
         ('ccbd-authority', context.paths.ccbd_keeper_path),
         ('ccbd-authority', context.paths.ccbd_shutdown_intent_path),
         ('ccbd-authority', context.paths.ccbd_state_path),
@@ -81,10 +82,10 @@ def session_path_from_runtime(runtime_path: Path) -> Path | None:
 def archive_path_for_source(context, source: Path) -> str:
     try:
         relative = source.resolve().relative_to(context.project.project_root.resolve())
-        return str(Path('project') / relative)
+        return (Path('project') / relative).as_posix()
     except Exception:
         safe_parts = [part for part in source.parts if part not in ('/', '')]
-        return str(Path('external') / Path(*safe_parts[-4:]))
+        return (Path('external') / Path(*safe_parts[-4:])).as_posix()
 
 
 def _agent_source_items(context, *, seen_sources: set[Path]) -> list[tuple[str, Path]]:

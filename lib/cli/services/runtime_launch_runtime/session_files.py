@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -47,7 +48,7 @@ def write_session_file(
     if tmux_socket_name:
         payload["tmux_socket_name"] = str(tmux_socket_name)
     if tmux_socket_path:
-        payload["tmux_socket_path"] = str(Path(tmux_socket_path).expanduser())
+        payload["tmux_socket_path"] = os.path.expanduser(str(tmux_socket_path))
     payload.update(provider_payload)
     ok, error = safe_write_session(session_path, json.dumps(payload, ensure_ascii=False, indent=2))
     if not ok:

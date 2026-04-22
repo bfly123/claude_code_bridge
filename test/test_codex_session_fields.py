@@ -115,6 +115,9 @@ def test_load_codex_session_info_prefers_project_session_binding_over_registry(
             {
                 "codex_session_path": str(project_log),
                 "codex_session_id": "project-session-id",
+                "job_id": "job-object-9",
+                "runtime_pid": 4321,
+                "job_owner_pid": 8765,
             },
             ensure_ascii=False,
             indent=2,
@@ -153,7 +156,74 @@ def test_load_codex_session_info_prefers_project_session_binding_over_registry(
     assert info is not None
     assert info["codex_session_path"] == str(project_log)
     assert info["codex_session_id"] == "project-session-id"
+    assert info["job_id"] == "job-object-9"
+    assert info["runtime_pid"] == 4321
+    assert info["job_owner_pid"] == 8765
     assert info["_session_file"] == str(session_file)
+
+
+def test_load_codex_session_info_falls_back_to_runtime_job_id_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_file = tmp_path / ".ccb" / ".codex-session"
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    session_file.write_text(
+        json.dumps(
+            {
+                "active": True,
+                "runtime_dir": str(tmp_path / "runtime"),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    (runtime_dir / "job.id").write_text("job-object-77\n", encoding="utf-8")
+    (runtime_dir / "bridge.pid").write_text("7711\n", encoding="utf-8")
+    (runtime_dir / "job-owner.pid").write_text("7700\n", encoding="utf-8")
+    input_fifo = runtime_dir / "codex.pipe"
+    input_fifo.write_text("", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(tmp_path / ".home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / ".home"))
+    monkeypatch.setenv("CCB_SESSION_ID", "env-session")
+    monkeypatch.setenv("CODEX_RUNTIME_DIR", str(runtime_dir))
+    monkeypatch.setenv("CODEX_INPUT_FIFO", str(input_fifo))
+
+    info = load_codex_session_info(session_finder=lambda: session_file)
+
+    assert info is not None
+    assert info["job_id"] == "job-object-77"
+    assert info["job_owner_pid"] == 7700
+
+
+def test_load_codex_session_info_project_mode_falls_back_to_runtime_job_id_file(tmp_path: Path) -> None:
+    session_file = tmp_path / ".ccb" / ".codex-session"
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    session_file.write_text(
+        json.dumps(
+            {
+                "active": True,
+                "runtime_dir": str(runtime_dir),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (runtime_dir / "job.id").write_text("job-object-88\n", encoding="utf-8")
+    (runtime_dir / "bridge.pid").write_text("8811\n", encoding="utf-8")
+    (runtime_dir / "job-owner.pid").write_text("8800\n", encoding="utf-8")
+
+    info = load_codex_session_info(session_finder=lambda: session_file)
+
+    assert info is not None
+    assert info["job_id"] == "job-object-88"
+    assert info["job_owner_pid"] == 8800
 
 
 def test_codex_binding_tracker_refreshes_session_from_workdir_scoped_log(

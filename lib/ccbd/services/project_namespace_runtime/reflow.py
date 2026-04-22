@@ -70,7 +70,9 @@ def reflow_project_workspace(
         tmux_socket_path=context.desired_socket_path,
         tmux_session_name=context.desired_session_name,
     )
-    current_workspace_name = str(current.workspace_window_name or desired_workspace_name).strip() or desired_workspace_name
+    current_workspace_name = str(
+        getattr(current, 'workspace_name', None) or getattr(current, 'workspace_window_name', None) or desired_workspace_name
+    ).strip() or desired_workspace_name
     current_workspace = find_window(
         context.backend,
         session_name=context.desired_session_name,
@@ -142,13 +144,13 @@ def reflow_project_workspace(
     return ProjectNamespace(
         project_id=namespace.project_id,
         namespace_epoch=namespace.namespace_epoch,
-        tmux_socket_path=namespace.tmux_socket_path,
-        tmux_session_name=namespace.tmux_session_name,
+        tmux_socket_path=str(getattr(namespace, 'backend_ref', None) or getattr(namespace, 'tmux_socket_path', None) or ''),
+        tmux_session_name=str(getattr(namespace, 'session_name', None) or getattr(namespace, 'tmux_session_name', None) or ''),
         layout_version=namespace.layout_version,
         layout_signature=namespace.layout_signature,
         control_window_name=namespace.control_window_name,
         control_window_id=namespace.control_window_id,
-        workspace_window_name=namespace.workspace_window_name,
+        workspace_window_name=getattr(namespace, 'workspace_name', None) or getattr(namespace, 'workspace_window_name', None),
         workspace_window_id=namespace.workspace_window_id,
         workspace_epoch=namespace.workspace_epoch,
         ui_attachable=namespace.ui_attachable,

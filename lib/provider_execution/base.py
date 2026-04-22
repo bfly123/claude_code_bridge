@@ -20,9 +20,17 @@ class ProviderRuntimeContext:
     backend_type: str | None
     runtime_ref: str | None
     session_ref: str | None
+    runtime_root: str | None = None
     runtime_pid: int | None = None
     runtime_health: str | None = None
     runtime_binding_source: str | None = None
+    terminal_backend: str | None = None
+    session_file: str | None = None
+    session_id: str | None = None
+    tmux_socket_name: str | None = None
+    tmux_socket_path: str | None = None
+    job_id: str | None = None
+    job_owner_pid: int | None = None
 
 
 @dataclass(frozen=True)

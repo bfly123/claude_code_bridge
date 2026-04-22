@@ -17,6 +17,8 @@ class CcbdRuntimeSnapshot:
     workspace_path: str | None
     runtime_ref: str | None = None
     session_ref: str | None = None
+    session_file: str | None = None
+    session_id: str | None = None
     lifecycle_state: str | None = None
     desired_state: str | None = None
     reconcile_state: str | None = None
@@ -29,6 +31,8 @@ class CcbdRuntimeSnapshot:
     pane_state: str | None = None
     runtime_pid: int | None = None
     runtime_root: str | None = None
+    job_id: str | None = None
+    job_owner_pid: int | None = None
     last_failure_reason: str | None = None
 
     def __post_init__(self) -> None:
@@ -46,6 +50,8 @@ class CcbdRuntimeSnapshot:
             'workspace_path': self.workspace_path,
             'runtime_ref': self.runtime_ref,
             'session_ref': self.session_ref,
+            'session_file': self.session_file,
+            'session_id': self.session_id,
             'lifecycle_state': self.lifecycle_state,
             'desired_state': self.desired_state,
             'reconcile_state': self.reconcile_state,
@@ -58,6 +64,8 @@ class CcbdRuntimeSnapshot:
             'pane_state': self.pane_state,
             'runtime_pid': self.runtime_pid,
             'runtime_root': self.runtime_root,
+            'job_id': self.job_id,
+            'job_owner_pid': self.job_owner_pid,
             'last_failure_reason': self.last_failure_reason,
         }
 
@@ -71,6 +79,8 @@ class CcbdRuntimeSnapshot:
             workspace_path=clean_text(record.get('workspace_path')),
             runtime_ref=clean_text(record.get('runtime_ref')),
             session_ref=clean_text(record.get('session_ref')),
+            session_file=clean_text(record.get('session_file')),
+            session_id=clean_text(record.get('session_id')),
             lifecycle_state=clean_text(record.get('lifecycle_state')),
             desired_state=clean_text(record.get('desired_state')),
             reconcile_state=clean_text(record.get('reconcile_state')),
@@ -83,6 +93,8 @@ class CcbdRuntimeSnapshot:
             pane_state=clean_text(record.get('pane_state')),
             runtime_pid=coerce_int(record.get('runtime_pid')),
             runtime_root=clean_text(record.get('runtime_root')),
+            job_id=clean_text(record.get('job_id')),
+            job_owner_pid=coerce_int(record.get('job_owner_pid')),
             last_failure_reason=clean_text(record.get('last_failure_reason')),
         )
 
@@ -96,6 +108,8 @@ class CcbdRuntimeSnapshot:
             workspace_path=clean_text(getattr(runtime, 'workspace_path', None)),
             runtime_ref=clean_text(getattr(runtime, 'runtime_ref', None)),
             session_ref=clean_text(getattr(runtime, 'session_ref', None)),
+            session_file=clean_text(getattr(runtime, 'session_file', None)),
+            session_id=clean_text(getattr(runtime, 'session_id', None)),
             lifecycle_state=clean_text(getattr(runtime, 'lifecycle_state', None)),
             desired_state=clean_text(getattr(runtime, 'desired_state', None)),
             reconcile_state=clean_text(getattr(runtime, 'reconcile_state', None)),
@@ -108,6 +122,8 @@ class CcbdRuntimeSnapshot:
             pane_state=clean_text(getattr(runtime, 'pane_state', None)),
             runtime_pid=coerce_int(getattr(runtime, 'runtime_pid', None)),
             runtime_root=clean_text(getattr(runtime, 'runtime_root', None)),
+            job_id=clean_text(getattr(runtime, 'job_id', None)),
+            job_owner_pid=coerce_int(getattr(runtime, 'job_owner_pid', None)),
             last_failure_reason=clean_text(getattr(runtime, 'last_failure_reason', None)),
         )
 

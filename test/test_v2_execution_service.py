@@ -65,15 +65,19 @@ def _anchored_job_for_provider(
     return _job_for_provider(provider, job_id=request_anchor, task_id=task_id, body=body)
 
 
-def _runtime_context(tmp_path: Path) -> ProviderRuntimeContext:
+def _runtime_context(tmp_path: Path, **overrides) -> ProviderRuntimeContext:
+    values = {
+        'agent_name': 'agent1',
+        'workspace_path': str(tmp_path),
+        'backend_type': 'pane-backed',
+        'runtime_ref': 'codex:agent1:attached',
+        'session_ref': 'session:agent1',
+        'runtime_pid': 123,
+        'runtime_health': 'healthy',
+    }
+    values.update(overrides)
     return ProviderRuntimeContext(
-        agent_name='agent1',
-        workspace_path=str(tmp_path),
-        backend_type='pane-backed',
-        runtime_ref='codex:agent1:attached',
-        session_ref='session:agent1',
-        runtime_pid=123,
-        runtime_health='healthy',
+        **values,
     )
 
 
@@ -1159,6 +1163,61 @@ def test_execution_service_claude_adapter_can_resume_after_restart(monkeypatch: 
     assert update.decision is None
 
 
+def test_execution_service_claude_adapter_prefers_runtime_context_session_file_when_session_path_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from provider_execution import claude as claude_adapter_module
+
+    preferred_paths: list[Path] = []
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            del pane_id, text
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%2'
+
+    class FakeSession:
+        data = {}
+        claude_session_path = ''
+        work_dir = str(tmp_path)
+
+        def ensure_pane(self):
+            return True, '%2'
+
+    class FakeReader:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+
+        def set_preferred_session(self, session_path) -> None:
+            preferred_paths.append(Path(session_path))
+
+        def capture_state(self):
+            return {'offset': 0, 'carry': b''}
+
+        def try_get_entries(self, state):
+            return [], state
+
+    monkeypatch.setattr(claude_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(claude_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(claude_adapter_module, 'ClaudeLogReader', FakeReader)
+
+    session_file = str(tmp_path / 'claude-attached.jsonl')
+    service = ExecutionService(build_default_execution_registry(), clock=lambda: '2026-03-18T00:00:00Z')
+    job = _job_for_provider('claude', body='use attached session file')
+    service.start(
+        job,
+        runtime_context=_runtime_context(
+            tmp_path,
+            session_ref='claude-session-id',
+            session_file=session_file,
+        ),
+    )
+
+    assert preferred_paths == [Path(session_file)]
+    assert service._active[job.job_id].runtime_state['session_path'] == session_file
+
+
 def test_execution_service_claude_persists_before_ready_wait_and_resumes_prompt_dispatch(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1699,6 +1758,66 @@ def test_execution_service_codex_adapter_can_resume_after_restart(monkeypatch: p
     assert update.decision is None
 
 
+def test_execution_service_codex_adapter_prefers_runtime_context_session_hints_when_session_metadata_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from provider_execution import codex as codex_adapter_module
+
+    reader_calls: list[tuple[Path | None, str | None]] = []
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            del pane_id, text
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%1'
+
+    class FakeSession:
+        data = {}
+        codex_session_path = ''
+        codex_session_id = ''
+        work_dir = str(tmp_path)
+
+        def ensure_pane(self):
+            return True, '%1'
+
+    class FakeReader:
+        def __init__(self, *, log_path, session_id_filter, work_dir, follow_workspace_sessions) -> None:
+            del work_dir, follow_workspace_sessions
+            reader_calls.append((log_path, session_id_filter))
+
+        def capture_state(self):
+            return {}
+
+        def try_get_entries(self, state):
+            return [], state
+
+    monkeypatch.setattr(codex_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(codex_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(codex_adapter_module, 'CodexLogReader', FakeReader)
+
+    layout = PathLayout(tmp_path / 'codex-session-hints')
+    state_store = ExecutionStateStore(layout)
+    session_file = str(tmp_path / 'codex-attached.jsonl')
+    runtime_context = _runtime_context(
+        tmp_path,
+        session_ref='codex-session-id',
+        session_file=session_file,
+        session_id='codex-session-id',
+    )
+    service = ExecutionService(build_default_execution_registry(), clock=lambda: '2026-03-18T00:00:00Z', state_store=state_store)
+    job = _job_for_provider('codex', body='use attached codex session hints')
+    service.start(job, runtime_context=runtime_context)
+
+    assert reader_calls[0] == (Path(session_file), 'codex-session-id')
+    assert service._active[job.job_id].runtime_state['session_path'] == session_file
+
+    restarted = ExecutionService(build_default_execution_registry(), clock=lambda: '2026-03-18T00:00:05Z', state_store=state_store)
+    restored = restarted.restore(job, runtime_context=runtime_context)
+    assert restored.restored is True
+    assert reader_calls[1] == (Path(session_file), 'codex-session-id')
+
+
 def test_execution_service_codex_adapter_persists_log_switch_without_immediate_entries(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2178,6 +2297,67 @@ def test_execution_service_gemini_adapter_emits_session_snapshot_items(monkeypat
     ]
     assert update.items[-1].payload['reply'] == 'stable reply'
     assert update.decision is None
+
+
+def test_execution_service_gemini_adapter_prefers_runtime_context_session_file_when_session_path_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from provider_execution import gemini as gemini_adapter_module
+
+    preferred_paths: list[Path] = []
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            del pane_id, text
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%3'
+
+    class FakeSession:
+        data = {}
+        gemini_session_path = ''
+        gemini_session_id = 'gemini-session-id'
+        work_dir = str(tmp_path)
+
+        def ensure_pane(self):
+            return True, '%3'
+
+    class FakeReader:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+
+        def set_preferred_session(self, session_path) -> None:
+            preferred_paths.append(Path(session_path))
+
+        def capture_state(self):
+            return {'msg_count': 0}
+
+        def try_get_message(self, state):
+            return '', state
+
+    monkeypatch.setattr(gemini_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(gemini_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(gemini_adapter_module, 'GeminiLogReader', FakeReader)
+
+    layout = PathLayout(tmp_path / 'gemini-session-hints')
+    state_store = ExecutionStateStore(layout)
+    session_file = str(tmp_path / 'gemini-attached.json')
+    runtime_context = _runtime_context(
+        tmp_path,
+        session_ref='gemini-session-id',
+        session_file=session_file,
+    )
+    service = ExecutionService(build_default_execution_registry(), clock=lambda: '2026-03-18T00:00:00Z', state_store=state_store)
+    job = _job_for_provider('gemini', body='use attached gemini session file')
+    service.start(job, runtime_context=runtime_context)
+
+    assert preferred_paths[0] == Path(session_file)
+    assert service._active[job.job_id].runtime_state['session_path'] == session_file
+
+    restarted = ExecutionService(build_default_execution_registry(), clock=lambda: '2026-03-18T00:00:05Z', state_store=state_store)
+    restored = restarted.restore(job, runtime_context=runtime_context)
+    assert restored.restored is True
+    assert preferred_paths[-1] == Path(session_file)
 
 
 def test_execution_service_gemini_adapter_respects_no_wrap_provider_option(

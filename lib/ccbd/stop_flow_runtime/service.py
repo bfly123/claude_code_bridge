@@ -10,7 +10,7 @@ from cli.services.tmux_project_cleanup import cleanup_project_tmux_orphans_by_so
 from terminal_runtime.tmux import normalize_socket_name
 
 from .models import StopAllExecution, StopAllSummary
-from .pid_cleanup import collect_pid_candidates, terminate_runtime_pids
+from .pid_cleanup import collect_pid_candidates, runtime_job_id, runtime_job_owner_pid, terminate_runtime_pids
 from .runtime_records import best_effort_runtime, extra_agent_dir_names
 from .tmux_cleanup import cleanup_stop_tmux_orphans
 
@@ -29,6 +29,8 @@ def stop_all_project(
 ) -> StopAllExecution:
     tmux_sockets: set[str | None] = set()
     pid_candidates: dict[int, list[Path]] = {}
+    priority_pids: list[int] = []
+    pid_metadata: dict[int, dict[str, object]] = {}
     stopped_agents: list[str] = []
     runtime_store = AgentRuntimeStore(paths)
     configured_agent_names = tuple(registry.list_known_agents())
@@ -58,12 +60,28 @@ def stop_all_project(
             socket_name = normalize_socket_name(runtime.tmux_socket_name)
             if socket_name is not None:
                 tmux_sockets.add(socket_name)
+        owner_pid = runtime_job_owner_pid(
+            paths.agent_dir(agent_name),
+            runtime=runtime,
+            fallback_to_agent_dir=force,
+        )
+        job_id = runtime_job_id(
+            paths.agent_dir(agent_name),
+            runtime=runtime,
+            fallback_to_agent_dir=force,
+        )
+        if owner_pid is not None and owner_pid not in priority_pids:
+            priority_pids.append(owner_pid)
         for pid, sources in collect_pid_candidates(
             paths.agent_dir(agent_name),
             runtime=runtime,
             fallback_to_agent_dir=force,
         ).items():
             pid_candidates.setdefault(pid, []).extend(sources)
+            _capture_pid_metadata(pid_metadata, pid, job_id=job_id, job_owner_pid=owner_pid)
+            if owner_pid is not None and owner_pid != pid:
+                pid_candidates.setdefault(owner_pid, []).extend(sources)
+                _capture_pid_metadata(pid_metadata, owner_pid, job_id=job_id, job_owner_pid=owner_pid)
         if runtime is None or agent_name not in configured_agent_names:
             continue
         registry.upsert(
@@ -77,6 +95,8 @@ def stop_all_project(
                 socket_path=None,
                 health='stopped',
                 runtime_pid=None,
+                job_id=None,
+                job_owner_pid=None,
                 runtime_root=None,
                 pane_id=None,
                 active_pane_id=None,
@@ -104,12 +124,17 @@ def stop_all_project(
         cleanup_project_tmux_orphans_by_socket_fn=cleanup_project_tmux_orphans_by_socket_fn,
         tmux_cleanup_history_store_cls=tmux_cleanup_history_store_cls,
     )
-    terminate_runtime_pids(project_root=project_root, pid_candidates=pid_candidates)
+    terminate_runtime_pids(
+        project_root=project_root,
+        pid_candidates=pid_candidates,
+        priority_pids=tuple(priority_pids),
+        pid_metadata=pid_metadata,
+    )
     actions_taken.append(f'terminate_runtime_pids:{len(pid_candidates)}')
     summary = StopAllSummary(
         project_id=project_id,
         state='unmounted',
-        socket_path=str(paths.ccbd_socket_path),
+        socket_path=str(paths.ccbd_ipc_ref),
         forced=force,
         stopped_agents=tuple(stopped_agents),
         cleanup_summaries=cleanup_summaries,
@@ -123,3 +148,20 @@ def stop_all_project(
 
 
 __all__ = ['stop_all_project']
+
+
+def _capture_pid_metadata(
+    pid_metadata: dict[int, dict[str, object]],
+    pid: int | None,
+    *,
+    job_id: str | None,
+    job_owner_pid: int | None,
+) -> None:
+    if pid is None:
+        return
+    entry = pid_metadata.setdefault(pid, {})
+    normalized_job_id = str(job_id or '').strip()
+    if normalized_job_id and 'job_id' not in entry:
+        entry['job_id'] = normalized_job_id
+    if job_owner_pid is not None and 'job_owner_pid' not in entry:
+        entry['job_owner_pid'] = job_owner_pid

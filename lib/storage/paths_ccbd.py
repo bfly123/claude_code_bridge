@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from .path_helpers import default_ipc_kind, named_pipe_ref
+
 
 _TMUX_SAFE_NAME_RE = re.compile(r'[^A-Za-z0-9_-]+')
 
@@ -84,6 +86,20 @@ class CcbdMountPathMixin:
     @property
     def ccbd_socket_path(self):
         return self._project_socket_path('ccbd')
+
+    @property
+    def ccbd_ipc_kind(self) -> str:
+        return default_ipc_kind()
+
+    @property
+    def ccbd_ipc_ref(self) -> str:
+        if self.ccbd_ipc_kind == 'named_pipe':
+            return named_pipe_ref(project_socket_key=self.project_socket_key, stem='ccbd')
+        return str(self.ccbd_socket_path)
+
+    @property
+    def ccbd_ipc_path(self):
+        return self.ccbd_dir / 'ipc.json'
 
     @property
     def ccbd_state_path(self):

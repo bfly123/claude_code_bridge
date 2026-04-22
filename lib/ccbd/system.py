@@ -4,7 +4,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 import os
 import platform
-import socket
+
+from ccbd.ipc import endpoint_connectable
 
 
 def utc_now() -> str:
@@ -53,22 +54,16 @@ def process_exists(pid: int | None) -> bool:
 
 
 def unix_socket_connectable(path: str | Path, *, timeout_s: float = 0.2) -> bool:
-    target = Path(path)
-    if not target.exists() or not hasattr(socket, 'AF_UNIX'):
-        return False
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(timeout_s)
-    try:
-        sock.connect(str(target))
-        return True
-    except OSError:
-        return False
-    finally:
-        sock.close()
+    return endpoint_connectable(path, timeout_s=timeout_s, ipc_kind='unix_socket')
+
+
+def ipc_endpoint_connectable(path: str | Path, *, timeout_s: float = 0.2, ipc_kind: str | None = None) -> bool:
+    return endpoint_connectable(path, timeout_s=timeout_s, ipc_kind=ipc_kind)
 
 
 __all__ = [
     'current_uid',
+    'ipc_endpoint_connectable',
     'parse_utc_timestamp',
     'process_exists',
     'read_boot_id',

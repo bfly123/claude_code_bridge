@@ -13,6 +13,8 @@ from cli.services.kill_runtime.agent_cleanup import (
 from cli.services.kill_runtime.finalize import finalize_kill as _finalize_kill_impl
 from cli.services.kill_runtime.lifecycle import destroy_project_namespace as _destroy_project_namespace_impl
 from cli.services.kill_runtime.pid_cleanup import (
+    LocalProcessTreeOwner,
+    WindowsJobMetadataProcessTreeOwnerFactory,
     collect_agent_pid_candidates as _collect_agent_pid_candidates_impl,
     collect_project_process_candidates as _collect_project_process_candidates_impl,
     path_within as _path_within_impl,
@@ -158,13 +160,17 @@ _path_within = _path_within_impl
 _remove_pid_files = _remove_pid_files_impl
 
 
-def _terminate_runtime_pids(*, project_root, pid_candidates) -> None:
+def _terminate_runtime_pids(*, project_root, pid_candidates, priority_pids=(), pid_metadata=None) -> None:
+    local_owner = LocalProcessTreeOwner(terminate_pid_tree)
     _terminate_runtime_pids_impl(
         project_root=project_root,
         pid_candidates=pid_candidates,
+        priority_pids=priority_pids,
+        pid_metadata=pid_metadata,
         is_pid_alive_fn=is_pid_alive,
         pid_matches_project_fn=_pid_matches_project,
-        terminate_pid_tree_fn=terminate_pid_tree,
+        process_tree_owner=local_owner,
+        process_tree_owner_factory=WindowsJobMetadataProcessTreeOwnerFactory(local_owner),
         remove_pid_files_fn=_remove_pid_files,
         collect_project_process_candidates_fn=_collect_project_process_candidates_impl,
     )

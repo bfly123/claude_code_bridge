@@ -8,7 +8,7 @@ from .models import ExecutionRestoreResult
 from .persistence import filter_pending_items, persist_submission
 
 
-def adapter_or_result(service, job: JobRecord):
+def adapter_or_result(service, job: JobRecord, *, runtime_context: ProviderRuntimeContext | None = None):
     adapter = service._registry.get(job.provider)
     if adapter is not None:
         return adapter, None
@@ -17,10 +17,11 @@ def adapter_or_result(service, job: JobRecord):
         job,
         reason='adapter_missing',
         resume_capable=False,
+        runtime_context=runtime_context,
     )
 
 
-def persisted_state_or_result(service, job: JobRecord):
+def persisted_state_or_result(service, job: JobRecord, *, runtime_context: ProviderRuntimeContext | None = None):
     persisted = load_persisted_state(service, job)
     if persisted is None:
         return None, result(
@@ -28,6 +29,7 @@ def persisted_state_or_result(service, job: JobRecord):
             status='missing',
             reason='state_missing',
             resume_capable=False,
+            runtime_context=runtime_context,
         )
     if persisted.provider == job.provider:
         return persisted, None
@@ -37,6 +39,7 @@ def persisted_state_or_result(service, job: JobRecord):
         reason='provider_mismatch',
         resume_capable=persisted.resume_capable,
         pending_items_count=len(persisted.pending_items),
+        runtime_context=persisted.runtime_context or runtime_context,
     )
 
 
@@ -65,6 +68,7 @@ def resume_or_result(adapter, service, job: JobRecord, persisted, pending_items:
             reason='provider_resume_unsupported',
             resume_capable=persisted.resume_capable,
             pending_items_count=len(pending_items),
+            runtime_context=restored_context or persisted.runtime_context,
         )
     submission = resume_submission(adapter, service, job, persisted, restored_context)
     if submission is not None:
@@ -75,6 +79,7 @@ def resume_or_result(adapter, service, job: JobRecord, persisted, pending_items:
         reason='provider_resume_rejected',
         resume_capable=persisted.resume_capable,
         pending_items_count=len(pending_items),
+        runtime_context=restored_context or persisted.runtime_context,
     )
 
 
@@ -90,23 +95,30 @@ def persist_restored_submission(service, job_id: str, submission, *, restored_co
     )
 
 
-def restored_result(job: JobRecord, *, pending_items: list) -> ExecutionRestoreResult:
+def restored_result(
+    job: JobRecord,
+    *,
+    pending_items: list,
+    runtime_context: ProviderRuntimeContext | None = None,
+) -> ExecutionRestoreResult:
     return result(
         job,
         status='replay_pending' if pending_items else 'restored',
         reason='pending_items_recovered' if pending_items else 'provider_resumed',
         resume_capable=True,
         pending_items_count=len(pending_items),
+        runtime_context=runtime_context,
     )
 
 
-def restore_preflight_result(service, job: JobRecord) -> ExecutionRestoreResult | None:
+def restore_preflight_result(service, job: JobRecord, *, runtime_context: ProviderRuntimeContext | None = None) -> ExecutionRestoreResult | None:
     if job.job_id in service._active:
         return result(
             job,
             status='restored',
             reason='already_active',
             resume_capable=True,
+            runtime_context=service._runtime_contexts.get(job.job_id) or runtime_context,
         )
     if service._state_store is None:
         return result(
@@ -114,6 +126,7 @@ def restore_preflight_result(service, job: JobRecord) -> ExecutionRestoreResult 
             status='missing',
             reason='state_store_disabled',
             resume_capable=False,
+            runtime_context=runtime_context,
         )
     return None
 
@@ -129,6 +142,7 @@ def abandon_restore(
     reason: str,
     resume_capable: bool,
     pending_items_count: int = 0,
+    runtime_context: ProviderRuntimeContext | None = None,
 ) -> ExecutionRestoreResult:
     service._state_store.remove(job.job_id)
     return result(
@@ -137,6 +151,7 @@ def abandon_restore(
         reason=reason,
         resume_capable=resume_capable,
         pending_items_count=pending_items_count,
+        runtime_context=runtime_context,
     )
 
 
@@ -146,6 +161,7 @@ def terminal_pending_restore(job: JobRecord, persisted) -> ExecutionRestoreResul
         status='terminal_pending',
         reason='terminal_decision_recovered',
         resume_capable=persisted.resume_capable,
+        runtime_context=persisted.runtime_context,
         decision=persisted.pending_decision,
     )
 
@@ -167,6 +183,7 @@ def result(
     reason: str,
     resume_capable: bool,
     pending_items_count: int = 0,
+    runtime_context: ProviderRuntimeContext | None = None,
     decision=None,
 ) -> ExecutionRestoreResult:
     return ExecutionRestoreResult(
@@ -177,6 +194,7 @@ def result(
         reason=reason,
         resume_capable=resume_capable,
         pending_items_count=pending_items_count,
+        runtime_context=runtime_context,
         decision=decision,
     )
 

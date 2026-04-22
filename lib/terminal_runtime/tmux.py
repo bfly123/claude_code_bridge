@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import shutil
 
 
 def tmux_base(
@@ -8,9 +10,23 @@ def tmux_base(
     *,
     socket_path: str | None = None,
 ) -> list[str]:
-    cmd = ["tmux"]
+    cmd = list(resolved_tmux_command())
     cmd.extend(socket_base_args(socket_name=socket_name, socket_path=socket_path))
     return cmd
+
+
+def resolved_tmux_command(
+    *,
+    which_fn=shutil.which,
+    os_name: str | None = None,
+    comspec: str | None = None,
+) -> list[str]:
+    resolved = str(which_fn('tmux') or '').strip()
+    if not resolved:
+        return ['tmux']
+    if str(os_name or os.name) == 'nt' and Path(resolved).suffix.lower() in {'.cmd', '.bat'}:
+        return [str(comspec or os.environ.get('COMSPEC') or 'cmd.exe'), '/c', resolved]
+    return [resolved]
 
 
 def socket_base_args(*, socket_name: str | None, socket_path: str | None) -> list[str]:

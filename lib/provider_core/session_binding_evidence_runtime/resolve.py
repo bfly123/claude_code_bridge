@@ -8,6 +8,8 @@ from .binding import AgentBinding
 from .fields import (
     session_file,
     session_id,
+    session_job_id,
+    session_job_owner_pid,
     session_ref,
     session_runtime_pid,
     session_runtime_ref,
@@ -78,6 +80,8 @@ def resolve_agent_binding(
         active_pane_id=pane_details['active_pane_id'],
         pane_title_marker=pane_details['pane_title_marker'],
         pane_state=pane_details['pane_state'],
+        job_id=session_job_id(session),
+        job_owner_pid=session_job_owner_pid(session),
     )
 
 

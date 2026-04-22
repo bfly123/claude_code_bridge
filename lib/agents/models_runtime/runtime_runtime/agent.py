@@ -27,6 +27,8 @@ class AgentRuntime:
     provider: str | None = None
     runtime_root: str | None = None
     runtime_pid: int | None = None
+    job_id: str | None = None
+    job_owner_pid: int | None = None
     terminal_backend: str | None = None
     pane_id: str | None = None
     active_pane_id: str | None = None
@@ -75,6 +77,8 @@ class AgentRuntime:
             'provider': self.provider,
             'runtime_root': self.runtime_root,
             'runtime_pid': self.runtime_pid,
+            'job_id': self.job_id,
+            'job_owner_pid': self.job_owner_pid,
             'terminal_backend': self.terminal_backend,
             'pane_id': self.pane_id,
             'active_pane_id': self.active_pane_id,

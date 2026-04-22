@@ -79,7 +79,8 @@ def _spawn_daemon(app: ProjectKeeper, *, state: KeeperState, start_timeout_s: fl
         load_project_config(app.project_root)
         app._spawn_ccbd_process(
             project_root=app.project_root,
-            socket_path=app.paths.ccbd_socket_path,
+            socket_path=app.paths.ccbd_ipc_ref,
+            ipc_kind=app.paths.ccbd_ipc_kind,
             ccbd_dir=app.paths.ccbd_dir,
             timeout_s=start_timeout_s,
             keeper_pid=app.pid,

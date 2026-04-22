@@ -24,6 +24,8 @@ def build_active_state(
     workspace_epoch: int,
     ui_attachable: bool,
     last_started_at: str | None,
+    backend_family: str | None = None,
+    backend_impl: str | None = None,
 ):
     return ProjectNamespaceState(
         project_id=project_id,
@@ -41,6 +43,8 @@ def build_active_state(
         last_started_at=last_started_at,
         last_destroyed_at=current.last_destroyed_at if current is not None else None,
         last_destroy_reason=current.last_destroy_reason if current is not None else None,
+        backend_family=backend_family or (getattr(current, 'backend_family', None) if current is not None else None),
+        backend_impl=backend_impl or (getattr(current, 'backend_impl', None) if current is not None else None),
     )
 
 
@@ -91,6 +95,8 @@ def build_destroyed_state(
         last_started_at=None,
         last_destroyed_at=occurred_at,
         last_destroy_reason=reason,
+        backend_family=None,
+        backend_impl=None,
     )
 
 

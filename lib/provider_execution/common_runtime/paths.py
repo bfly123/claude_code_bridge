@@ -8,10 +8,17 @@ def normalize_session_path(value: object) -> str:
     return str(normalized) if normalized is not None else ''
 
 
-def preferred_session_path(session_path: str, session_ref: str | None) -> Path | None:
+def preferred_session_path(
+    session_path: object,
+    session_ref: str | None,
+    session_file: object | None = None,
+) -> Path | None:
     preferred = expand_path(session_path)
     if preferred is not None:
         return preferred
+    explicit_file = expand_path(session_file)
+    if explicit_file is not None:
+        return explicit_file
     ref = str(session_ref or '').strip()
     if not looks_like_session_path(ref):
         return None

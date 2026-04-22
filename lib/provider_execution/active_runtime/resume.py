@@ -7,6 +7,7 @@ from typing import Callable
 from ccbd.api_models import JobRecord
 
 from ..base import ProviderRuntimeContext, ProviderSubmission
+from .start import load_runtime_session
 from .start import _session_selector_name
 
 
@@ -26,7 +27,12 @@ def resume_active_submission(
     if work_dir is None:
         return None
 
-    prepared = _resume_prepared_session(job, work_dir, load_session_fn=load_session_fn)
+    prepared = _resume_prepared_session(
+        job,
+        work_dir,
+        context=context,
+        load_session_fn=load_session_fn,
+    )
     if prepared is None:
         return None
     session, pane_id = prepared
@@ -65,9 +71,15 @@ def _resume_prepared_session(
     job: JobRecord,
     work_dir: Path,
     *,
+    context: ProviderRuntimeContext | None,
     load_session_fn: Callable[[Path, str], object | None],
 ) -> tuple[object, str] | None:
-    session = load_session_fn(work_dir, agent_name=_session_selector_name(job))
+    session = load_runtime_session(
+        load_session_fn=load_session_fn,
+        work_dir=work_dir,
+        agent_name=_session_selector_name(job),
+        context=context,
+    )
     if session is None:
         return None
     ok, pane_or_err = session.ensure_pane()

@@ -177,7 +177,7 @@ def cmd_slot_matches_namespace(
         return False
     workspace_window_id = str(getattr(namespace, 'workspace_window_id', None) or '').strip() or None
     return record.matches(
-        tmux_session_name=str(getattr(namespace, 'tmux_session_name', None) or '').strip(),
+        tmux_session_name=_namespace_session_name(namespace),
         project_id=ctx.project_id,
         role='cmd',
         slot_key='cmd',
@@ -207,7 +207,7 @@ def _build_namespace_backend(namespace_controller: ProjectNamespaceController, n
     try:
         return build_backend(
             namespace_controller._backend_factory,
-            socket_path=str(getattr(namespace, 'tmux_socket_path', None) or '').strip(),
+            socket_path=_namespace_backend_ref(namespace),
         )
     except Exception:
         return None
@@ -230,6 +230,14 @@ def _load_root_pane_id(namespace_controller: ProjectNamespaceController, namespa
         return None
     pane_text = str(pane_id or '').strip()
     return pane_text if pane_text.startswith('%') else None
+
+
+def _namespace_backend_ref(namespace) -> str:
+    return str(getattr(namespace, 'backend_ref', None) or getattr(namespace, 'tmux_socket_path', None) or '').strip()
+
+
+def _namespace_session_name(namespace) -> str:
+    return str(getattr(namespace, 'session_name', None) or getattr(namespace, 'tmux_session_name', None) or '').strip()
 
 
 __all__ = ['reconcile_cmd_slot']

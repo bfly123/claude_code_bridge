@@ -17,8 +17,22 @@ class ProjectNamespace:
     workspace_window_id: str | None
     workspace_epoch: int
     ui_attachable: bool
+    backend_family: str | None = None
+    backend_impl: str | None = None
     created_this_call: bool = False
     workspace_recreated_this_call: bool = False
+
+    @property
+    def backend_ref(self) -> str:
+        return self.tmux_socket_path
+
+    @property
+    def session_name(self) -> str:
+        return self.tmux_session_name
+
+    @property
+    def workspace_name(self) -> str | None:
+        return self.workspace_window_name
 
     @classmethod
     def from_state(cls, state) -> ProjectNamespace:
@@ -35,6 +49,8 @@ class ProjectNamespace:
             workspace_window_id=state.workspace_window_id,
             workspace_epoch=state.workspace_epoch,
             ui_attachable=state.ui_attachable,
+            backend_family=getattr(state, 'backend_family', None),
+            backend_impl=getattr(state, 'backend_impl', None),
             created_this_call=False,
             workspace_recreated_this_call=False,
         )
@@ -48,6 +64,14 @@ class ProjectNamespaceDestroySummary:
     tmux_session_name: str
     destroyed: bool
     reason: str
+
+    @property
+    def backend_ref(self) -> str:
+        return self.tmux_socket_path
+
+    @property
+    def session_name(self) -> str:
+        return self.tmux_session_name
 
 
 __all__ = ['ProjectNamespace', 'ProjectNamespaceDestroySummary']

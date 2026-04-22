@@ -1,25 +1,18 @@
 from __future__ import annotations
 
-from pathlib import Path
 import json
-import socket
 
 from ccbd.api_models import RpcRequest, RpcResponse
+from ccbd.ipc import connect_client
 
 from .errors import CcbdClientError
 
 
-def connect_socket(socket_path: Path, *, timeout_s: float):
-    if not hasattr(socket, 'AF_UNIX'):
-        raise CcbdClientError('unix domain sockets are not supported on this platform')
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(timeout_s)
+def connect_socket(socket_path, *, timeout_s: float, ipc_kind: str | None = None):
     try:
-        sock.connect(str(socket_path))
+        return connect_client(socket_path, timeout_s=timeout_s, ipc_kind=ipc_kind)
     except OSError as exc:
-        sock.close()
         raise CcbdClientError(str(exc)) from exc
-    return sock
 
 
 def send_request(sock, request: RpcRequest) -> None:

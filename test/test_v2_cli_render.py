@@ -358,9 +358,15 @@ def test_render_ps_and_doctor_keep_expected_line_shapes() -> None:
                 'binding_status': 'ready',
                 'runtime_ref': 'tmux:%1',
                 'session_ref': '/tmp/.codex-session',
+                'session_file': '/tmp/.codex-session',
+                'session_id': 'codex-session',
                 'binding_source': 'provider-session',
                 'workspace_path': '/tmp/ws/codex',
                 'terminal': 'tmux',
+                'runtime_pid': 4321,
+                'runtime_root': '/tmp/runtime-root',
+                'job_id': 'job-object-1',
+                'job_owner_pid': 654,
                 'tmux_socket_name': 'sock-a',
                 'tmux_socket_path': None,
                 'pane_id': '%1',
@@ -401,6 +407,12 @@ def test_render_ps_and_doctor_keep_expected_line_shapes() -> None:
             'state': 'mounted',
             'health': 'healthy',
             'generation': 1,
+            'ipc_kind': 'named_pipe',
+            'ipc_ref': r'\\.\pipe\ccb-proj-1-ccbd',
+            'ipc_state': 'mounted',
+            'ipc_updated_at': '2026-04-03T00:05:00Z',
+            'backend_family': 'tmux',
+            'backend_impl': 'psmux',
             'last_heartbeat_at': '2026-03-18T00:00:00Z',
             'pid_alive': True,
             'socket_connectable': True,
@@ -423,6 +435,9 @@ def test_render_ps_and_doctor_keep_expected_line_shapes() -> None:
             'last_restore_already_active_count': 0,
             'last_restore_results_text': '',
             'namespace_epoch': 4,
+            'namespace_backend_ref': r'\\.\pipe\psmux-repo',
+            'namespace_session_name': 'ccb-repo',
+            'namespace_workspace_name': 'ccb',
             'namespace_tmux_socket_path': '/tmp/repo/.ccb/ccbd/tmux.sock',
             'namespace_tmux_session_name': 'ccb-repo',
             'namespace_layout_version': 1,
@@ -430,9 +445,12 @@ def test_render_ps_and_doctor_keep_expected_line_shapes() -> None:
             'namespace_last_started_at': '2026-04-03T00:05:00Z',
             'namespace_last_destroyed_at': None,
             'namespace_last_destroy_reason': None,
+            'namespace_backend_family': 'tmux',
+            'namespace_backend_impl': 'psmux',
             'namespace_last_event_kind': 'namespace_created',
             'namespace_last_event_at': '2026-04-03T00:05:00Z',
             'namespace_last_event_epoch': 4,
+            'namespace_last_event_backend_ref': r'\\.\pipe\psmux-repo',
             'namespace_last_event_socket_path': '/tmp/repo/.ccb/ccbd/tmux.sock',
             'namespace_last_event_session_name': 'ccb-repo',
         },
@@ -445,9 +463,15 @@ def test_render_ps_and_doctor_keep_expected_line_shapes() -> None:
                 'binding_status': 'ready',
                 'runtime_ref': 'tmux:%1',
                 'session_ref': '/tmp/.codex-session',
+                'session_file': '/tmp/.codex-session',
+                'session_id': 'codex-session',
                 'binding_source': 'external-attach',
                 'workspace_path': '/tmp/ws/codex',
                 'terminal': 'tmux',
+                'runtime_pid': 4321,
+                'runtime_root': '/tmp/runtime-root',
+                'job_id': 'job-object-1',
+                'job_owner_pid': 654,
                 'tmux_socket_name': 'sock-a',
                 'tmux_socket_path': None,
                 'pane_id': '%1',
@@ -469,7 +493,9 @@ def test_render_ps_and_doctor_keep_expected_line_shapes() -> None:
     assert ps_lines[2] == 'agent: name=codex state=idle provider=codex queue=0'
     assert ps_lines[3] == (
         'binding: status=ready runtime=tmux:%1 session=/tmp/.codex-session '
+        'session_file=/tmp/.codex-session session_id=codex-session '
         'source=provider-session workspace=/tmp/ws/codex terminal=tmux '
+        'runtime_pid=4321 runtime_root=/tmp/runtime-root job=job-object-1 job_owner=654 '
         'socket=sock-a socket_path=None pane=%1 active_pane=%1 pane_state=alive marker=CCB-codex'
     )
 
@@ -479,11 +505,21 @@ def test_render_ps_and_doctor_keep_expected_line_shapes() -> None:
     assert 'requirement_tmux_available: True' in doctor_lines
     assert 'requirement_provider: name=codex executable=codex available=True path=/usr/bin/codex' in doctor_lines
     assert 'ccbd_state: mounted' in doctor_lines
+    assert r'ccbd_ipc_ref: \\.\pipe\ccb-proj-1-ccbd' in doctor_lines
+    assert 'ccbd_ipc_state: mounted' in doctor_lines
+    assert 'ccbd_backend_impl: psmux' in doctor_lines
+    assert r'ccbd_namespace_backend_ref: \\.\pipe\psmux-repo' in doctor_lines
+    assert 'ccbd_namespace_session_name: ccb-repo' in doctor_lines
+    assert 'ccbd_namespace_workspace_name: ccb' in doctor_lines
     assert 'ccbd_namespace_tmux_session_name: ccb-repo' in doctor_lines
+    assert 'ccbd_namespace_backend_impl: psmux' in doctor_lines
+    assert r'ccbd_namespace_last_event_backend_ref: \\.\pipe\psmux-repo' in doctor_lines
     assert 'agent: name=codex health=healthy provider=codex completion=protocol_turn' in doctor_lines
     assert (
         'binding: status=ready runtime=tmux:%1 session=/tmp/.codex-session '
+        'session_file=/tmp/.codex-session session_id=codex-session '
         'source=external-attach workspace=/tmp/ws/codex terminal=tmux '
+        'runtime_pid=4321 runtime_root=/tmp/runtime-root job=job-object-1 job_owner=654 '
         'socket=sock-a socket_path=None pane=%1 active_pane=%1 pane_state=alive marker=CCB-codex'
     ) in doctor_lines
     assert 'restore: supported=True mode=provider_resume reason=None' in doctor_lines

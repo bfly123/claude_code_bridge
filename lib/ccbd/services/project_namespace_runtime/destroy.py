@@ -12,7 +12,7 @@ def destroy_project_namespace(controller, *, reason: str):
     tmux_socket_path = str(current.tmux_socket_path) if current is not None else str(controller._layout.ccbd_tmux_socket_path)
     tmux_session_name = str(current.tmux_session_name) if current is not None else controller._layout.ccbd_tmux_session_name
     backend = build_backend(controller._backend_factory, socket_path=tmux_socket_path)
-    destroyed = kill_server(backend)
+    destroyed = kill_server(backend, session_name=tmux_session_name)
     next_state = build_destroyed_state(
         current=current,
         project_id=controller._project_id,

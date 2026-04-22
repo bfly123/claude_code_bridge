@@ -5,6 +5,7 @@ from agents.runtime_binding import merge_runtime_binding, runtime_binding_from_r
 
 from ..runtime_attach import (
     binding_source_for_attach,
+    coerce_pid,
     normalized_text,
     pane_id_from_runtime_ref,
     resolve_session_fields,
@@ -27,6 +28,8 @@ def resolve_attach_runtime_values(
     provider: str | None,
     runtime_root: str | None,
     runtime_pid: int | None,
+    job_id: str | None,
+    job_owner_pid: int | None,
     terminal_backend: str | None,
     pane_id: str | None,
     active_pane_id: str | None,
@@ -59,7 +62,17 @@ def resolve_attach_runtime_values(
         session_id_explicit=session_id is not None,
     )
     runtime_ref_value = merged_binding.runtime_ref
-    next_health = health or (existing.health if existing is not None else 'healthy')
+    binding_source_value = binding_source_for_attach(existing, explicit=binding_source)
+    next_health = resolved_attach_health(
+        existing,
+        explicit_health=health,
+        binding_source=binding_source_value,
+        runtime_ref=runtime_ref_value,
+        session_ref=session_ref_value,
+        runtime_pid=runtime_pid,
+        pane_id=pane_id,
+        active_pane_id=active_pane_id,
+    )
     next_state = state_for_attach(existing.state if existing is not None else None, next_health)
     pane_id_value = preferred_pane_id(existing, pane_id=pane_id, runtime_ref_value=runtime_ref_value)
     return AttachRuntimeValues(
@@ -72,6 +85,8 @@ def resolve_attach_runtime_values(
         provider=next_provider(existing, spec, provider),
         runtime_root=preferred_text(existing, 'runtime_root', runtime_root),
         runtime_pid=next_runtime_pid(existing, runtime_pid=runtime_pid, pid=pid),
+        job_id=preferred_text(existing, 'job_id', job_id),
+        job_owner_pid=preferred_pid(existing, field_name='job_owner_pid', explicit_value=job_owner_pid),
         terminal_backend=preferred_terminal_backend(existing, terminal_backend=terminal_backend, runtime_ref_value=runtime_ref_value),
         pane_id=pane_id_value,
         active_pane_id=preferred_active_pane_id(existing, active_pane_id=active_pane_id, pane_id_value=pane_id_value),
@@ -87,8 +102,33 @@ def resolve_attach_runtime_values(
         lifecycle_state=next_lifecycle_state(existing, lifecycle_state=lifecycle_state, next_state=next_state),
         binding_generation=(existing.binding_generation + 1) if existing is not None else 1,
         managed_by=preferred_text(existing, 'managed_by', managed_by, default='ccbd') or 'ccbd',
-        binding_source=binding_source_for_attach(existing, explicit=binding_source),
+        binding_source=binding_source_value,
     )
+
+
+def resolved_attach_health(
+    existing,
+    *,
+    explicit_health: str | None,
+    binding_source: RuntimeBindingSource,
+    runtime_ref: str | None,
+    session_ref: str | None,
+    runtime_pid: int | None,
+    pane_id: str | None,
+    active_pane_id: str | None,
+) -> str:
+    normalized_health = normalized_text(explicit_health)
+    if normalized_health is not None:
+        return normalized_health
+    if existing is None:
+        return 'healthy'
+    if existing.health in {'healthy', 'restored'}:
+        return existing.health
+    if binding_source is RuntimeBindingSource.EXTERNAL_ATTACH and any(
+        value is not None for value in (runtime_ref, session_ref, runtime_pid, pane_id, active_pane_id)
+    ):
+        return 'healthy'
+    return existing.health
 
 
 def next_provider(existing, spec, provider: str | None) -> str:
@@ -139,6 +179,14 @@ def preferred_workspace_epoch(existing, *, workspace_epoch: int | None) -> int |
     if existing is not None:
         return existing.workspace_epoch
     return None
+
+
+def preferred_pid(existing, *, field_name: str, explicit_value: int | None) -> int | None:
+    if explicit_value is not None:
+        return coerce_pid(explicit_value)
+    if existing is None:
+        return None
+    return coerce_pid(getattr(existing, field_name, None))
 
 
 def next_runtime_pid(existing, *, runtime_pid: int | None, pid: int | None) -> int | None:

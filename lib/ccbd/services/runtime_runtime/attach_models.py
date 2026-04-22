@@ -16,6 +16,8 @@ class AttachRuntimeValues:
     provider: str
     runtime_root: str | None
     runtime_pid: int | None
+    job_id: str | None
+    job_owner_pid: int | None
     terminal_backend: str | None
     pane_id: str | None
     active_pane_id: str | None

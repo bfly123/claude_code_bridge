@@ -100,7 +100,27 @@ class CcbdShutdownReport:
 
 
 def runtime_snapshots_summary(items: tuple[CcbdRuntimeSnapshot, ...]) -> str:
-    return '; '.join(f'{item.agent_name}:{item.state}/{item.health}' for item in items) or 'none'
+    summaries: list[str] = []
+    for item in items:
+        summary = f'{item.agent_name}:{item.state}/{item.health}'
+        session = item.session_id or item.session_ref or item.session_file
+        extras: list[str] = []
+        if item.terminal_backend:
+            extras.append(f'terminal={item.terminal_backend}')
+        if item.runtime_ref:
+            extras.append(f'runtime={item.runtime_ref}')
+        if session:
+            extras.append(f'session={session}')
+        if item.runtime_root:
+            extras.append(f'runtime_root={item.runtime_root}')
+        if item.runtime_pid is not None:
+            extras.append(f'pid={item.runtime_pid}')
+        if item.job_id:
+            extras.append(f'job={item.job_id}')
+        if item.job_owner_pid is not None:
+            extras.append(f'owner={item.job_owner_pid}')
+        summaries.append(summary if not extras else f'{summary} ' + ' '.join(extras))
+    return '; '.join(summaries) or 'none'
 
 
 def _validate_record(record: dict[str, Any], *, expected_type: str) -> None:

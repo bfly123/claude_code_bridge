@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 from cli.services.tmux_start_layout import TmuxStartLayout
+from terminal_runtime.env import experimental_windows_native_enabled, is_windows
 
 
 def prepare_start_layout(
@@ -101,6 +102,12 @@ def bootstrap_project_namespace_cmd_pane(
 
 
 def cmd_bootstrap_command() -> str:
+    if is_windows() and experimental_windows_native_enabled():
+        return (
+            'if (Get-Command pwsh -ErrorAction SilentlyContinue) { pwsh -NoLogo } '
+            'elseif (Get-Command powershell -ErrorAction SilentlyContinue) { powershell -NoLogo } '
+            'else { cmd.exe }'
+        )
     return (
         'if [ -n "${SHELL:-}" ]; then exec "$SHELL" -l; fi; '
         'if command -v bash >/dev/null 2>&1; then exec bash -l; fi; '

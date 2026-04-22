@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from pathlib import Path
+import os
 
 from ccbd.models import CcbdLease, LeaseHealth, LeaseInspection, MountState
-from ccbd.system import parse_utc_timestamp, process_exists, unix_socket_connectable, utc_now
+from ccbd.system import ipc_endpoint_connectable, parse_utc_timestamp, process_exists, utc_now
 from storage.locks import file_lock
 from storage.paths import PathLayout
 
@@ -21,8 +22,9 @@ class OwnershipGuard:
         *,
         clock=utc_now,
         pid_exists=process_exists,
-        socket_probe=unix_socket_connectable,
+        socket_probe=ipc_endpoint_connectable,
         heartbeat_grace_seconds: float = 15.0,
+        current_pid: int | None = None,
     ) -> None:
         self._layout = layout
         self._mount_manager = mount_manager
@@ -30,6 +32,7 @@ class OwnershipGuard:
         self._pid_exists = pid_exists
         self._socket_probe = socket_probe
         self._heartbeat_grace_seconds = heartbeat_grace_seconds
+        self._current_pid = os.getpid() if current_pid is None else int(current_pid)
 
     @contextmanager
     def startup_lock(self):
@@ -128,7 +131,13 @@ class OwnershipGuard:
     def _mounted_socket_connectable(self, lease: CcbdLease) -> bool:
         if lease.mount_state is not MountState.MOUNTED:
             return False
-        return self._socket_probe(lease.socket_path)
+        if lease.ccbd_pid == self._current_pid:
+            return True
+        ipc_kind = getattr(lease, 'ipc_kind', None)
+        try:
+            return self._socket_probe(lease.socket_path, ipc_kind=ipc_kind)
+        except TypeError:
+            return self._socket_probe(lease.socket_path)
 
     def _takeover_allowed(
         self,
@@ -185,8 +194,8 @@ class OwnershipGuard:
         )
 
     def _same_holder(self, lease: CcbdLease, *, pid: int, socket_path: str | Path) -> bool:
-        current_socket = str(Path(lease.socket_path))
-        desired_socket = str(Path(socket_path))
+        current_socket = str(lease.socket_path)
+        desired_socket = str(socket_path)
         return lease.ccbd_pid == pid and current_socket == desired_socket
 
 

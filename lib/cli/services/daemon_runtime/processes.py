@@ -90,7 +90,8 @@ def spawn_ccbd(context, *, start_timeout_s: float) -> None:
     try:
         spawn_ccbd_process(
             project_root=context.project.project_root,
-            socket_path=context.paths.ccbd_socket_path,
+            socket_path=context.paths.ccbd_ipc_ref,
+            ipc_kind=context.paths.ccbd_ipc_kind,
             ccbd_dir=context.paths.ccbd_dir,
             timeout_s=start_timeout_s,
         )

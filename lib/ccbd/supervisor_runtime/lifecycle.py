@@ -36,6 +36,21 @@ def start_supervisor(
             if supervisor._project_namespace is not None
             else None
         )
+        namespace_backend_ref = (
+            str(getattr(namespace, 'backend_ref', None) or getattr(namespace, 'tmux_socket_path', None) or '').strip()
+            if namespace is not None
+            else None
+        )
+        namespace_session_name = (
+            str(getattr(namespace, 'session_name', None) or getattr(namespace, 'tmux_session_name', None) or '').strip()
+            if namespace is not None
+            else None
+        )
+        namespace_workspace_name = (
+            getattr(namespace, 'workspace_name', None) or getattr(namespace, 'workspace_window_name', None)
+            if namespace is not None
+            else None
+        )
         summary = run_start_flow_fn(
             project_root=supervisor._project_root,
             project_id=supervisor._project_id,
@@ -47,9 +62,9 @@ def start_supervisor(
             auto_permission=auto_permission,
             cleanup_tmux_orphans=cleanup_tmux_orphans,
             interactive_tmux_layout=interactive_tmux_layout,
-            tmux_socket_path=namespace.tmux_socket_path if namespace is not None else None,
-            tmux_session_name=namespace.tmux_session_name if namespace is not None else None,
-            tmux_workspace_window_name=getattr(namespace, 'workspace_window_name', None) if namespace is not None else None,
+            tmux_socket_path=namespace_backend_ref,
+            tmux_session_name=namespace_session_name,
+            tmux_workspace_window_name=namespace_workspace_name,
             namespace_epoch=namespace.namespace_epoch if namespace is not None else None,
             workspace_window_id=getattr(namespace, 'workspace_window_id', None) if namespace is not None else None,
             workspace_epoch=getattr(namespace, 'workspace_epoch', None) if namespace is not None else None,

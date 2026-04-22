@@ -198,6 +198,8 @@ def test_ensure_agent_runtime_launches_named_codex_session(monkeypatch, tmp_path
     assert payload['tmux_socket_path'] == '/tmp/ccb-agent.sock'
     assert payload['work_dir'] == str(plan.workspace_path)
     assert payload['work_dir_norm']
+    assert payload['runtime_pid'] == 4242
+    assert payload['job_owner_pid'] == 9911
     assert payload['codex_start_cmd'].startswith('export ')
     assert 'disable_paste_burst=true' in payload['codex_start_cmd']
     assert spawned['kwargs']['env']['CCB_SESSION_FILE'] == str(expected_session)

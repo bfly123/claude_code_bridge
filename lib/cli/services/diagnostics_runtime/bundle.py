@@ -21,11 +21,8 @@ def export_diagnostic_bundle(context, command) -> DiagnosticBundleSummary:
     doctor_data, doctor_error = _doctor_payload(context)
     entries: list[DiagnosticBundleEntry] = []
 
-    support_dir = context.paths.ccbd_support_dir
-    support_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='bundle-', dir=str(support_dir)) as tmpdir:
-        stage_root = Path(tmpdir) / bundle_id
-        stage_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='ccb-bundle-') as tmpdir:
+        stage_root = Path(tmpdir)
         _write_generated_payloads(
             stage_root,
             context=context,

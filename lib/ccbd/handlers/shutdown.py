@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ccbd.stop_flow import build_shutdown_runtime_snapshots
 from ccbd.models import CcbdShutdownReport
 
 def build_shutdown_handler(app):
@@ -8,6 +9,11 @@ def build_shutdown_handler(app):
         app.request_shutdown()
         lease = app.mount_manager.load_state()
         inspection = app.ownership_guard.inspect()
+        runtime_snapshots = build_shutdown_runtime_snapshots(
+            paths=app.paths,
+            config=app.config,
+            registry=app.registry,
+        )
         app.shutdown_report_store.save(
             CcbdShutdownReport(
                 project_id=app.project_id,
@@ -21,7 +27,7 @@ def build_shutdown_handler(app):
                 inspection_after=inspection.to_record(),
                 actions_taken=('request_shutdown',),
                 cleanup_summaries=(),
-                runtime_snapshots=(),
+                runtime_snapshots=runtime_snapshots,
                 failure_reason=None,
             )
         )

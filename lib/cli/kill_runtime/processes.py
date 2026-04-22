@@ -12,6 +12,8 @@ def kill_pid(pid: int, *, force: bool = False) -> bool:
         return False
     try:
         if os.name == "nt":
+            if not _windows_pid_safe_to_terminate(pid):
+                return False
             if force:
                 subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
             else:
@@ -72,6 +74,8 @@ def _kill_pid_tree_once(pid: int, *, force: bool) -> bool:
 
 
 def _kill_pid_tree_windows(pid: int, *, force: bool) -> bool:
+    if not _windows_pid_safe_to_terminate(pid):
+        return False
     try:
         subprocess.run(_taskkill_tree_args(pid, force=force), capture_output=True)
         return True
@@ -125,6 +129,69 @@ def _safe_getpgrp() -> int | None:
     try:
         return os.getpgrp()
     except Exception:
+        return None
+
+
+def _windows_pid_safe_to_terminate(pid: int) -> bool:
+    if os.name != 'nt':
+        return True
+    if pid <= 0:
+        return False
+    protected = _windows_protected_pids()
+    if pid in protected:
+        return False
+    lineage = _windows_ancestor_chain(pid)
+    return os.getpid() in lineage
+
+
+def _windows_protected_pids() -> set[int]:
+    current_pid = int(os.getpid() or 0)
+    protected = {current_pid}
+    try:
+        parent_pid = int(os.getppid() or 0)
+    except Exception:
+        parent_pid = 0
+    if parent_pid > 0:
+        protected.add(parent_pid)
+    protected.update(_windows_ancestor_chain(current_pid))
+    return {value for value in protected if value > 0}
+
+
+def _windows_ancestor_chain(pid: int, *, max_depth: int = 32) -> tuple[int, ...]:
+    lineage: list[int] = []
+    seen: set[int] = set()
+    current = int(pid or 0)
+    while current > 0 and current not in seen and len(lineage) < max_depth:
+        lineage.append(current)
+        seen.add(current)
+        parent = _windows_process_parent_pid(current)
+        if parent is None or parent <= 0 or parent == current:
+            break
+        current = parent
+    return tuple(lineage)
+
+
+def _windows_process_parent_pid(pid: int) -> int | None:
+    if os.name != 'nt' or pid <= 0:
+        return None
+    command = f"$p = Get-CimInstance Win32_Process -Filter \"ProcessId={int(pid)}\"; if ($p) {{ [Console]::Out.Write($p.ParentProcessId) }}"
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    text = str(result.stdout or '').strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except ValueError:
         return None
 
 

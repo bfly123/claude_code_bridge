@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from completion.models import CompletionDecision
+from provider_execution.base import ProviderRuntimeContext
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,7 @@ class ExecutionRestoreResult:
     reason: str
     resume_capable: bool
     pending_items_count: int = 0
+    runtime_context: ProviderRuntimeContext | None = None
     decision: CompletionDecision | None = None
 
     @property

@@ -22,6 +22,30 @@ def collect_pid_candidates(agent_dir: Path, *, runtime, fallback_to_agent_dir: b
     return candidates
 
 
+def runtime_job_owner_pid(agent_dir: Path, *, runtime, fallback_to_agent_dir: bool) -> int | None:
+    direct = coerce_pid(getattr(runtime, 'job_owner_pid', None)) if runtime is not None else None
+    if direct is not None:
+        return direct
+    for root in resolved_runtime_roots(agent_dir, runtime=runtime, fallback_to_agent_dir=fallback_to_agent_dir):
+        for pid_path in _runtime_marker_paths(root, 'job-owner.pid', 'owner.pid', 'bridge.pid'):
+            pid = read_pid_file(pid_path)
+            if pid is not None:
+                return pid
+    return None
+
+
+def runtime_job_id(agent_dir: Path, *, runtime, fallback_to_agent_dir: bool) -> str | None:
+    direct = str(getattr(runtime, 'job_id', '') or '').strip() if runtime is not None else ''
+    if direct:
+        return direct
+    for root in resolved_runtime_roots(agent_dir, runtime=runtime, fallback_to_agent_dir=fallback_to_agent_dir):
+        for job_path in _runtime_marker_paths(root, 'job.id'):
+            job_id = _read_text_file(job_path)
+            if job_id is not None:
+                return job_id
+    return None
+
+
 def collect_project_process_candidates(
     project_root: Path,
     *,
@@ -50,4 +74,30 @@ def collect_project_process_candidates(
     return candidates
 
 
-__all__ = ['collect_pid_candidates', 'collect_project_process_candidates']
+def _read_text_file(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    try:
+        text = path.read_text(encoding='utf-8').strip()
+    except Exception:
+        return None
+    return text or None
+
+
+def _runtime_marker_paths(root: Path, *names: str) -> tuple[Path, ...]:
+    candidates: list[Path] = []
+    seen: set[Path] = set()
+    for name in names:
+        direct = root / name
+        if direct not in seen:
+            seen.add(direct)
+            candidates.append(direct)
+        for nested in sorted(root.rglob(name)):
+            if nested in seen:
+                continue
+            seen.add(nested)
+            candidates.append(nested)
+    return tuple(candidates)
+
+
+__all__ = ['collect_pid_candidates', 'collect_project_process_candidates', 'runtime_job_id', 'runtime_job_owner_pid']

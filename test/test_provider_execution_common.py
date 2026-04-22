@@ -41,6 +41,7 @@ def test_preferred_session_path_rejects_non_path_like_refs() -> None:
     assert preferred_session_path('', 'session-id-123') is None
     assert preferred_session_path('/tmp/demo.json', None) == Path('/tmp/demo.json')
     assert preferred_session_path('', '~/demo.jsonl') == Path('~/demo.jsonl').expanduser()
+    assert preferred_session_path('', 'session-id-123', '~/attached.jsonl') == Path('~/attached.jsonl').expanduser()
 
 
 def test_runtime_state_serialization_roundtrip_preserves_supported_types(tmp_path: Path) -> None:

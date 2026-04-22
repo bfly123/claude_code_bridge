@@ -1,10 +1,18 @@
 from __future__ import annotations
 
 from provider_core.session_binding_evidence import (
+    session_file,
+    session_id,
+    session_job_id,
+    session_job_owner_pid,
     session_pane_title_marker,
     session_ref,
+    session_runtime_pid,
+    session_runtime_root,
     session_runtime_ref,
     session_terminal,
+    session_tmux_socket_name,
+    session_tmux_socket_path,
 )
 
 
@@ -13,6 +21,8 @@ def runtime_fields_from_facts(runtime, facts) -> dict[str, object]:
         'runtime_ref': facts.runtime_ref or runtime.runtime_ref,
         'runtime_root': facts.runtime_root or runtime.runtime_root,
         'runtime_pid': facts.runtime_pid if facts.runtime_pid is not None else runtime.runtime_pid,
+        'job_id': facts.job_id or getattr(runtime, 'job_id', None),
+        'job_owner_pid': facts.job_owner_pid if facts.job_owner_pid is not None else getattr(runtime, 'job_owner_pid', None),
         'terminal_backend': facts.terminal_backend or runtime.terminal_backend,
         'pane_id': facts.pane_id or runtime.pane_id,
         'pane_title_marker': facts.pane_title_marker or runtime.pane_title_marker,
@@ -28,20 +38,32 @@ def runtime_fields_from_session(runtime, session, binding=None) -> dict[str, obj
     bound_runtime_ref = session_runtime_ref(session)
     if bound_runtime_ref:
         next_runtime_ref = bound_runtime_ref
+    provider_name = str(
+        getattr(runtime, 'provider', None) or getattr(binding, 'provider', None) or ''
+    ).strip()
     pane_id = str(getattr(session, 'pane_id', '') or '').strip() or runtime.pane_id
     terminal = str(session_terminal(session) or '').strip() or runtime.terminal_backend
     pane_title = str(session_pane_title_marker(session) or '').strip() or runtime.pane_title_marker
+    bound_session_id = (
+        session_id(session, session_id_attr=binding.session_id_attr)
+        if binding is not None and hasattr(binding, 'session_id_attr')
+        else None
+    )
     return {
         'runtime_ref': next_runtime_ref,
-        'runtime_root': runtime.runtime_root,
-        'runtime_pid': runtime.runtime_pid,
+        'runtime_root': session_runtime_root(session) or runtime.runtime_root,
+        'runtime_pid': (
+            session_runtime_pid(session, provider=provider_name) if provider_name else None
+        ) or runtime.runtime_pid,
+        'job_id': session_job_id(session) or getattr(runtime, 'job_id', None),
+        'job_owner_pid': session_job_owner_pid(session) or getattr(runtime, 'job_owner_pid', None),
         'terminal_backend': terminal,
         'pane_id': pane_id,
         'pane_title_marker': pane_title,
-        'tmux_socket_name': runtime.tmux_socket_name,
-        'tmux_socket_path': runtime.tmux_socket_path,
-        'session_file': runtime.session_file,
-        'session_id': runtime.session_id,
+        'tmux_socket_name': session_tmux_socket_name(session) or runtime.tmux_socket_name,
+        'tmux_socket_path': session_tmux_socket_path(session) or runtime.tmux_socket_path,
+        'session_file': session_file(session) or runtime.session_file,
+        'session_id': bound_session_id or runtime.session_id,
     }
 
 

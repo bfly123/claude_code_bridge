@@ -8,6 +8,7 @@ It is the authoritative design anchor for:
 
 - `.ccb/ccbd/startup-report.json`
 - `.ccb/ccbd/shutdown-report.json`
+- `.ccb/ccbd/ipc.json`
 - `.ccb/ccbd/state.json`
 - `.ccb/ccbd/start-policy.json`
 - `.ccb/ccbd/lifecycle.jsonl`
@@ -112,6 +113,7 @@ Rules:
 
 Paths:
 
+- `.ccb/ccbd/ipc.json`
 - `.ccb/ccbd/state.json`
 - `.ccb/ccbd/start-policy.json`
 - `.ccb/ccbd/lifecycle.jsonl`
@@ -119,6 +121,7 @@ Paths:
 
 Rules:
 
+- `ipc.json` records the latest persisted backend ipc facts such as `ipc_kind`, `ipc_ref`, `backend_family`, and `backend_impl`
 - `state.json` records the latest persisted project tmux namespace facts
 - `start-policy.json` records the persisted project recovery startup policy, including inherited `auto_permission` and forced recovery-restore semantics
 - `lifecycle.jsonl` records namespace creation/destruction and later runtime lifecycle events
@@ -136,6 +139,7 @@ Rules:
 Rules:
 
 - it must summarize current backend inspection plus latest persisted reports
+- it should surface persisted `ipc_ref`, `ipc_state`, and `ipc_updated_at` when available
 - agent binding diagnostics must include both `tmux_socket_name` and `tmux_socket_path` when known so project-scoped namespace bugs can be diagnosed from logs alone
 - it must not crash only because one diagnostics artifact is missing or malformed
 - malformed diagnostics files must surface as diagnostics errors, not silent omission
@@ -156,7 +160,7 @@ The support bundle must include:
 - a generated doctor snapshot
 - current project config from `.ccb/ccb.config`
 - latest lifecycle reports
-- backend authority files such as lease, keeper, shutdown intent, and namespace state when present
+- backend authority files such as lease, keeper, shutdown intent, ipc state, and namespace state when present
 - backend recovery policy authority such as `start-policy.json` when present
 - persisted non-lease heartbeat state under `.ccb/ccbd/heartbeats/` when present
 - recent backend event streams such as supervision, namespace lifecycle, and cleanup history

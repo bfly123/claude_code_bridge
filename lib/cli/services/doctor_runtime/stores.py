@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from agents.store import AgentRuntimeStore
+from ccbd.ipc_state_store import CcbdIpcStateStore
 from ccbd.lifecycle_report_store import CcbdShutdownReportStore, CcbdStartupReportStore
 from ccbd.restore_report_store import CcbdRestoreReportStore
 from ccbd.services.project_namespace_state import ProjectNamespaceEventStore, ProjectNamespaceStateStore
@@ -19,6 +20,7 @@ def doctor_stores(context) -> dict[str, object]:
         'restore_report': CcbdRestoreReportStore(context.paths),
         'startup_report': CcbdStartupReportStore(context.paths),
         'shutdown_report': CcbdShutdownReportStore(context.paths),
+        'ipc_state': CcbdIpcStateStore(context.paths),
         'namespace_state': ProjectNamespaceStateStore(context.paths),
         'namespace_event': ProjectNamespaceEventStore(context.paths),
         'start_policy': CcbdStartPolicyStore(context.paths),
@@ -29,6 +31,8 @@ def doctor_stores(context) -> dict[str, object]:
 def report_summary_fields(report) -> dict:
     if report is None:
         return {}
+    if isinstance(report, dict):
+        return dict(report)
     return report.summary_fields()
 
 

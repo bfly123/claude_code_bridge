@@ -60,6 +60,8 @@ class AgentRegistry:
             queue_depth=0,
             health='stopped',
             runtime_pid=None,
+            job_id=None,
+            job_owner_pid=None,
             pane_id=None,
             active_pane_id=None,
             pane_state=None,

@@ -10,8 +10,9 @@ def pane_outside_project_namespace(*, runtime, namespace_state_store, backend, p
     namespace_state = _load_namespace_state(namespace_state_store)
     if namespace_state is None:
         return False
-    if not _backend_matches_namespace_socket(backend, namespace_state.tmux_socket_path):
-        return _runtime_socket_matches_namespace(runtime, namespace_state.tmux_socket_path)
+    backend_ref = _namespace_backend_ref(namespace_state)
+    if not _backend_matches_namespace_socket(backend, backend_ref):
+        return _runtime_socket_matches_namespace(runtime, backend_ref)
     record = inspect_project_namespace_pane(backend, pane_text)
     return _record_outside_namespace(runtime, namespace_state, record)
 
@@ -42,7 +43,7 @@ def _record_outside_namespace(runtime, namespace_state, record) -> bool:
         return True
     slot_key = str(getattr(runtime, 'slot_key', None) or getattr(runtime, 'agent_name', None) or '').strip() or None
     if not record.matches(
-        tmux_session_name=namespace_state.tmux_session_name,
+        tmux_session_name=_namespace_session_name(namespace_state),
         project_id=runtime.project_id,
         role='agent',
         slot_key=slot_key,
@@ -53,6 +54,17 @@ def _record_outside_namespace(runtime, namespace_state, record) -> bool:
     if workspace_window_id and str(getattr(record, 'window_id', None) or '').strip():
         return str(record.window_id).strip() != workspace_window_id
     return False
+
+
+def _namespace_backend_ref(namespace_state) -> str | None:
+    value = getattr(namespace_state, 'backend_ref', None) or getattr(namespace_state, 'tmux_socket_path', None)
+    text = str(value or '').strip()
+    return text or None
+
+
+def _namespace_session_name(namespace_state) -> str:
+    value = getattr(namespace_state, 'session_name', None) or getattr(namespace_state, 'tmux_session_name', None)
+    return str(value or '').strip()
 
 
 __all__ = ['pane_outside_project_namespace']

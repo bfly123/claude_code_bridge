@@ -7,6 +7,8 @@ from provider_core.instance_resolution import named_agent_instance
 from provider_core.session_binding_evidence import (
     session_file,
     session_id,
+    session_job_id,
+    session_job_owner_pid,
     session_pane_title_marker,
     session_ref,
     session_runtime_pid,
@@ -32,6 +34,8 @@ class ProviderRuntimeFacts:
     tmux_socket_path: str | None
     session_file: str | None
     session_id: str | None
+    job_id: str | None = None
+    job_owner_pid: int | None = None
 
 
 def load_provider_session(binding, workspace_path: Path, agent_name: str):
@@ -77,6 +81,8 @@ def build_provider_runtime_facts(
         tmux_socket_path=session_tmux_socket_path(session),
         session_file=session_file(session),
         session_id=session_id(session, session_id_attr=binding.session_id_attr),
+        job_id=session_job_id(session),
+        job_owner_pid=session_job_owner_pid(session),
     )
 
 

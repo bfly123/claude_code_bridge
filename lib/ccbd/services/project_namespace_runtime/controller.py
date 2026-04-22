@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from storage.paths import PathLayout
-from terminal_runtime import TmuxBackend
+from terminal_runtime import default_mux_backend_cls
 
 from ccbd.system import utc_now
 
@@ -37,7 +37,7 @@ class ProjectNamespaceController(ProjectNamespaceControllerStateMixin):
             layout=layout,
             project_id=resolved_project_id,
             clock=clock,
-            backend_factory=backend_factory or TmuxBackend,
+            backend_factory=backend_factory or default_mux_backend_cls(),
             state_store=state_store or ProjectNamespaceStateStore(layout),
             event_store=event_store or ProjectNamespaceEventStore(layout),
             layout_version=resolved_layout_version,
@@ -83,14 +83,20 @@ class ProjectNamespaceController(ProjectNamespaceControllerStateMixin):
         current = namespace or self.load()
         if current is None:
             raise RuntimeError('project namespace is not available')
-        backend = build_backend(self._backend_factory, socket_path=current.tmux_socket_path)
-        workspace_window_name = str(current.workspace_window_name or '').strip()
+        backend = build_backend(
+            self._backend_factory,
+            socket_path=str(getattr(current, 'backend_ref', None) or getattr(current, 'tmux_socket_path', None) or '').strip(),
+        )
+        session_name = str(getattr(current, 'session_name', None) or getattr(current, 'tmux_session_name', None) or '').strip()
+        workspace_window_name = str(
+            getattr(current, 'workspace_name', None) or getattr(current, 'workspace_window_name', None) or ''
+        ).strip()
         if workspace_window_name:
             return window_root_pane(
                 backend,
-                target_window=session_window_target(current.tmux_session_name, workspace_window_name),
+                target_window=session_window_target(session_name, workspace_window_name),
             )
-        return session_root_pane(backend, current.tmux_session_name)
+        return session_root_pane(backend, session_name)
 
 
 __all__ = ['ProjectNamespaceController']

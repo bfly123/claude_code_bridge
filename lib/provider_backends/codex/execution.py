@@ -73,19 +73,33 @@ class CodexProviderAdapter:
         )
 
 
-def _reader_factory(session, preferred_log: Path | None):
+def _reader_factory(session, preferred_log: Path | None, preferred_session_id: str | None = None):
     return CodexLogReader(
         log_path=preferred_log if preferred_log is not None else (Path(session.codex_session_path).expanduser() if session.codex_session_path else None),
-        session_id_filter=session.codex_session_id or None,
+        session_id_filter=session.codex_session_id or preferred_session_id or None,
         work_dir=Path(session.work_dir),
         follow_workspace_sessions=True,
     )
 
 
-def _load_session(work_dir: Path, agent_name: str):
+def _load_session(
+    work_dir: Path,
+    *,
+    agent_name: str,
+    session_file: str | None = None,
+    session_id: str | None = None,
+    session_ref: str | None = None,
+):
     from .execution_runtime.start import load_session as _runtime_load_session
 
-    return _runtime_load_session(load_project_session, work_dir, agent_name=agent_name)
+    return _runtime_load_session(
+        load_project_session,
+        work_dir,
+        agent_name=agent_name,
+        session_file=session_file,
+        session_id=session_id,
+        session_ref=session_ref,
+    )
 
 
 def build_execution_adapter() -> CodexProviderAdapter:

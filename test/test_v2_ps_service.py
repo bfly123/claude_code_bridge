@@ -22,10 +22,14 @@ def test_ps_summary_includes_tmux_socket_and_pane_observation(tmp_path, monkeypa
         binding_source=SimpleNamespace(value='provider-session'),
         runtime_ref='tmux:%52',
         session_ref='session-2',
-        session_file=None,
+        session_file='/tmp/agent1.session.json',
         session_id='session-2',
+        runtime_pid=4321,
+        runtime_root='/tmp/runtime-root',
         workspace_path=str(project_root / '.ccb' / 'workspaces' / 'agent1'),
         terminal_backend='tmux',
+        job_id='job-object-1',
+        job_owner_pid=654,
         tmux_socket_name='sock-a',
         tmux_socket_path='/tmp/ccb.sock',
         pane_id='%41',
@@ -50,7 +54,13 @@ def test_ps_summary_includes_tmux_socket_and_pane_observation(tmp_path, monkeypa
     assert len(payload['agents']) == 1
     agent = payload['agents'][0]
     assert agent['runtime_ref'] == 'tmux:%52'
-    assert agent['session_ref'] == 'session-2'
+    assert agent['session_ref'] == '/tmp/agent1.session.json'
+    assert agent['session_file'] == '/tmp/agent1.session.json'
+    assert agent['session_id'] == 'session-2'
+    assert agent['runtime_pid'] == 4321
+    assert agent['runtime_root'] == '/tmp/runtime-root'
+    assert agent['job_id'] == 'job-object-1'
+    assert agent['job_owner_pid'] == 654
     assert agent['tmux_socket_name'] == 'sock-a'
     assert agent['tmux_socket_path'] == '/tmp/ccb.sock'
     assert agent['pane_id'] == '%41'

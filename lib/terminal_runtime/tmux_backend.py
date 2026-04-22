@@ -6,6 +6,7 @@ import re
 import subprocess
 
 from terminal_runtime.backend_types import TerminalBackend
+from terminal_runtime.mux_backend import MuxBackend
 from terminal_runtime.env import subprocess_kwargs as _subprocess_kwargs_impl
 from terminal_runtime.tmux import tmux_base as _tmux_base_impl
 from terminal_runtime.tmux_backend_control import TmuxBackendControlMixin
@@ -36,6 +37,7 @@ class TmuxBackend(
     TmuxBackendPaneQueryMixin,
     TmuxBackendPaneMutationMixin,
     TmuxBackendControlMixin,
+    MuxBackend,
     TerminalBackend,
 ):
     _ANSI_RE = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
@@ -51,6 +53,18 @@ class TmuxBackend(
         ).strip() or None
         self._pane_log_info: dict[str, float] = {}
         self._services: TmuxBackendServices = _build_backend_services_impl(self)
+
+    @property
+    def backend_family(self) -> str:
+        return 'tmux'
+
+    @property
+    def backend_impl(self) -> str:
+        return 'tmux'
+
+    @property
+    def backend_ref(self) -> str | None:
+        return str(self._socket_path or self._socket_name or '').strip() or None
 
     def _tmux_base(self) -> list[str]:
         return _tmux_base_impl(self._socket_name, socket_path=self._socket_path)
@@ -83,6 +97,48 @@ class TmuxBackend(
     @staticmethod
     def _env_tmux_pane() -> str:
         return os.environ.get('TMUX_PANE', '')
+
+    def session_exists(self, session_name: str) -> bool:
+        session_text = str(session_name or '').strip()
+        if not session_text:
+            return False
+        try:
+            self._tmux_run(['has-session', '-t', session_text], check=True)
+            return True
+        except Exception:
+            return False
+
+    def select_window(self, target: str) -> bool:
+        target_text = str(target or '').strip()
+        if not target_text:
+            return False
+        try:
+            self._tmux_run(['select-window', '-t', target_text], check=True)
+            return True
+        except Exception:
+            return False
+
+    def attach_session(self, session_name: str, *, env: dict[str, str] | None = None) -> int:
+        session_text = str(session_name or '').strip()
+        if not session_text:
+            raise RuntimeError('session_name cannot be empty')
+        cp = subprocess.run(
+            [*self._tmux_base(), 'attach-session', '-t', session_text],
+            check=False,
+            env=env,
+            **_subprocess_kwargs(),
+        )
+        return int(cp.returncode)
+
+    def kill_session(self, session_name: str) -> bool:
+        session_text = str(session_name or '').strip()
+        if not session_text:
+            return False
+        try:
+            self._tmux_run(['kill-session', '-t', session_text], check=False)
+            return True
+        except Exception:
+            return False
 
 
 __all__ = ['TmuxBackend']

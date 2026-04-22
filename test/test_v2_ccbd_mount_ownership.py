@@ -340,6 +340,88 @@ def test_ownership_guard_allows_takeover_when_socket_and_heartbeat_are_stale(tmp
     assert stale_guard.verify_or_takeover(project_id=ctx.project_id, pid=222, socket_path=layout.ccbd_socket_path) == 8
 
 
+def test_ownership_guard_treats_current_daemon_lease_as_socket_connectable_without_probe(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-self-daemon'
+    project_root.mkdir()
+    ctx = bootstrap_project(project_root)
+    layout = PathLayout(project_root)
+    manager = MountManager(
+        layout,
+        clock=lambda: '2026-03-18T00:00:00Z',
+        uid_getter=lambda: 1000,
+        boot_id_getter=lambda: 'boot-1',
+    )
+    manager.mark_mounted(
+        project_id=ctx.project_id,
+        pid=111,
+        socket_path=layout.ccbd_socket_path,
+        ipc_kind='named_pipe',
+        generation=9,
+    )
+    probe_calls: list[tuple[str, str | None]] = []
+
+    def _socket_probe(path, *, ipc_kind=None):
+        probe_calls.append((str(path), ipc_kind))
+        raise AssertionError('socket probe should be skipped for the current daemon')
+
+    guard = OwnershipGuard(
+        layout,
+        manager,
+        clock=lambda: '2026-03-18T00:00:05Z',
+        pid_exists=lambda pid: True,
+        socket_probe=_socket_probe,
+        heartbeat_grace_seconds=15,
+        current_pid=111,
+    )
+
+    inspection = guard.inspect()
+
+    assert inspection.health is LeaseHealth.HEALTHY
+    assert inspection.socket_connectable is True
+    assert probe_calls == []
+
+
+def test_ownership_guard_probes_foreign_daemon_lease_with_ipc_kind(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-foreign-daemon'
+    project_root.mkdir()
+    ctx = bootstrap_project(project_root)
+    layout = PathLayout(project_root)
+    manager = MountManager(
+        layout,
+        clock=lambda: '2026-03-18T00:00:00Z',
+        uid_getter=lambda: 1000,
+        boot_id_getter=lambda: 'boot-1',
+    )
+    manager.mark_mounted(
+        project_id=ctx.project_id,
+        pid=111,
+        socket_path=layout.ccbd_socket_path,
+        ipc_kind='named_pipe',
+        generation=11,
+    )
+    probe_calls: list[tuple[str, str | None]] = []
+
+    def _socket_probe(path, *, ipc_kind=None):
+        probe_calls.append((str(path), ipc_kind))
+        return True
+
+    guard = OwnershipGuard(
+        layout,
+        manager,
+        clock=lambda: '2026-03-18T00:00:05Z',
+        pid_exists=lambda pid: True,
+        socket_probe=_socket_probe,
+        heartbeat_grace_seconds=15,
+        current_pid=222,
+    )
+
+    inspection = guard.inspect()
+
+    assert inspection.health is LeaseHealth.HEALTHY
+    assert inspection.socket_connectable is True
+    assert probe_calls == [(str(layout.ccbd_socket_path), 'named_pipe')]
+
+
 def test_health_monitor_marks_orphaned_runtime(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo'
     project_root.mkdir()
@@ -1180,6 +1262,102 @@ def test_ccbd_foreign_pane_reflow_uses_persisted_start_policy(tmp_path: Path, mo
                 pane_id='%55',
                 active_pane_id='%55',
                 pane_state='alive',
+            )
+        )
+        return None
+
+    monkeypatch.setattr(app.runtime_supervisor, 'start', _start)
+
+    statuses = app.runtime_supervision.reconcile_once()
+
+    assert statuses == {'codex': 'healthy', 'claude': 'healthy'}
+    assert seen == [(
+        ('codex', 'claude'),
+        True,
+        True,
+        False,
+        True,
+        False,
+        True,
+        'pane_recovery:codex',
+    )]
+
+
+def test_ccbd_foreign_pane_reflow_uses_persisted_start_policy_for_psmux_namespace_state(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-reflow-policy-psmux'
+    project_root.mkdir()
+    config_path = project_root / '.ccb' / 'ccb.config'
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text('codex:codex, claude:claude\n', encoding='utf-8')
+    ctx = bootstrap_project(project_root)
+    app = CcbdApp(project_root)
+    app.persist_start_policy(auto_permission=True)
+    backend_ref = r'\\.\pipe\psmux-reflow-policy'
+    ProjectNamespaceStateStore(app.paths).save(
+        ProjectNamespaceState(
+            project_id=ctx.project_id,
+            namespace_epoch=3,
+            tmux_socket_path=backend_ref,
+            tmux_session_name=app.paths.ccbd_tmux_session_name,
+            ui_attachable=True,
+            backend_family='tmux',
+            backend_impl='psmux',
+        )
+    )
+    seen: list[tuple[tuple[str, ...], bool, bool, bool, bool, bool, bool, str | None]] = []
+
+    degraded = replace(
+        _runtime('codex', project_id=ctx.project_id, layout=app.paths, pid=1234),
+        state=AgentState.DEGRADED,
+        health='pane-foreign',
+        runtime_ref='tmux:%41',
+        tmux_socket_path=backend_ref,
+        pane_state='foreign',
+    )
+    steady = replace(
+        _runtime('claude', project_id=ctx.project_id, layout=app.paths, pid=2234),
+        runtime_ref='tmux:%42',
+        tmux_socket_path=backend_ref,
+        pane_state='alive',
+    )
+    app.registry.upsert(degraded)
+    app.registry.upsert(steady)
+
+    def _start(
+        *,
+        agent_names: tuple[str, ...],
+        restore: bool,
+        auto_permission: bool,
+        cleanup_tmux_orphans: bool = True,
+        interactive_tmux_layout: bool = True,
+        recreate_namespace: bool = False,
+        reflow_workspace: bool = False,
+        recreate_reason: str | None = None,
+    ):
+        seen.append(
+            (
+                agent_names,
+                restore,
+                auto_permission,
+                cleanup_tmux_orphans,
+                interactive_tmux_layout,
+                recreate_namespace,
+                reflow_workspace,
+                recreate_reason,
+            )
+        )
+        refreshed = app.registry.get('codex')
+        assert refreshed is not None
+        app.registry.upsert(
+            replace(
+                refreshed,
+                state=AgentState.IDLE,
+                health='healthy',
+                runtime_ref='tmux:%55',
+                pane_id='%55',
+                active_pane_id='%55',
+                pane_state='alive',
+                tmux_socket_path=backend_ref,
             )
         )
         return None

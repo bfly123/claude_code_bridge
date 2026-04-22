@@ -25,6 +25,8 @@ def finalize_kill(
     )
     terminate_runtime_pids_fn(
         project_root=context.project.project_root,
+        priority_pids=preparation.priority_pids,
+        pid_metadata=preparation.pid_metadata,
         pid_candidates=preparation.pid_candidates,
     )
     if cleanup_summaries:

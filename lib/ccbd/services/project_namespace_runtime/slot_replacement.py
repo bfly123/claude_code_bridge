@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from terminal_runtime import TmuxBackend
+from terminal_runtime import TmuxBackend as _LegacyTmuxBackend, build_mux_backend
 from terminal_runtime.tmux_identity import apply_ccb_pane_identity
 
 from ..project_namespace import ProjectNamespaceController
 from ..project_namespace_pane import same_tmux_socket_path
+
+
+TmuxBackend = _LegacyTmuxBackend
 
 
 @dataclass(frozen=True)
@@ -37,8 +40,17 @@ def resolve_project_slot_recovery_context(
     namespace = controller.load()
     if namespace is None or not namespace.ui_attachable:
         return None
+    namespace_backend_ref = str(
+        getattr(namespace, 'backend_ref', None) or getattr(namespace, 'tmux_socket_path', None) or ''
+    ).strip()
+    namespace_session_name = str(
+        getattr(namespace, 'session_name', None) or getattr(namespace, 'tmux_session_name', None) or ''
+    ).strip()
+    workspace_window_name = str(
+        getattr(namespace, 'workspace_name', None) or getattr(namespace, 'workspace_window_name', None) or ''
+    ).strip() or None
     runtime_socket = str(getattr(runtime, 'tmux_socket_path', None) or '').strip()
-    if runtime_socket and not same_tmux_socket_path(runtime_socket, namespace.tmux_socket_path):
+    if runtime_socket and not same_tmux_socket_path(runtime_socket, namespace_backend_ref):
         return None
     if not runtime_socket and str(getattr(runtime, 'managed_by', '') or '').strip() != 'ccbd':
         return None
@@ -52,10 +64,10 @@ def resolve_project_slot_recovery_context(
     return ProjectSlotRecoveryContext(
         project_id=project_id,
         slot_key=slot_key,
-        tmux_socket_path=namespace.tmux_socket_path,
-        tmux_session_name=namespace.tmux_session_name,
+        tmux_socket_path=namespace_backend_ref,
+        tmux_session_name=namespace_session_name,
         namespace_epoch=namespace.namespace_epoch,
-        workspace_window_name=namespace.workspace_window_name,
+        workspace_window_name=workspace_window_name,
         workspace_window_id=namespace.workspace_window_id,
         workspace_epoch=namespace.workspace_epoch,
         workspace_root_pane_id=root_pane_id,
@@ -82,10 +94,10 @@ def relabel_project_slot_pane(*, pane_id: str, context: ProjectSlotRecoveryConte
     pane_text = str(pane_id or '').strip()
     if not pane_text.startswith('%'):
         return
-    try:
+    if TmuxBackend is not _LegacyTmuxBackend:
         backend = TmuxBackend(socket_path=context.tmux_socket_path)
-    except TypeError:
-        backend = TmuxBackend()
+    else:
+        backend = build_mux_backend(socket_path=context.tmux_socket_path)
     apply_ccb_pane_identity(
         backend,
         pane_text,

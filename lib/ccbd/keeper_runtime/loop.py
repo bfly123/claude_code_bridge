@@ -12,6 +12,10 @@ from .state import compute_project_id, restart_backoff_active
 from .support import reap_child_processes, try_acquire_keeper_lock
 
 
+def _probe_timeout_s(ipc_kind: str | None) -> float:
+    return 1.0 if str(ipc_kind or '').strip().lower() == 'named_pipe' else 0.2
+
+
 def run_forever(app, *, poll_interval: float = 0.5, start_timeout_s: float = 5.0) -> int:
     lock_path = app.paths.ccbd_dir / 'keeper.lock'
     lock_handle = try_acquire_keeper_lock(lock_path)
@@ -121,7 +125,11 @@ def stale_restart_state(app, *, state: KeeperState, inspection, occurred_at: str
 
 def daemon_matches_project_config(app) -> bool:
     expected = project_config_identity_payload(load_project_config(app.project_root).config)
-    payload = CcbdClient(app.paths.ccbd_socket_path, timeout_s=0.2).ping('ccbd')
+    payload = CcbdClient(
+        app.paths.ccbd_ipc_ref,
+        timeout_s=_probe_timeout_s(app.paths.ccbd_ipc_kind),
+        ipc_kind=app.paths.ccbd_ipc_kind,
+    ).ping('ccbd')
     actual_signature = str(payload.get('config_signature') or '').strip()
     if actual_signature:
         return actual_signature == expected['config_signature']
@@ -133,7 +141,11 @@ def daemon_matches_project_config(app) -> bool:
 
 
 def request_shutdown(app) -> None:
-    client = CcbdClient(app.paths.ccbd_socket_path, timeout_s=0.2)
+    client = CcbdClient(
+        app.paths.ccbd_ipc_ref,
+        timeout_s=_probe_timeout_s(app.paths.ccbd_ipc_kind),
+        ipc_kind=app.paths.ccbd_ipc_kind,
+    )
     try:
         client.shutdown()
     except CcbdClientError:

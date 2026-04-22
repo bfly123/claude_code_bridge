@@ -5,6 +5,7 @@ import shutil
 from typing import Optional
 
 from terminal_runtime.backend_types import TerminalBackend
+from terminal_runtime.backend_env import default_mux_backend_impl as _default_mux_backend_impl
 from terminal_runtime.detect import current_tty as _current_tty_impl
 from terminal_runtime.detect import detect_terminal as _detect_terminal_impl
 from terminal_runtime.detect import inside_tmux as _inside_tmux_impl
@@ -16,12 +17,14 @@ from terminal_runtime.env import is_wsl as _is_wsl_impl
 from terminal_runtime.env import sanitize_filename as _sanitize_filename_impl
 from terminal_runtime.env import subprocess_kwargs as _subprocess_kwargs_impl
 from terminal_runtime.layouts import LayoutResult
+from terminal_runtime.mux_backend import MuxBackend
 from terminal_runtime.pane_logs import cleanup_pane_logs as _cleanup_pane_logs_impl
 from terminal_runtime.pane_logs import maybe_trim_log as _maybe_trim_log_impl
 from terminal_runtime.pane_logs import pane_log_dir as _pane_log_dir_impl
 from terminal_runtime.pane_logs import pane_log_path_for as _pane_log_path_for_impl
 from terminal_runtime.pane_logs import pane_log_root as _pane_log_root_impl
 from terminal_runtime.tmux import default_detached_session_name as _default_detached_session_name_impl
+from terminal_runtime.psmux_backend import PsmuxBackend
 from terminal_runtime.tmux_backend import TmuxBackend
 
 from .api_selection import (
@@ -67,6 +70,25 @@ def get_shell_type() -> str:
 _backend_cache: Optional[TerminalBackend] = None
 
 
+def mux_backend_cls_for_impl(backend_impl: str | None):
+    impl = str(backend_impl or '').strip().lower()
+    if impl == 'psmux':
+        return PsmuxBackend
+    return TmuxBackend
+
+
+def default_mux_backend_cls():
+    return mux_backend_cls_for_impl(_default_mux_backend_impl())
+
+
+def build_mux_backend(*, backend_impl: str | None = None, socket_name: str | None = None, socket_path: str | None = None):
+    backend_cls = mux_backend_cls_for_impl(backend_impl) if backend_impl is not None else default_mux_backend_cls()
+    try:
+        return backend_cls(socket_name=socket_name, socket_path=socket_path)
+    except TypeError:
+        return backend_cls()
+
+
 def _inside_tmux() -> bool:
     return _inside_tmux_impl(
         env=os.environ,
@@ -91,7 +113,7 @@ def get_backend(terminal_type: Optional[str] = None) -> Optional[TerminalBackend
         cached_backend=_backend_cache,
         terminal_type=terminal_type,
         detect_terminal_fn=detect_terminal,
-        tmux_backend_factory=TmuxBackend,
+        tmux_backend_factory=default_mux_backend_cls(),
     )
     return _backend_cache
 
@@ -100,7 +122,7 @@ def get_backend_for_session(session_data: dict) -> Optional[TerminalBackend]:
     return _resolve_backend_for_session(
         session_data=session_data,
         detect_terminal_fn=detect_terminal,
-        tmux_backend_factory=TmuxBackend,
+        tmux_backend_factory=default_mux_backend_cls(),
     )
 
 
@@ -126,7 +148,7 @@ def create_auto_layout(
         percent=percent,
         set_markers=set_markers,
         marker_prefix=marker_prefix,
-        tmux_backend_factory=TmuxBackend,
+        tmux_backend_factory=default_mux_backend_cls(),
         detached_session_name_fn=_default_detached_session_name_impl,
         env=os.environ,
     )
@@ -134,9 +156,13 @@ def create_auto_layout(
 
 __all__ = [
     "LayoutResult",
+    "MuxBackend",
     "TerminalBackend",
+    "PsmuxBackend",
     "TmuxBackend",
+    "build_mux_backend",
     "create_auto_layout",
+    "default_mux_backend_cls",
     "detect_terminal",
     "get_backend",
     "get_backend_for_session",
@@ -144,4 +170,5 @@ __all__ = [
     "get_shell_type",
     "is_windows",
     "is_wsl",
+    "mux_backend_cls_for_impl",
 ]

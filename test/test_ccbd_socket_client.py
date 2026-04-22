@@ -49,6 +49,10 @@ def test_ccbd_client_dynamic_attach_endpoint_builds_payload(monkeypatch, tmp_pat
         workspace_path='/tmp/work',
         backend_type='pane-backed',
         pane_id='%9',
+        tmux_socket_path='/tmp/project.sock',
+        slot_key='agent3',
+        window_id='@2',
+        workspace_epoch=7,
         binding_source='external-attach',
     )
 
@@ -67,14 +71,20 @@ def test_ccbd_client_dynamic_attach_endpoint_builds_payload(monkeypatch, tmp_pat
                 'provider': None,
                 'runtime_root': None,
                 'runtime_pid': None,
+                'job_id': None,
+                'job_owner_pid': None,
                 'terminal_backend': None,
                 'pane_id': '%9',
                 'active_pane_id': None,
                 'pane_title_marker': None,
                 'pane_state': None,
                 'tmux_socket_name': None,
+                'tmux_socket_path': '/tmp/project.sock',
                 'session_file': None,
                 'session_id': None,
+                'slot_key': 'agent3',
+                'window_id': '@2',
+                'workspace_epoch': 7,
                 'lifecycle_state': None,
                 'managed_by': None,
                 'binding_source': 'external-attach',
@@ -98,8 +108,15 @@ def test_ccbd_client_request_wraps_socket_connect_errors(monkeypatch, tmp_path) 
 
     monkeypatch.setattr(
         'ccbd.socket_client.connect_socket',
-        lambda socket_path, *, timeout_s: (_ for _ in ()).throw(ConnectionRefusedError('[Errno 111] Connection refused')),
+        lambda socket_path, *, timeout_s, ipc_kind=None: (_ for _ in ()).throw(ConnectionRefusedError('[Errno 111] Connection refused')),
     )
 
     with pytest.raises(CcbdClientError, match='Connection refused'):
         client.request('ping', {})
+
+
+def test_ccbd_client_preserves_named_pipe_endpoint() -> None:
+    client = CcbdClient(r'\\.\pipe\ccb-test', ipc_kind='named_pipe')
+
+    assert client._socket_path == r'\\.\pipe\ccb-test'
+    assert client._ipc_kind == 'named_pipe'

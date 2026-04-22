@@ -15,6 +15,9 @@ from types import SimpleNamespace
 import pytest
 
 from ccbd.app import CcbdApp
+from ccbd.lifecycle_report_store import CcbdStartupReportStore
+from ccbd.models import CcbdStartupReport
+from ccbd.socket_client import CcbdClient
 from ccbd.services.health import HealthMonitor
 import cli.phase2 as phase2_module
 from cli.phase2 import maybe_handle_phase2
@@ -59,24 +62,24 @@ def _dual_named_agent_config_text(agent1: str, provider1: str, agent2: str, prov
 
 
 def _wait_for_status(cwd: Path, target: str, expected: str, *, timeout: float = 3.0) -> subprocess.CompletedProcess[str]:
-    deadline = time.time() + timeout
+    deadline = _monotonic_now_ignoring_keyboard_interrupt() + timeout
     last = None
-    while time.time() < deadline:
+    while _monotonic_now_ignoring_keyboard_interrupt() < deadline:
         last = _run_ccb(['pend', target], cwd=cwd)
         if last.returncode == 0 and f'status: {expected}' in last.stdout:
             return last
-        time.sleep(0.1)
+        _sleep_ignoring_keyboard_interrupt(0.1)
     raise AssertionError(f'expected status {expected!r}; last stdout={last.stdout!r} stderr={last.stderr!r}')
 
 
 def _wait_for_any_status(cwd: Path, target: str, expected: tuple[str, ...], *, timeout: float = 3.0) -> subprocess.CompletedProcess[str]:
-    deadline = time.time() + timeout
+    deadline = _monotonic_now_ignoring_keyboard_interrupt() + timeout
     last = None
-    while time.time() < deadline:
+    while _monotonic_now_ignoring_keyboard_interrupt() < deadline:
         last = _run_ccb(['pend', target], cwd=cwd)
         if last.returncode == 0 and any(f'status: {item}' in last.stdout for item in expected):
             return last
-        time.sleep(0.1)
+        _sleep_ignoring_keyboard_interrupt(0.1)
     raise AssertionError(f'expected any status {expected!r}; last stdout={last.stdout!r} stderr={last.stderr!r}')
 
 
@@ -111,6 +114,51 @@ def _freeze_job_ids(app: CcbdApp, monkeypatch: pytest.MonkeyPatch, *job_ids: str
     monkeypatch.setattr(app.dispatcher, '_new_id', _new_id)
 
 
+def _monotonic_now_ignoring_keyboard_interrupt() -> float:
+    while True:
+        try:
+            return time.monotonic()
+        except KeyboardInterrupt:
+            continue
+
+
+def _sleep_ignoring_keyboard_interrupt(duration_s: float) -> None:
+    deadline = _monotonic_now_ignoring_keyboard_interrupt() + max(0.0, float(duration_s))
+    while True:
+        remaining = deadline - _monotonic_now_ignoring_keyboard_interrupt()
+        if remaining <= 0:
+            return
+        try:
+            time.sleep(remaining)
+            return
+        except KeyboardInterrupt:
+            continue
+
+
+def _start_thread_ignoring_keyboard_interrupt(thread: threading.Thread) -> None:
+    while True:
+        try:
+            thread.start()
+            return
+        except KeyboardInterrupt:
+            if thread.is_alive():
+                return
+            _sleep_ignoring_keyboard_interrupt(0.01)
+
+
+def _join_thread_ignoring_keyboard_interrupt(thread: threading.Thread, *, timeout: float | None = None) -> None:
+    deadline = None if timeout is None else _monotonic_now_ignoring_keyboard_interrupt() + max(0.0, float(timeout))
+    while True:
+        remaining = None if deadline is None else max(0.0, deadline - _monotonic_now_ignoring_keyboard_interrupt())
+        try:
+            thread.join(timeout=remaining)
+            return
+        except KeyboardInterrupt:
+            if deadline is not None and _monotonic_now_ignoring_keyboard_interrupt() >= deadline:
+                return
+            continue
+
+
 class _TtyStringIO(StringIO):
     def isatty(self) -> bool:  # pragma: no cover - trivial
         return True
@@ -124,6 +172,35 @@ class _TtyInput(StringIO):
 @pytest.fixture(autouse=True)
 def _disable_health_monitor_in_phase2_blackbox_tests(monkeypatch) -> None:
     monkeypatch.setattr(HealthMonitor, 'check_all', lambda self: {})
+
+
+@pytest.fixture(autouse=True)
+def _install_fake_tmux_on_windows(monkeypatch, tmp_path: Path) -> None:
+    if os.name != 'nt':
+        return
+    bin_dir = tmp_path / 'fake-tmux-bin'
+    state_dir = tmp_path / 'fake-tmux-state'
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    helper = Path(__file__).resolve().parent / 'fixtures' / 'fake_tmux.py'
+    wrapper = bin_dir / 'tmux.cmd'
+    wrapper.write_text(
+        f'@echo off\r\n\"{sys.executable}\" \"{helper}\" %*\r\n',
+        encoding='utf-8',
+    )
+    psmux_wrapper = bin_dir / 'psmux.cmd'
+    psmux_wrapper.write_text(
+        f'@echo off\r\n\"{sys.executable}\" \"{helper}\" %*\r\n',
+        encoding='utf-8',
+    )
+    for provider in ('codex', 'claude', 'gemini', 'opencode', 'droid'):
+        (bin_dir / f'{provider}.cmd').write_text(
+            '@echo off\r\nexit /b 0\r\n',
+            encoding='utf-8',
+        )
+    monkeypatch.setenv('CCB_FAKE_TMUX_STATE_DIR', str(state_dir))
+    monkeypatch.setenv('CCB_PSMUX_BIN', str(psmux_wrapper))
+    monkeypatch.setenv('PATH', f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
 
 
 def test_phase2_start_bootstraps_missing_project_and_default_config(monkeypatch, tmp_path: Path) -> None:
@@ -789,30 +866,61 @@ def test_phase2_inbox_and_ack_render_control_plane_payload(monkeypatch, tmp_path
 
 
 def _wait_for_phase2_status(cwd: Path, target: str, expected: str, *, timeout: float = 5.0) -> str:
-    deadline = time.time() + timeout
+    deadline = _monotonic_now_ignoring_keyboard_interrupt() + timeout
     last_stdout = ''
     last_stderr = ''
-    while time.time() < deadline:
+    while _monotonic_now_ignoring_keyboard_interrupt() < deadline:
         code, stdout, stderr = _run_phase2_local(['pend', target], cwd=cwd)
         last_stdout, last_stderr = stdout, stderr
         if code == 0 and f'status: {expected}' in stdout:
             return stdout
-        time.sleep(0.05)
+        _sleep_ignoring_keyboard_interrupt(0.05)
     raise AssertionError(f'expected status {expected!r}; last stdout={last_stdout!r} stderr={last_stderr!r}')
 
 
 def _wait_for_path(path: Path, timeout: float = 2.0) -> None:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+    deadline = _monotonic_now_ignoring_keyboard_interrupt() + timeout
+    while _monotonic_now_ignoring_keyboard_interrupt() < deadline:
         if path.exists():
             return
-        time.sleep(0.02)
+        _sleep_ignoring_keyboard_interrupt(0.02)
     raise AssertionError(f'timed out waiting for {path}')
+
+
+def _phase2_client(app: CcbdApp, *, timeout_s: float | None = None) -> CcbdClient:
+    return CcbdClient(app.paths.ccbd_ipc_ref, timeout_s=timeout_s, ipc_kind=app.paths.ccbd_ipc_kind)
+
+
+def _ready_ping_timeout_s(app: CcbdApp) -> float:
+    return 1.0 if app.paths.ccbd_ipc_kind == 'named_pipe' else 0.2
+
+
+def _wait_for_app_ready(app: CcbdApp, timeout: float | None = None) -> None:
+    if timeout is None:
+        timeout = 5.0 if app.paths.ccbd_ipc_kind == 'named_pipe' else 2.0
+    deadline = _monotonic_now_ignoring_keyboard_interrupt() + timeout
+    startup_store = CcbdStartupReportStore(app.paths)
+    last_error: Exception | None = None
+    while _monotonic_now_ignoring_keyboard_interrupt() < deadline:
+        if app.paths.ccbd_ipc_kind != 'named_pipe' and not app.paths.ccbd_socket_path.exists():
+            _sleep_ignoring_keyboard_interrupt(0.02)
+            continue
+        if startup_store.load() is None:
+            _sleep_ignoring_keyboard_interrupt(0.02)
+            continue
+        try:
+            if _phase2_client(app, timeout_s=_ready_ping_timeout_s(app)).ping('ccbd').get('mount_state') == 'mounted':
+                return
+        except Exception as exc:
+            last_error = exc
+        _sleep_ignoring_keyboard_interrupt(0.02)
+    detail = f'; last_error={last_error}' if last_error is not None else ''
+    raise AssertionError(f'timed out waiting for ccbd readiness: {app.paths.ccbd_ipc_ref}{detail}')
 
 
 def _assert_phase2_app_shutdown_clean(project_root: Path, app: CcbdApp, thread: threading.Thread) -> None:
     app.shutdown()
-    thread.join(timeout=2)
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
     assert not thread.is_alive()
     assert not app.paths.ccbd_socket_path.exists()
     lease_path = app.paths.ccbd_lease_path
@@ -825,14 +933,167 @@ def _assert_phase2_app_shutdown_clean(project_root: Path, app: CcbdApp, thread: 
 
 
 def _wait_for_pid_exit(pid: int, timeout: float = 2.0) -> None:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+    deadline = _monotonic_now_ignoring_keyboard_interrupt() + timeout
+    while _monotonic_now_ignoring_keyboard_interrupt() < deadline:
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
             return
-        time.sleep(0.02)
+        _sleep_ignoring_keyboard_interrupt(0.02)
     raise AssertionError(f'timed out waiting for pid {pid} to exit')
+
+
+def test_phase2_client_helper_uses_ipc_ref_and_kind(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-phase2-client-helper'
+    _write(project_root / '.ccb' / 'ccb.config', _config_text())
+    app = CcbdApp(project_root)
+
+    client = _phase2_client(app, timeout_s=1.25)
+
+    assert client._socket_path == app.paths.ccbd_ipc_ref
+    assert client._ipc_kind == app.paths.ccbd_ipc_kind
+    assert client._timeout_s == 1.25
+
+
+def test_phase2_wait_for_app_ready_pings_ccbd_after_startup_report(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-phase2-ready-helper'
+    _write(project_root / '.ccb' / 'ccb.config', _config_text())
+    app = CcbdApp(project_root)
+    app.paths.ccbd_socket_path.parent.mkdir(parents=True, exist_ok=True)
+    app.paths.ccbd_socket_path.touch()
+    app.startup_report_store.save(
+        CcbdStartupReport(
+            project_id=app.project_id,
+            generated_at='2026-04-21T00:00:00Z',
+            trigger='daemon_boot',
+            status='ok',
+            requested_agents=(),
+            desired_agents=('codex',),
+            restore_requested=False,
+            auto_permission=False,
+            daemon_generation=1,
+            daemon_started=True,
+            config_signature='sig',
+            inspection={},
+            restore_summary={},
+            actions_taken=('mount_backend', 'listen_socket'),
+            cleanup_summaries=(),
+            agent_results=(),
+            failure_reason=None,
+        )
+    )
+    seen: list[tuple[float | None, str]] = []
+
+    def _fake_client(current_app: CcbdApp, *, timeout_s: float | None = None):
+        assert current_app is app
+        return SimpleNamespace(
+            ping=lambda target: seen.append((timeout_s, target)) or {'mount_state': 'mounted'}
+        )
+
+    monkeypatch.setattr(sys.modules[__name__], '_phase2_client', _fake_client)
+
+    _wait_for_app_ready(app, timeout=0.2)
+
+    assert seen == [(_ready_ping_timeout_s(app), 'ccbd')]
+
+
+def test_phase2_wait_for_app_ready_uses_named_pipe_probe_timeout(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-phase2-ready-helper-named-pipe'
+    _write(project_root / '.ccb' / 'ccb.config', _config_text())
+    monkeypatch.setenv('CCB_EXPERIMENTAL_WINDOWS_NATIVE', '1')
+    monkeypatch.setenv('CCB_IPC_KIND', 'named_pipe')
+    app = CcbdApp(project_root)
+    app.startup_report_store.save(
+        CcbdStartupReport(
+            project_id=app.project_id,
+            generated_at='2026-04-21T00:00:00Z',
+            trigger='daemon_boot',
+            status='ok',
+            requested_agents=(),
+            desired_agents=('codex',),
+            restore_requested=False,
+            auto_permission=False,
+            daemon_generation=1,
+            daemon_started=True,
+            config_signature='sig',
+            inspection={},
+            restore_summary={},
+            actions_taken=('mount_backend', 'listen_socket', 'restore_running_jobs'),
+            cleanup_summaries=(),
+            agent_results=(),
+            failure_reason=None,
+        )
+    )
+    seen: list[tuple[float | None, str]] = []
+
+    def _fake_client(current_app: CcbdApp, *, timeout_s: float | None = None):
+        assert current_app is app
+        return SimpleNamespace(
+            ping=lambda target: seen.append((timeout_s, target)) or {'mount_state': 'mounted'}
+        )
+
+    monkeypatch.setattr(sys.modules[__name__], '_phase2_client', _fake_client)
+
+    _wait_for_app_ready(app, timeout=0.2)
+
+    assert seen == [(1.0, 'ccbd')]
+
+
+def test_phase2_wait_for_app_ready_named_pipe_ignores_keyboard_interrupt_noise(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-phase2-ready-helper-noise'
+    _write(project_root / '.ccb' / 'ccb.config', _config_text())
+    monkeypatch.setenv('CCB_EXPERIMENTAL_WINDOWS_NATIVE', '1')
+    monkeypatch.setenv('CCB_IPC_KIND', 'named_pipe')
+    app = CcbdApp(project_root)
+    app.startup_report_store.save(
+        CcbdStartupReport(
+            project_id=app.project_id,
+            generated_at='2026-04-21T00:00:00Z',
+            trigger='daemon_boot',
+            status='ok',
+            requested_agents=(),
+            desired_agents=('codex',),
+            restore_requested=False,
+            auto_permission=False,
+            daemon_generation=1,
+            daemon_started=True,
+            config_signature='sig',
+            inspection={},
+            restore_summary={},
+            actions_taken=('mount_backend', 'listen_socket', 'restore_running_jobs'),
+            cleanup_summaries=(),
+            agent_results=(),
+            failure_reason=None,
+        )
+    )
+    attempts = {'count': 0}
+    sleep_calls = {'count': 0}
+
+    def _fake_client(current_app: CcbdApp, *, timeout_s: float | None = None):
+        assert current_app is app
+        assert timeout_s == 1.0
+
+        def _ping(target: str):
+            assert target == 'ccbd'
+            attempts['count'] += 1
+            if attempts['count'] == 1:
+                raise RuntimeError('transient startup race')
+            return {'mount_state': 'mounted'}
+
+        return SimpleNamespace(ping=_ping)
+
+    def _fake_sleep(seconds: float) -> None:
+        sleep_calls['count'] += 1
+        if sleep_calls['count'] == 1:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(sys.modules[__name__], '_phase2_client', _fake_client)
+    monkeypatch.setattr(time, 'sleep', _fake_sleep)
+
+    _wait_for_app_ready(app, timeout=0.2)
+
+    assert attempts['count'] == 2
+    assert sleep_calls['count'] >= 2
 
 
 def test_ccb_v2_project_lifecycle(tmp_path: Path) -> None:
@@ -1015,7 +1276,7 @@ def test_ccb_long_running_job_keeps_heartbeat_and_doctor_healthy(tmp_path: Path)
     assert 'pending_items_count:' in ping.stdout
     assert 'terminal_pending_count:' in ping.stdout
 
-    time.sleep(0.5)
+    _sleep_ignoring_keyboard_interrupt(0.5)
 
     lease_after = json.loads(lease_path.read_text(encoding='utf-8'))
     assert lease_after['last_heartbeat_at'] != lease_before['last_heartbeat_at']
@@ -1149,8 +1410,8 @@ def test_ccb_opencode_real_adapter_blackbox_pane_dead_fails_degraded(monkeypatch
     app = CcbdApp(project_root)
     _freeze_job_ids(app, monkeypatch, fixed_req_id)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for_path(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
     try:
         code, stdout, stderr = _run_phase2_local([], cwd=project_root)
@@ -1172,7 +1433,7 @@ def test_ccb_opencode_real_adapter_blackbox_pane_dead_fails_degraded(monkeypatch
         assert 'status: failed' in stdout
     finally:
         app.shutdown()
-        thread.join(timeout=2)
+        _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
         assert not thread.is_alive()
 
 
@@ -1226,8 +1487,8 @@ def test_ccb_opencode_real_adapter_blackbox_completed_reply_without_done_marker(
 
     app = CcbdApp(project_root)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for_path(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
     try:
         code, stdout, stderr = _run_phase2_local([], cwd=project_root)
@@ -1249,7 +1510,7 @@ def test_ccb_opencode_real_adapter_blackbox_completed_reply_without_done_marker(
         assert 'status: completed' in stdout
     finally:
         app.shutdown()
-        thread.join(timeout=2)
+        _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
         assert not thread.is_alive()
 
 
@@ -1318,8 +1579,8 @@ def test_ccb_opencode_real_adapter_blackbox_cancel_stops_legacy_completion(monke
 
     app = CcbdApp(project_root)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for_path(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
     try:
         code, stdout, stderr = _run_phase2_local([], cwd=project_root)
@@ -1350,7 +1611,7 @@ def test_ccb_opencode_real_adapter_blackbox_cancel_stops_legacy_completion(monke
         assert 'status: cancelled' in stdout
     finally:
         app.shutdown()
-        thread.join(timeout=2)
+        _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
         assert not thread.is_alive()
 
 
@@ -1414,8 +1675,8 @@ def test_ccb_droid_real_adapter_blackbox_pane_dead_fails_degraded(monkeypatch, t
     app = CcbdApp(project_root)
     _freeze_job_ids(app, monkeypatch, fixed_req_id)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for_path(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
     try:
         code, stdout, stderr = _run_phase2_local([], cwd=project_root)
@@ -1437,7 +1698,7 @@ def test_ccb_droid_real_adapter_blackbox_pane_dead_fails_degraded(monkeypatch, t
         assert 'status: failed' in stdout
     finally:
         app.shutdown()
-        thread.join(timeout=2)
+        _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
         assert not thread.is_alive()
 
 
@@ -1510,8 +1771,8 @@ def test_ccb_droid_real_adapter_blackbox_terminal_done_marker_completion(monkeyp
 
     app = CcbdApp(project_root)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for_path(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
     try:
         code, stdout, stderr = _run_phase2_local([], cwd=project_root)
@@ -1533,7 +1794,7 @@ def test_ccb_droid_real_adapter_blackbox_terminal_done_marker_completion(monkeyp
         assert 'status: completed' in stdout
     finally:
         app.shutdown()
-        thread.join(timeout=2)
+        _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
         assert not thread.is_alive()
 
 
@@ -1610,8 +1871,8 @@ def test_ccb_droid_real_adapter_blackbox_cancel_stops_legacy_completion(monkeypa
 
     app = CcbdApp(project_root)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for_path(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
     try:
         code, stdout, stderr = _run_phase2_local([], cwd=project_root)
@@ -1642,7 +1903,7 @@ def test_ccb_droid_real_adapter_blackbox_cancel_stops_legacy_completion(monkeypa
         assert 'status: cancelled' in stdout
     finally:
         app.shutdown()
-        thread.join(timeout=2)
+        _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
         assert not thread.is_alive()
 
 
@@ -2016,8 +2277,8 @@ def test_ccb_codex_real_adapter_blackbox_watch_chain_without_done_marker(monkeyp
     app = CcbdApp(project_root)
     _freeze_job_ids(app, monkeypatch, fixed_req_id)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for_path(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
     try:
         code, stdout, stderr = _run_phase2_local([], cwd=project_root)
@@ -2053,7 +2314,7 @@ def test_ccb_codex_real_adapter_blackbox_watch_chain_without_done_marker(monkeyp
         assert f'job_id: {job_id}' in stdout
     finally:
         app.shutdown()
-        thread.join(timeout=2)
+        _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
         assert not thread.is_alive()
 
 
@@ -2143,8 +2404,8 @@ def test_ccb_codex_real_adapter_recovers_after_ccbd_restart(monkeypatch, tmp_pat
     app1 = CcbdApp(project_root)
     _freeze_job_ids(app1, monkeypatch, fixed_req_id)
     thread1 = threading.Thread(target=app1.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread1.start()
-    _wait_for_path(app1.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread1)
+    _wait_for_app_ready(app1)
 
     try:
         code, stdout, stderr = _run_phase2_local([], cwd=project_root)
@@ -2157,35 +2418,35 @@ def test_ccb_codex_real_adapter_recovers_after_ccbd_restart(monkeypatch, tmp_pat
         running = _wait_for_phase2_status(project_root, 'demo', 'running')
         assert f'job_id: {job_id}' in running
 
-        deadline = time.time() + 2.0
-        while time.time() < deadline:
+        deadline = _monotonic_now_ignoring_keyboard_interrupt() + 2.0
+        while _monotonic_now_ignoring_keyboard_interrupt() < deadline:
             events_path = project_root / '.ccb' / 'agents' / 'demo' / 'events.jsonl'
             if events_path.exists() and 'assistant_chunk' in events_path.read_text(encoding='utf-8'):
                 break
-            time.sleep(0.05)
+            _sleep_ignoring_keyboard_interrupt(0.05)
         else:
             raise AssertionError('expected assistant_chunk before restart')
 
         app1.shutdown()
-        thread1.join(timeout=2)
+        _join_thread_ignoring_keyboard_interrupt(thread1, timeout=2)
         assert not thread1.is_alive()
 
         app2 = CcbdApp(project_root)
         thread2 = threading.Thread(target=app2.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-        thread2.start()
-        _wait_for_path(app2.paths.ccbd_socket_path)
+        _start_thread_ignoring_keyboard_interrupt(thread2)
+        _wait_for_app_ready(app2)
         try:
             pend = _wait_for_phase2_status(project_root, job_id, 'completed')
             assert 'reply: partial before restart' in pend
             assert 'completion_reason: task_complete' in pend
         finally:
             app2.shutdown()
-            thread2.join(timeout=2)
+            _join_thread_ignoring_keyboard_interrupt(thread2, timeout=2)
             assert not thread2.is_alive()
     finally:
         if thread1.is_alive():
             app1.shutdown()
-            thread1.join(timeout=2)
+            _join_thread_ignoring_keyboard_interrupt(thread1, timeout=2)
             assert not thread1.is_alive()
 
 
@@ -2342,8 +2603,8 @@ def test_ccb_two_named_codex_agents_concurrent_ask_isolated(monkeypatch, tmp_pat
     _freeze_job_ids(app, monkeypatch, *request_ids)
     monkeypatch.setattr(app.health_monitor, 'check_all', lambda: {})
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for_path(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
     try:
         code, stdout, stderr = _run_phase2_local([], cwd=project_root)
@@ -2563,8 +2824,8 @@ def test_ccb_two_named_codex_agents_recover_after_ccbd_restart(monkeypatch, tmp_
     app1 = CcbdApp(project_root)
     _freeze_job_ids(app1, monkeypatch, *request_ids)
     thread1 = threading.Thread(target=app1.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread1.start()
-    _wait_for_path(app1.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread1)
+    _wait_for_app_ready(app1)
 
     try:
         code, stdout, stderr = _run_phase2_local([], cwd=project_root)
@@ -2584,8 +2845,8 @@ def test_ccb_two_named_codex_agents_recover_after_ccbd_restart(monkeypatch, tmp_
         assert f'job_id: {job1}' in running1
         assert f'job_id: {job2}' in running2
 
-        deadline = time.time() + 2.0
-        while time.time() < deadline:
+        deadline = _monotonic_now_ignoring_keyboard_interrupt() + 2.0
+        while _monotonic_now_ignoring_keyboard_interrupt() < deadline:
             agent1_events = project_root / '.ccb' / 'agents' / 'agent1' / 'events.jsonl'
             agent2_events = project_root / '.ccb' / 'agents' / 'agent2' / 'events.jsonl'
             if (
@@ -2595,7 +2856,7 @@ def test_ccb_two_named_codex_agents_recover_after_ccbd_restart(monkeypatch, tmp_
                 and 'assistant_chunk' in agent2_events.read_text(encoding='utf-8')
             ):
                 break
-            time.sleep(0.05)
+            _sleep_ignoring_keyboard_interrupt(0.05)
         else:
             raise AssertionError('expected assistant_chunk for both agents before restart')
 
@@ -2603,8 +2864,8 @@ def test_ccb_two_named_codex_agents_recover_after_ccbd_restart(monkeypatch, tmp_
 
         app2 = CcbdApp(project_root)
         thread2 = threading.Thread(target=app2.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-        thread2.start()
-        _wait_for_path(app2.paths.ccbd_socket_path)
+        _start_thread_ignoring_keyboard_interrupt(thread2)
+        _wait_for_app_ready(app2)
         try:
             pend1 = _wait_for_phase2_status(project_root, 'agent1', 'completed')
             pend2 = _wait_for_phase2_status(project_root, 'agent2', 'completed')
@@ -2753,8 +3014,8 @@ def test_ccb_two_named_claude_agents_concurrent_ask_isolated(monkeypatch, tmp_pa
     app = CcbdApp(project_root)
     _freeze_job_ids(app, monkeypatch, *request_ids)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for_path(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
     try:
         code, stdout, stderr = _run_phase2_local([], cwd=project_root)
@@ -2936,8 +3197,8 @@ def test_ccb_two_named_gemini_agents_concurrent_ask_isolated(monkeypatch, tmp_pa
     app = CcbdApp(project_root)
     _freeze_job_ids(app, monkeypatch, *request_ids)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for_path(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
     try:
         code, stdout, stderr = _run_phase2_local([], cwd=project_root)
@@ -3101,8 +3362,8 @@ def test_ccb_two_named_opencode_agents_concurrent_ask_isolated(monkeypatch, tmp_
     app = CcbdApp(project_root)
     _freeze_job_ids(app, monkeypatch, *request_ids)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for_path(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
     try:
         code, stdout, stderr = _run_phase2_local([], cwd=project_root)
@@ -3267,8 +3528,8 @@ def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart_and_rotate_clears_s
     app1 = CcbdApp(project_root)
     _freeze_job_ids(app1, monkeypatch, fixed_req_id)
     thread1 = threading.Thread(target=app1.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread1.start()
-    _wait_for_path(app1.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread1)
+    _wait_for_app_ready(app1)
 
     try:
         code, stdout, stderr = _run_phase2_local([], cwd=project_root)
@@ -3278,37 +3539,37 @@ def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart_and_rotate_clears_s
         assert code == 0, stderr
         job_id = _extract_accepted_job_id(stdout, target='demo')
 
-        deadline = time.time() + 3.0
+        deadline = _monotonic_now_ignoring_keyboard_interrupt() + 3.0
         last_stdout = ''
-        while time.time() < deadline:
+        while _monotonic_now_ignoring_keyboard_interrupt() < deadline:
             code, pend, stderr = _run_phase2_local(['pend', 'demo'], cwd=project_root)
             assert code == 0, stderr
             last_stdout = pend
             if f'job_id: {job_id}' in pend and 'status: running' in pend and 'reply: old preview reply' in pend:
                 break
-            time.sleep(0.05)
+            _sleep_ignoring_keyboard_interrupt(0.05)
         else:
             raise AssertionError(f'expected stale preview before restart; last={last_stdout!r}')
 
         app1.shutdown()
-        thread1.join(timeout=2)
+        _join_thread_ignoring_keyboard_interrupt(thread1, timeout=2)
         assert not thread1.is_alive()
 
         app2 = CcbdApp(project_root)
         thread2 = threading.Thread(target=app2.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-        thread2.start()
-        _wait_for_path(app2.paths.ccbd_socket_path)
+        _start_thread_ignoring_keyboard_interrupt(thread2)
+        _wait_for_app_ready(app2)
         try:
-            deadline = time.time() + 3.0
+            deadline = _monotonic_now_ignoring_keyboard_interrupt() + 3.0
             last_stdout = ''
-            while time.time() < deadline:
+            while _monotonic_now_ignoring_keyboard_interrupt() < deadline:
                 code, pend, stderr = _run_phase2_local(['pend', 'demo'], cwd=project_root)
                 assert code == 0, stderr
                 last_stdout = pend
                 if f'job_id: {job_id}' in pend and 'status: running' in pend and 'reply: old preview reply' not in pend:
                     assert 'reply: \n' in pend or pend.rstrip().endswith('reply:')
                     break
-                time.sleep(0.05)
+                _sleep_ignoring_keyboard_interrupt(0.05)
             else:
                 raise AssertionError(f'expected rotate to clear stale preview after restart; last={last_stdout!r}')
 
@@ -3318,12 +3579,12 @@ def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart_and_rotate_clears_s
             assert 'completion_confidence: observed' in pend
         finally:
             app2.shutdown()
-            thread2.join(timeout=2)
+            _join_thread_ignoring_keyboard_interrupt(thread2, timeout=2)
             assert not thread2.is_alive()
     finally:
         if thread1.is_alive():
             app1.shutdown()
-            thread1.join(timeout=2)
+            _join_thread_ignoring_keyboard_interrupt(thread1, timeout=2)
             assert not thread1.is_alive()
 
 
@@ -3498,8 +3759,8 @@ def test_ccb_claude_real_adapter_blackbox_watch_chain(monkeypatch, tmp_path: Pat
     app = CcbdApp(project_root)
     _freeze_job_ids(app, monkeypatch, fixed_req_id)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for_path(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
     try:
         code, stdout, stderr = _run_phase2_local([], cwd=project_root)
@@ -3532,7 +3793,7 @@ def test_ccb_claude_real_adapter_blackbox_watch_chain(monkeypatch, tmp_path: Pat
         assert f'job_id: {job_id}' in stdout
     finally:
         app.shutdown()
-        thread.join(timeout=2)
+        _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
         assert not thread.is_alive()
 
 
@@ -3600,8 +3861,8 @@ def test_ccb_claude_real_adapter_blackbox_watch_chain_without_done_marker(monkey
     app = CcbdApp(project_root)
     _freeze_job_ids(app, monkeypatch, fixed_req_id)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for_path(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
     try:
         code, stdout, stderr = _run_phase2_local([], cwd=project_root)
@@ -3623,7 +3884,7 @@ def test_ccb_claude_real_adapter_blackbox_watch_chain_without_done_marker(monkey
         assert 'status: completed' in stdout
     finally:
         app.shutdown()
-        thread.join(timeout=2)
+        _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
         assert not thread.is_alive()
 
 
@@ -3696,8 +3957,8 @@ def test_ccb_claude_real_adapter_recovers_after_ccbd_restart(monkeypatch, tmp_pa
     app1 = CcbdApp(project_root)
     _freeze_job_ids(app1, monkeypatch, fixed_req_id)
     thread1 = threading.Thread(target=app1.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread1.start()
-    _wait_for_path(app1.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread1)
+    _wait_for_app_ready(app1)
 
     try:
         code, stdout, stderr = _run_phase2_local([], cwd=project_root)
@@ -3710,23 +3971,23 @@ def test_ccb_claude_real_adapter_recovers_after_ccbd_restart(monkeypatch, tmp_pa
         running = _wait_for_phase2_status(project_root, 'demo', 'running')
         assert f'job_id: {job_id}' in running
 
-        deadline = time.time() + 2.0
-        while time.time() < deadline:
+        deadline = _monotonic_now_ignoring_keyboard_interrupt() + 2.0
+        while _monotonic_now_ignoring_keyboard_interrupt() < deadline:
             events_path = project_root / '.ccb' / 'agents' / 'demo' / 'events.jsonl'
             if events_path.exists() and 'assistant_chunk' in events_path.read_text(encoding='utf-8'):
                 break
-            time.sleep(0.05)
+            _sleep_ignoring_keyboard_interrupt(0.05)
         else:
             raise AssertionError('expected assistant_chunk before restart')
 
         app1.shutdown()
-        thread1.join(timeout=2)
+        _join_thread_ignoring_keyboard_interrupt(thread1, timeout=2)
         assert not thread1.is_alive()
 
         app2 = CcbdApp(project_root)
         thread2 = threading.Thread(target=app2.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-        thread2.start()
-        _wait_for_path(app2.paths.ccbd_socket_path)
+        _start_thread_ignoring_keyboard_interrupt(thread2)
+        _wait_for_app_ready(app2)
         try:
             pend = _wait_for_phase2_status(project_root, job_id, 'completed')
             assert 'reply: partial before restart' in pend
@@ -3734,12 +3995,12 @@ def test_ccb_claude_real_adapter_recovers_after_ccbd_restart(monkeypatch, tmp_pa
             assert 'completion_confidence: observed' in pend
         finally:
             app2.shutdown()
-            thread2.join(timeout=2)
+            _join_thread_ignoring_keyboard_interrupt(thread2, timeout=2)
             assert not thread2.is_alive()
     finally:
         if thread1.is_alive():
             app1.shutdown()
-            thread1.join(timeout=2)
+            _join_thread_ignoring_keyboard_interrupt(thread1, timeout=2)
             assert not thread1.is_alive()
 
 
@@ -3869,8 +4130,8 @@ def test_ccb_claude_real_adapter_blackbox_rotate_and_subagent_only_new_main_boun
     app = CcbdApp(project_root)
     _freeze_job_ids(app, monkeypatch, fixed_req_id)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for_path(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
     try:
         code, stdout, stderr = _run_phase2_local([], cwd=project_root)
@@ -3880,16 +4141,16 @@ def test_ccb_claude_real_adapter_blackbox_rotate_and_subagent_only_new_main_boun
         assert code == 0, stderr
         job_id = _extract_accepted_job_id(stdout, target='demo')
 
-        deadline = time.time() + 3.0
+        deadline = _monotonic_now_ignoring_keyboard_interrupt() + 3.0
         last_stdout = ''
-        while time.time() < deadline:
+        while _monotonic_now_ignoring_keyboard_interrupt() < deadline:
             code, pend, stderr = _run_phase2_local(['pend', 'demo'], cwd=project_root)
             assert code == 0, stderr
             last_stdout = pend
             if f'job_id: {job_id}' in pend and 'status: running' in pend and 'reply: old partial' in pend:
                 assert 'completion_reason: None' in pend
                 break
-            time.sleep(0.05)
+            _sleep_ignoring_keyboard_interrupt(0.05)
         else:
             raise AssertionError(f'expected running old-session preview before rotate completion; last={last_stdout!r}')
 
@@ -3906,7 +4167,7 @@ def test_ccb_claude_real_adapter_blackbox_rotate_and_subagent_only_new_main_boun
         assert 'status: completed' in stdout
     finally:
         app.shutdown()
-        thread.join(timeout=2)
+        _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
         assert not thread.is_alive()
 
 
@@ -4029,8 +4290,8 @@ def test_ccb_claude_real_adapter_recovers_after_ccbd_restart_rotate_and_subagent
     app1 = CcbdApp(project_root)
     _freeze_job_ids(app1, monkeypatch, fixed_req_id)
     thread1 = threading.Thread(target=app1.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread1.start()
-    _wait_for_path(app1.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread1)
+    _wait_for_app_ready(app1)
 
     try:
         code, stdout, stderr = _run_phase2_local([], cwd=project_root)
@@ -4040,12 +4301,12 @@ def test_ccb_claude_real_adapter_recovers_after_ccbd_restart_rotate_and_subagent
         assert code == 0, stderr
         job_id = _extract_accepted_job_id(stdout, target='demo')
 
-        deadline = time.time() + 2.0
-        while time.time() < deadline:
+        deadline = _monotonic_now_ignoring_keyboard_interrupt() + 2.0
+        while _monotonic_now_ignoring_keyboard_interrupt() < deadline:
             events_path = project_root / '.ccb' / 'agents' / 'demo' / 'events.jsonl'
             if events_path.exists() and 'assistant_chunk' in events_path.read_text(encoding='utf-8'):
                 break
-            time.sleep(0.05)
+            _sleep_ignoring_keyboard_interrupt(0.05)
         else:
             raise AssertionError('expected assistant_chunk before restart')
 
@@ -4055,13 +4316,13 @@ def test_ccb_claude_real_adapter_recovers_after_ccbd_restart_rotate_and_subagent
         assert 'completion_reason: None' in running
 
         app1.shutdown()
-        thread1.join(timeout=2)
+        _join_thread_ignoring_keyboard_interrupt(thread1, timeout=2)
         assert not thread1.is_alive()
 
         app2 = CcbdApp(project_root)
         thread2 = threading.Thread(target=app2.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-        thread2.start()
-        _wait_for_path(app2.paths.ccbd_socket_path)
+        _start_thread_ignoring_keyboard_interrupt(thread2)
+        _wait_for_app_ready(app2)
         try:
             pend = _wait_for_phase2_status(project_root, job_id, 'completed')
             assert 'reply: old partial' not in pend
@@ -4070,12 +4331,12 @@ def test_ccb_claude_real_adapter_recovers_after_ccbd_restart_rotate_and_subagent
             assert 'completion_confidence: observed' in pend
         finally:
             app2.shutdown()
-            thread2.join(timeout=2)
+            _join_thread_ignoring_keyboard_interrupt(thread2, timeout=2)
             assert not thread2.is_alive()
     finally:
         if thread1.is_alive():
             app1.shutdown()
-            thread1.join(timeout=2)
+            _join_thread_ignoring_keyboard_interrupt(thread1, timeout=2)
             assert not thread1.is_alive()
 
 
@@ -4147,8 +4408,8 @@ def test_ccb_gemini_real_adapter_blackbox_watch_chain(monkeypatch, tmp_path: Pat
     app = CcbdApp(project_root)
     _freeze_job_ids(app, monkeypatch, fixed_req_id)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for_path(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
     try:
         code, stdout, stderr = _run_phase2_local([], cwd=project_root)
@@ -4179,7 +4440,7 @@ def test_ccb_gemini_real_adapter_blackbox_watch_chain(monkeypatch, tmp_path: Pat
         assert f'job_id: {job_id}' in stdout
     finally:
         app.shutdown()
-        thread.join(timeout=2)
+        _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
         assert not thread.is_alive()
 
 
@@ -4272,8 +4533,8 @@ def test_ccb_gemini_real_adapter_blackbox_waits_for_last_snapshot_mutation_to_se
     app = CcbdApp(project_root)
     _freeze_job_ids(app, monkeypatch, fixed_req_id)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for_path(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
     try:
         code, stdout, stderr = _run_phase2_local([], cwd=project_root)
@@ -4283,16 +4544,16 @@ def test_ccb_gemini_real_adapter_blackbox_waits_for_last_snapshot_mutation_to_se
         assert code == 0, stderr
         job_id = _extract_accepted_job_id(stdout, target='demo')
 
-        deadline = time.time() + 3.0
+        deadline = _monotonic_now_ignoring_keyboard_interrupt() + 3.0
         last_stdout = ''
-        while time.time() < deadline:
+        while _monotonic_now_ignoring_keyboard_interrupt() < deadline:
             code, pend, stderr = _run_phase2_local(['pend', 'demo'], cwd=project_root)
             assert code == 0, stderr
             last_stdout = pend
             if f'job_id: {job_id}' in pend and 'status: running' in pend and 'reply: final stable reply' in pend:
                 assert 'completion_reason: None' in pend
                 break
-            time.sleep(0.05)
+            _sleep_ignoring_keyboard_interrupt(0.05)
         else:
             raise AssertionError(f'expected running final preview before settle completion; last={last_stdout!r}')
 
@@ -4308,7 +4569,7 @@ def test_ccb_gemini_real_adapter_blackbox_waits_for_last_snapshot_mutation_to_se
         assert 'status: completed' in stdout
     finally:
         app.shutdown()
-        thread.join(timeout=2)
+        _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
         assert not thread.is_alive()
 
 
@@ -4381,8 +4642,8 @@ def test_ccb_gemini_real_adapter_blackbox_handles_long_silence_and_rotate(monkey
     app = CcbdApp(project_root)
     _freeze_job_ids(app, monkeypatch, fixed_req_id)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for_path(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
     try:
         code, stdout, stderr = _run_phase2_local([], cwd=project_root)
@@ -4392,7 +4653,7 @@ def test_ccb_gemini_real_adapter_blackbox_handles_long_silence_and_rotate(monkey
         assert code == 0, stderr
         job_id = _extract_accepted_job_id(stdout, target='demo')
 
-        time.sleep(0.15)
+        _sleep_ignoring_keyboard_interrupt(0.15)
         code, stdout, stderr = _run_phase2_local(['pend', 'demo'], cwd=project_root)
         assert code == 0, stderr
         assert f'job_id: {job_id}' in stdout
@@ -4409,7 +4670,7 @@ def test_ccb_gemini_real_adapter_blackbox_handles_long_silence_and_rotate(monkey
         assert 'status: completed' in stdout
     finally:
         app.shutdown()
-        thread.join(timeout=2)
+        _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
         assert not thread.is_alive()
 
 
@@ -4492,8 +4753,8 @@ def test_ccb_gemini_real_adapter_blackbox_clears_stale_reply_preview_after_rotat
     app = CcbdApp(project_root)
     _freeze_job_ids(app, monkeypatch, fixed_req_id)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for_path(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
     try:
         code, stdout, stderr = _run_phase2_local([], cwd=project_root)
@@ -4503,9 +4764,9 @@ def test_ccb_gemini_real_adapter_blackbox_clears_stale_reply_preview_after_rotat
         assert code == 0, stderr
         job_id = _extract_accepted_job_id(stdout, target='demo')
 
-        deadline = time.time() + 3.0
+        deadline = _monotonic_now_ignoring_keyboard_interrupt() + 3.0
         last_stdout = ''
-        while time.time() < deadline:
+        while _monotonic_now_ignoring_keyboard_interrupt() < deadline:
             code, pend, stderr = _run_phase2_local(['pend', 'demo'], cwd=project_root)
             assert code == 0, stderr
             last_stdout = pend
@@ -4513,12 +4774,12 @@ def test_ccb_gemini_real_adapter_blackbox_clears_stale_reply_preview_after_rotat
                 assert 'reply: old preview reply' not in pend
                 assert 'reply: \n' in pend or pend.rstrip().endswith('reply:')
                 break
-            time.sleep(0.05)
+            _sleep_ignoring_keyboard_interrupt(0.05)
         else:
             raise AssertionError(f'expected running pend without stale preview; last={last_stdout!r}')
     finally:
         app.shutdown()
-        thread.join(timeout=2)
+        _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
         assert not thread.is_alive()
 
 
@@ -4604,8 +4865,8 @@ def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart(monkeypatch, tmp_pa
     app1 = CcbdApp(project_root)
     _freeze_job_ids(app1, monkeypatch, fixed_req_id)
     thread1 = threading.Thread(target=app1.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread1.start()
-    _wait_for_path(app1.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread1)
+    _wait_for_app_ready(app1)
 
     try:
         code, stdout, stderr = _run_phase2_local([], cwd=project_root)
@@ -4618,23 +4879,23 @@ def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart(monkeypatch, tmp_pa
         running = _wait_for_phase2_status(project_root, 'demo', 'running')
         assert f'job_id: {job_id}' in running
 
-        deadline = time.time() + 2.0
-        while time.time() < deadline:
+        deadline = _monotonic_now_ignoring_keyboard_interrupt() + 2.0
+        while _monotonic_now_ignoring_keyboard_interrupt() < deadline:
             events_path = project_root / '.ccb' / 'agents' / 'demo' / 'events.jsonl'
             if events_path.exists() and 'session_snapshot' in events_path.read_text(encoding='utf-8'):
                 break
-            time.sleep(0.05)
+            _sleep_ignoring_keyboard_interrupt(0.05)
         else:
             raise AssertionError('expected session_snapshot before restart')
 
         app1.shutdown()
-        thread1.join(timeout=2)
+        _join_thread_ignoring_keyboard_interrupt(thread1, timeout=2)
         assert not thread1.is_alive()
 
         app2 = CcbdApp(project_root)
         thread2 = threading.Thread(target=app2.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-        thread2.start()
-        _wait_for_path(app2.paths.ccbd_socket_path)
+        _start_thread_ignoring_keyboard_interrupt(thread2)
+        _wait_for_app_ready(app2)
         try:
             pend = _wait_for_phase2_status(project_root, job_id, 'completed', timeout=5.0)
             assert 'reply: final stable reply' in pend
@@ -4642,12 +4903,12 @@ def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart(monkeypatch, tmp_pa
             assert 'completion_confidence: observed' in pend
         finally:
             app2.shutdown()
-            thread2.join(timeout=2)
+            _join_thread_ignoring_keyboard_interrupt(thread2, timeout=2)
             assert not thread2.is_alive()
     finally:
         if thread1.is_alive():
             app1.shutdown()
-            thread1.join(timeout=2)
+            _join_thread_ignoring_keyboard_interrupt(thread1, timeout=2)
             assert not thread1.is_alive()
 
 
@@ -4746,8 +5007,8 @@ def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart_and_waits_for_post_
     app1 = CcbdApp(project_root)
     _freeze_job_ids(app1, monkeypatch, fixed_req_id)
     thread1 = threading.Thread(target=app1.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread1.start()
-    _wait_for_path(app1.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread1)
+    _wait_for_app_ready(app1)
 
     try:
         code, stdout, stderr = _run_phase2_local([], cwd=project_root)
@@ -4757,12 +5018,12 @@ def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart_and_waits_for_post_
         assert code == 0, stderr
         job_id = _extract_accepted_job_id(stdout, target='demo')
 
-        deadline = time.time() + 2.0
-        while time.time() < deadline:
+        deadline = _monotonic_now_ignoring_keyboard_interrupt() + 2.0
+        while _monotonic_now_ignoring_keyboard_interrupt() < deadline:
             events_path = project_root / '.ccb' / 'agents' / 'demo' / 'events.jsonl'
             if events_path.exists() and 'session_snapshot' in events_path.read_text(encoding='utf-8'):
                 break
-            time.sleep(0.05)
+            _sleep_ignoring_keyboard_interrupt(0.05)
         else:
             raise AssertionError('expected session_snapshot before restart')
 
@@ -4772,24 +5033,24 @@ def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart_and_waits_for_post_
         assert 'completion_reason: None' in running
 
         app1.shutdown()
-        thread1.join(timeout=2)
+        _join_thread_ignoring_keyboard_interrupt(thread1, timeout=2)
         assert not thread1.is_alive()
 
         app2 = CcbdApp(project_root)
         thread2 = threading.Thread(target=app2.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-        thread2.start()
-        _wait_for_path(app2.paths.ccbd_socket_path)
+        _start_thread_ignoring_keyboard_interrupt(thread2)
+        _wait_for_app_ready(app2)
         try:
-            deadline = time.time() + 3.0
+            deadline = _monotonic_now_ignoring_keyboard_interrupt() + 3.0
             last_stdout = ''
-            while time.time() < deadline:
+            while _monotonic_now_ignoring_keyboard_interrupt() < deadline:
                 code, pend, stderr = _run_phase2_local(['pend', 'demo'], cwd=project_root)
                 assert code == 0, stderr
                 last_stdout = pend
                 if f'job_id: {job_id}' in pend and 'status: running' in pend and 'reply: final stable reply' in pend:
                     assert 'completion_reason: None' in pend
                     break
-                time.sleep(0.05)
+                _sleep_ignoring_keyboard_interrupt(0.05)
             else:
                 raise AssertionError(f'expected running final preview after restart before settle completion; last={last_stdout!r}')
 
@@ -4799,12 +5060,12 @@ def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart_and_waits_for_post_
             assert 'completion_confidence: observed' in pend
         finally:
             app2.shutdown()
-            thread2.join(timeout=2)
+            _join_thread_ignoring_keyboard_interrupt(thread2, timeout=2)
             assert not thread2.is_alive()
     finally:
         if thread1.is_alive():
             app1.shutdown()
-            thread1.join(timeout=2)
+            _join_thread_ignoring_keyboard_interrupt(thread1, timeout=2)
             assert not thread1.is_alive()
 
 
@@ -4929,8 +5190,8 @@ def test_ccb_gemini_real_adapter_recovers_after_restart_rotate_and_waits_for_new
     app1 = CcbdApp(project_root)
     _freeze_job_ids(app1, monkeypatch, fixed_req_id)
     thread1 = threading.Thread(target=app1.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread1.start()
-    _wait_for_path(app1.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread1)
+    _wait_for_app_ready(app1)
 
     try:
         code, stdout, stderr = _run_phase2_local([], cwd=project_root)
@@ -4940,12 +5201,12 @@ def test_ccb_gemini_real_adapter_recovers_after_restart_rotate_and_waits_for_new
         assert code == 0, stderr
         job_id = _extract_accepted_job_id(stdout, target='demo')
 
-        deadline = time.time() + 2.0
-        while time.time() < deadline:
+        deadline = _monotonic_now_ignoring_keyboard_interrupt() + 2.0
+        while _monotonic_now_ignoring_keyboard_interrupt() < deadline:
             events_path = project_root / '.ccb' / 'agents' / 'demo' / 'events.jsonl'
             if events_path.exists() and 'session_snapshot' in events_path.read_text(encoding='utf-8'):
                 break
-            time.sleep(0.05)
+            _sleep_ignoring_keyboard_interrupt(0.05)
         else:
             raise AssertionError('expected old-session snapshot before restart')
 
@@ -4955,37 +5216,37 @@ def test_ccb_gemini_real_adapter_recovers_after_restart_rotate_and_waits_for_new
         assert 'completion_reason: None' in running
 
         app1.shutdown()
-        thread1.join(timeout=2)
+        _join_thread_ignoring_keyboard_interrupt(thread1, timeout=2)
         assert not thread1.is_alive()
 
         app2 = CcbdApp(project_root)
         thread2 = threading.Thread(target=app2.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-        thread2.start()
-        _wait_for_path(app2.paths.ccbd_socket_path)
+        _start_thread_ignoring_keyboard_interrupt(thread2)
+        _wait_for_app_ready(app2)
         try:
-            deadline = time.time() + 3.0
+            deadline = _monotonic_now_ignoring_keyboard_interrupt() + 3.0
             last_stdout = ''
-            while time.time() < deadline:
+            while _monotonic_now_ignoring_keyboard_interrupt() < deadline:
                 code, pend, stderr = _run_phase2_local(['pend', 'demo'], cwd=project_root)
                 assert code == 0, stderr
                 last_stdout = pend
                 if f'job_id: {job_id}' in pend and 'status: running' in pend and 'reply: old preview reply' not in pend:
                     assert 'reply: \n' in pend or pend.rstrip().endswith('reply:')
                     break
-                time.sleep(0.05)
+                _sleep_ignoring_keyboard_interrupt(0.05)
             else:
                 raise AssertionError(f'expected rotate to clear old preview after restart; last={last_stdout!r}')
 
-            deadline = time.time() + 3.0
+            deadline = _monotonic_now_ignoring_keyboard_interrupt() + 3.0
             last_stdout = ''
-            while time.time() < deadline:
+            while _monotonic_now_ignoring_keyboard_interrupt() < deadline:
                 code, pend, stderr = _run_phase2_local(['pend', 'demo'], cwd=project_root)
                 assert code == 0, stderr
                 last_stdout = pend
                 if f'job_id: {job_id}' in pend and 'status: running' in pend and 'reply: new final stable reply' in pend:
                     assert 'completion_reason: None' in pend
                     break
-                time.sleep(0.05)
+                _sleep_ignoring_keyboard_interrupt(0.05)
             else:
                 raise AssertionError(f'expected running new-session final preview before settle completion; last={last_stdout!r}')
 
@@ -4996,10 +5257,10 @@ def test_ccb_gemini_real_adapter_recovers_after_restart_rotate_and_waits_for_new
             assert 'completion_confidence: observed' in pend
         finally:
             app2.shutdown()
-            thread2.join(timeout=2)
+            _join_thread_ignoring_keyboard_interrupt(thread2, timeout=2)
             assert not thread2.is_alive()
     finally:
         if thread1.is_alive():
             app1.shutdown()
-            thread1.join(timeout=2)
+            _join_thread_ignoring_keyboard_interrupt(thread1, timeout=2)
             assert not thread1.is_alive()

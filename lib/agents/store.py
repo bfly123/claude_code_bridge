@@ -127,6 +127,8 @@ def _agent_runtime_from_record(record: dict) -> AgentRuntime:
         provider=record.get('provider'),
         runtime_root=record.get('runtime_root'),
         runtime_pid=record.get('runtime_pid'),
+        job_id=record.get('job_id'),
+        job_owner_pid=record.get('job_owner_pid'),
         terminal_backend=record.get('terminal_backend'),
         pane_id=record.get('pane_id'),
         active_pane_id=record.get('active_pane_id'),

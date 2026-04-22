@@ -7,6 +7,7 @@ import uuid
 from agents.config_identity import project_config_identity_payload
 from agents.config_loader import load_project_config
 from agents.store import AgentRestoreStore
+from ccbd.ipc_state_store import CcbdIpcStateStore
 from ccbd.lifecycle_report_store import CcbdShutdownReportStore, CcbdStartupReportStore
 from ccbd.restore_report_store import CcbdRestoreReportStore
 from ccbd.services import (
@@ -33,6 +34,7 @@ from provider_execution.registry import build_default_execution_registry
 from provider_execution.service import ExecutionService
 from provider_execution.state_store import ExecutionStateStore
 from storage.paths import PathLayout
+from terminal_runtime.backend_env import default_mux_backend_impl
 
 from .handlers import register_handlers
 
@@ -53,7 +55,10 @@ def initialize_app(app, project_root: str | Path, *, clock, pid: int | None) -> 
     app.keeper_pid = int(keeper_pid) if keeper_pid.isdigit() and int(keeper_pid) > 0 else None
     app.daemon_instance_id = uuid.uuid4().hex
     app.provider_catalog = build_default_provider_catalog()
+    app.namespace_backend_family = 'tmux'
+    app.namespace_backend_impl = default_mux_backend_impl()
     app.mount_manager = MountManager(app.paths, clock=app.clock)
+    app.ipc_state_store = CcbdIpcStateStore(app.paths)
     app.restore_report_store = CcbdRestoreReportStore(app.paths)
     app.startup_report_store = CcbdStartupReportStore(app.paths)
     app.shutdown_report_store = CcbdShutdownReportStore(app.paths)
@@ -131,8 +136,12 @@ def initialize_app(app, project_root: str | Path, *, clock, pid: int | None) -> 
         clock=app.clock,
         namespace_state_store=app.namespace_state_store,
     )
-    app.socket_server = CcbdSocketServer(app.paths.ccbd_socket_path)
+    app.socket_server = CcbdSocketServer(
+        app.paths.ccbd_ipc_ref,
+        ipc_kind=app.paths.ccbd_ipc_kind,
+    )
     app.lease = None
+    app._startup_completed = False
     register_handlers(app)
 
 

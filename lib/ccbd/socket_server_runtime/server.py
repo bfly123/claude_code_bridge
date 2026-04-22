@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 import threading
 
 from .lifecycle import listen_server, shutdown_server
@@ -12,14 +11,16 @@ class CcbdSocketServer:
     _MUTATING_OPS = frozenset({'submit', 'cancel', 'attach', 'start', 'restore', 'ack', 'stop-all'})
     _DOUBLE_TICK_OPS = frozenset({'submit'})
 
-    def __init__(self, socket_path: str | Path) -> None:
-        self._socket_path = Path(socket_path)
+    def __init__(self, socket_path, *, ipc_kind: str | None = None) -> None:
+        self._socket_path = socket_path
+        self._ipc_kind = str(ipc_kind or '').strip() or None
         self._handlers: dict[str, callable] = {}
         self._server = None
+        self._transport = None
         self._stop_event = threading.Event()
 
     @property
-    def socket_path(self) -> Path:
+    def socket_path(self):
         return self._socket_path
 
     def register_handler(self, op: str, handler) -> None:
