@@ -78,7 +78,10 @@ jobs:
           python -c "
           import sys
           sys.path.insert(0, 'lib')
-          from completion_hook import notify_completion, env_bool
+          from provider_hooks.notifications import normalize_completion_status, completion_status_marker
+          from runtime_env import env_bool
+          assert normalize_completion_status('completed') == 'completed'
+          assert completion_status_marker('failed') == '[CCB_TASK_FAILED]'
           print('Completion hook imports test passed')
           "
 
