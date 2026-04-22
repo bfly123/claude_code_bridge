@@ -59,10 +59,9 @@ def test_v2_main_path_does_not_import_standalone_askd_modules() -> None:
 
 def test_standalone_askd_subsystem_is_not_referenced_by_v2_package_docstrings_only() -> None:
     ccbd_imports = _import_names(REPO_ROOT / 'lib/ccbd/app.py')
-    assert 'ccbd.handlers' in ccbd_imports
-    assert 'ccbd.services' in ccbd_imports
-    assert 'provider_execution.registry' in ccbd_imports
-    assert 'provider_execution.service' in ccbd_imports
+    assert 'ccbd.app_runtime' in ccbd_imports
+    assert 'ccbd.app_runtime.handlers' in ccbd_imports
+    assert 'ccbd.system' in ccbd_imports
     assert 'askd.daemon' not in ccbd_imports
     assert 'askd.handlers.submit' not in ccbd_imports
     assert 'askd.services.dispatcher' not in ccbd_imports

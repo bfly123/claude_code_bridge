@@ -79,7 +79,8 @@ class ClaudeProviderAdapter:
 
 
 def _reader_factory(session):
-    root = Path(session.claude_projects_root).expanduser() if session.claude_projects_root else None
+    projects_root = getattr(session, 'claude_projects_root', None)
+    root = Path(projects_root).expanduser() if projects_root else None
     return ClaudeLogReader(root=root, work_dir=Path(session.work_dir))
 
 

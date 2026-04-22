@@ -835,7 +835,7 @@ def _wait_for_path(path: Path, timeout: float = 2.0) -> None:
 
 
 def _assert_phase2_app_shutdown_clean(project_root: Path, app: CcbdApp, thread: threading.Thread) -> None:
-    app.shutdown()
+    app.request_shutdown()
     thread.join(timeout=2)
     assert not thread.is_alive()
     assert not app.paths.ccbd_socket_path.exists()
@@ -2190,7 +2190,7 @@ def test_ccb_codex_real_adapter_recovers_after_ccbd_restart(monkeypatch, tmp_pat
         else:
             raise AssertionError('expected assistant_chunk before restart')
 
-        app1.shutdown()
+        app1.request_shutdown()
         thread1.join(timeout=2)
         assert not thread1.is_alive()
 
@@ -2203,12 +2203,12 @@ def test_ccb_codex_real_adapter_recovers_after_ccbd_restart(monkeypatch, tmp_pat
             assert 'reply: partial before restart' in pend
             assert 'completion_reason: task_complete' in pend
         finally:
-            app2.shutdown()
+            app2.request_shutdown()
             thread2.join(timeout=2)
             assert not thread2.is_alive()
     finally:
         if thread1.is_alive():
-            app1.shutdown()
+            app1.request_shutdown()
             thread1.join(timeout=2)
             assert not thread1.is_alive()
 
@@ -3315,7 +3315,7 @@ def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart_and_rotate_clears_s
         else:
             raise AssertionError(f'expected stale preview before restart; last={last_stdout!r}')
 
-        app1.shutdown()
+        app1.request_shutdown()
         thread1.join(timeout=2)
         assert not thread1.is_alive()
 
@@ -3342,12 +3342,12 @@ def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart_and_rotate_clears_s
             assert 'completion_reason: session_reply_stable' in pend
             assert 'completion_confidence: observed' in pend
         finally:
-            app2.shutdown()
+            app2.request_shutdown()
             thread2.join(timeout=2)
             assert not thread2.is_alive()
     finally:
         if thread1.is_alive():
-            app1.shutdown()
+            app1.request_shutdown()
             thread1.join(timeout=2)
             assert not thread1.is_alive()
 
@@ -3747,7 +3747,7 @@ def test_ccb_claude_real_adapter_recovers_after_ccbd_restart(monkeypatch, tmp_pa
         else:
             raise AssertionError('expected assistant_chunk before restart')
 
-        app1.shutdown()
+        app1.request_shutdown()
         thread1.join(timeout=2)
         assert not thread1.is_alive()
 
@@ -3761,12 +3761,12 @@ def test_ccb_claude_real_adapter_recovers_after_ccbd_restart(monkeypatch, tmp_pa
             assert 'completion_reason: turn_duration' in pend
             assert 'completion_confidence: observed' in pend
         finally:
-            app2.shutdown()
+            app2.request_shutdown()
             thread2.join(timeout=2)
             assert not thread2.is_alive()
     finally:
         if thread1.is_alive():
-            app1.shutdown()
+            app1.request_shutdown()
             thread1.join(timeout=2)
             assert not thread1.is_alive()
 
@@ -4084,7 +4084,7 @@ def test_ccb_claude_real_adapter_recovers_after_ccbd_restart_rotate_and_subagent
         assert 'reply: old partial\nold child work' in running
         assert 'completion_reason: None' in running
 
-        app1.shutdown()
+        app1.request_shutdown()
         thread1.join(timeout=2)
         assert not thread1.is_alive()
 
@@ -4099,12 +4099,12 @@ def test_ccb_claude_real_adapter_recovers_after_ccbd_restart_rotate_and_subagent
             assert 'completion_reason: turn_duration' in pend
             assert 'completion_confidence: observed' in pend
         finally:
-            app2.shutdown()
+            app2.request_shutdown()
             thread2.join(timeout=2)
             assert not thread2.is_alive()
     finally:
         if thread1.is_alive():
-            app1.shutdown()
+            app1.request_shutdown()
             thread1.join(timeout=2)
             assert not thread1.is_alive()
 
@@ -4657,7 +4657,7 @@ def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart(monkeypatch, tmp_pa
         else:
             raise AssertionError('expected session_snapshot before restart')
 
-        app1.shutdown()
+        app1.request_shutdown()
         thread1.join(timeout=2)
         assert not thread1.is_alive()
 
@@ -4671,12 +4671,12 @@ def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart(monkeypatch, tmp_pa
             assert 'completion_reason: session_reply_stable' in pend
             assert 'completion_confidence: observed' in pend
         finally:
-            app2.shutdown()
+            app2.request_shutdown()
             thread2.join(timeout=2)
             assert not thread2.is_alive()
     finally:
         if thread1.is_alive():
-            app1.shutdown()
+            app1.request_shutdown()
             thread1.join(timeout=2)
             assert not thread1.is_alive()
 
@@ -4801,7 +4801,7 @@ def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart_and_waits_for_post_
         assert 'reply: partial stable' in running
         assert 'completion_reason: None' in running
 
-        app1.shutdown()
+        app1.request_shutdown()
         thread1.join(timeout=2)
         assert not thread1.is_alive()
 
@@ -4828,12 +4828,12 @@ def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart_and_waits_for_post_
             assert 'completion_reason: session_reply_stable' in pend
             assert 'completion_confidence: observed' in pend
         finally:
-            app2.shutdown()
+            app2.request_shutdown()
             thread2.join(timeout=2)
             assert not thread2.is_alive()
     finally:
         if thread1.is_alive():
-            app1.shutdown()
+            app1.request_shutdown()
             thread1.join(timeout=2)
             assert not thread1.is_alive()
 
@@ -4984,7 +4984,7 @@ def test_ccb_gemini_real_adapter_recovers_after_restart_rotate_and_waits_for_new
         assert 'reply: old preview reply' in running
         assert 'completion_reason: None' in running
 
-        app1.shutdown()
+        app1.request_shutdown()
         thread1.join(timeout=2)
         assert not thread1.is_alive()
 
@@ -5025,11 +5025,11 @@ def test_ccb_gemini_real_adapter_recovers_after_restart_rotate_and_waits_for_new
             assert 'completion_reason: session_reply_stable' in pend
             assert 'completion_confidence: observed' in pend
         finally:
-            app2.shutdown()
+            app2.request_shutdown()
             thread2.join(timeout=2)
             assert not thread2.is_alive()
     finally:
         if thread1.is_alive():
-            app1.shutdown()
+            app1.request_shutdown()
             thread1.join(timeout=2)
             assert not thread1.is_alive()

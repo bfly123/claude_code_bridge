@@ -321,8 +321,8 @@ def test_dispatcher_submit_tick_complete_roundtrip(tmp_path: Path) -> None:
     assert runtime.daemon_generation == daemon_generation
 
 
-def test_dispatcher_rejects_email_sender(tmp_path: Path) -> None:
-    project_root = tmp_path / 'repo-reject-email-sender'
+def test_dispatcher_allows_non_mailbox_email_sender(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-allow-email-sender'
     ctx = _bootstrap_test_project(project_root)
     layout = PathLayout(project_root)
     config = _provider_config('codex')
@@ -330,21 +330,23 @@ def test_dispatcher_rejects_email_sender(tmp_path: Path) -> None:
     registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
     dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-18T00:00:00Z')
 
-    with pytest.raises(Exception) as exc_info:
-        dispatcher.submit(
-            MessageEnvelope(
-                project_id=ctx.project_id,
-                to_agent='codex',
-                from_actor='email',
-                body='hello',
-                task_id='email-req-1',
-                reply_to=None,
-                message_type='ask',
-                delivery_scope=DeliveryScope.SINGLE,
-            )
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='email',
+            body='hello',
+            task_id='email-req-1',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
         )
+    )
 
-    assert str(exc_info.value) == 'unknown sender agent: email'
+    assert len(receipt.jobs) == 1
+    current = dispatcher.get(receipt.jobs[0].job_id)
+    assert current is not None
+    assert current.request.from_actor == 'email'
 
 
 def test_dispatcher_does_not_overwrite_terminal_snapshot_with_non_terminal_tracker_view(tmp_path: Path) -> None:

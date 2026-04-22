@@ -51,6 +51,24 @@ def _run(*args, **kwargs):
 
     return _sp.run(*args, **kwargs)
 
+
+def _extract_wsl_path_from_unc_like_path(path: str) -> str | None:
+    normalized = str(path or "").strip()
+    if not normalized:
+        return None
+
+    candidate = normalized.replace("\\", "/")
+    prefixes = ("/wsl.localhost/", "//wsl.localhost/", "/wsl$/", "//wsl$/")
+    for prefix in prefixes:
+        if not candidate.lower().startswith(prefix):
+            continue
+        remainder = candidate[len(prefix):]
+        parts = [part for part in remainder.split("/") if part]
+        if len(parts) < 2:
+            return None
+        return "/" + "/".join(parts[1:])
+    return None
+
 def _default_shell() -> tuple[str, str]:
     return _default_shell_impl(is_wsl_fn=is_wsl, is_windows_fn=is_windows)
 
