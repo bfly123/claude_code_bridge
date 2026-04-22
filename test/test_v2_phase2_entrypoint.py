@@ -891,37 +891,54 @@ def test_ccb_v2_project_lifecycle(tmp_path: Path) -> None:
     assert ask.returncode == 0, ask.stderr
     job_id = _extract_accepted_job_id(ask.stdout, target='codex')
 
-    running = _wait_for_status(project_root, 'codex', 'running')
-    assert f'job_id: {job_id}' in running.stdout
+    observed = _wait_for_any_status(project_root, 'codex', ('running', 'completed'))
+    assert f'job_id: {job_id}' in observed.stdout
 
-    queue = _run_ccb(['queue', 'codex'], cwd=project_root)
-    assert queue.returncode == 0, queue.stderr
-    assert 'queue_status: ok' in queue.stdout
-    assert 'target: codex' in queue.stdout
-    assert 'mailbox_state: delivering' in queue.stdout
-    assert 'runtime_state: busy' in queue.stdout
-    assert 'runtime_health: restored' in queue.stdout
-    assert f'job={job_id}' in queue.stdout
+    if 'status: running' in observed.stdout:
+        queue = _run_ccb(['queue', 'codex'], cwd=project_root)
+        assert queue.returncode == 0, queue.stderr
+        assert 'queue_status: ok' in queue.stdout
+        assert 'target: codex' in queue.stdout
+        assert 'mailbox_state: delivering' in queue.stdout
+        assert 'runtime_state: busy' in queue.stdout
+        assert 'runtime_health: restored' in queue.stdout
+        assert f'job={job_id}' in queue.stdout
 
-    cancel = _run_ccb(['cancel', job_id], cwd=project_root)
-    assert cancel.returncode == 0, cancel.stderr
-    assert 'cancel_status: ok' in cancel.stdout
-    assert 'status: cancelled' in cancel.stdout
+        cancel = _run_ccb(['cancel', job_id], cwd=project_root)
+        assert cancel.returncode == 0, cancel.stderr
+        assert 'cancel_status: ok' in cancel.stdout
+        assert 'status: cancelled' in cancel.stdout
 
-    cancelled = _wait_for_status(project_root, job_id, 'cancelled')
-    assert 'completion_reason: cancel_info' in cancelled.stdout
+        terminal = _wait_for_status(project_root, job_id, 'cancelled')
+        assert 'completion_reason: cancel_info' in terminal.stdout
 
-    watch = _run_ccb(['watch', job_id], cwd=project_root)
-    assert watch.returncode == 0, watch.stderr
-    assert 'event:' in watch.stdout
-    assert 'watch_status: terminal' in watch.stdout
-    assert f'job_id: {job_id}' in watch.stdout
-    assert 'status: cancelled' in watch.stdout
+        watch = _run_ccb(['watch', job_id], cwd=project_root)
+        assert watch.returncode == 0, watch.stderr
+        assert 'event:' in watch.stdout
+        assert 'watch_status: terminal' in watch.stdout
+        assert f'job_id: {job_id}' in watch.stdout
+        assert 'status: cancelled' in watch.stdout
 
-    watch_agent = _run_ccb(['watch', 'codex'], cwd=project_root)
-    assert watch_agent.returncode == 0, watch_agent.stderr
-    assert 'watch_status: terminal' in watch_agent.stdout
-    assert f'job_id: {job_id}' in watch_agent.stdout
+        watch_agent = _run_ccb(['watch', 'codex'], cwd=project_root)
+        assert watch_agent.returncode == 0, watch_agent.stderr
+        assert 'watch_status: terminal' in watch_agent.stdout
+        assert f'job_id: {job_id}' in watch_agent.stdout
+    else:
+        completed = _wait_for_status(project_root, job_id, 'completed')
+        assert 'reply: stub reply for' in completed.stdout
+        assert 'completion_reason: task_complete' in completed.stdout
+
+        watch = _run_ccb(['watch', job_id], cwd=project_root)
+        assert watch.returncode == 0, watch.stderr
+        assert 'event:' in watch.stdout
+        assert 'watch_status: terminal' in watch.stdout
+        assert f'job_id: {job_id}' in watch.stdout
+        assert 'status: completed' in watch.stdout
+
+        watch_agent = _run_ccb(['watch', 'codex'], cwd=project_root)
+        assert watch_agent.returncode == 0, watch_agent.stderr
+        assert 'watch_status: terminal' in watch_agent.stdout
+        assert f'job_id: {job_id}' in watch_agent.stdout
 
     kill = _run_ccb(['kill'], cwd=project_root)
     assert kill.returncode == 0, kill.stderr

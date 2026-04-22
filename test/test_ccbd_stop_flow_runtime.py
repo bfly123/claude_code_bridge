@@ -119,7 +119,7 @@ def test_terminate_runtime_pids_reaps_helper_group_from_manifest(tmp_path: Path,
     killed: list[tuple[int, int]] = []
     removed: list[tuple[Path, ...]] = []
 
-    monkeypatch.setattr('provider_runtime.helper_cleanup.os.name', 'posix')
+    monkeypatch.setattr('provider_runtime.helper_cleanup._kill_helper_group', lambda pgid, sig: killed.append((pgid, int(sig))) or True)
     monkeypatch.setattr('provider_runtime.helper_cleanup.os.killpg', lambda pgid, sig: killed.append((pgid, int(sig))) or None)
     monkeypatch.setattr('provider_runtime.helper_cleanup.os.getpgrp', lambda: 999)
     monkeypatch.setattr(

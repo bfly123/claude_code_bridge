@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import socket
+import tempfile
 import threading
 import time
 from types import SimpleNamespace
@@ -210,26 +212,27 @@ def test_ccbd_socket_roundtrip_and_shutdown(tmp_path: Path) -> None:
 
 
 def test_ccbd_socket_shutdown_does_not_remove_replaced_socket_path(tmp_path: Path) -> None:
-    socket_path = tmp_path / 'ccbd.sock'
-    old_server = CcbdSocketServer(socket_path)
-    old_server.listen()
-    old_stat = socket_path.stat()
+    with tempfile.TemporaryDirectory(prefix='ccb-sock-', dir=str(Path(tempfile.gettempdir()))) as temp_dir:
+        socket_path = Path(temp_dir) / f'ccbd-{os.getpid()}.sock'
+        old_server = CcbdSocketServer(socket_path)
+        old_server.listen()
+        old_stat = socket_path.stat()
 
-    socket_path.unlink()
+        socket_path.unlink()
 
-    new_server = CcbdSocketServer(socket_path)
-    new_server.listen()
-    new_stat = socket_path.stat()
+        new_server = CcbdSocketServer(socket_path)
+        new_server.listen()
+        new_stat = socket_path.stat()
 
-    assert (old_stat.st_dev, old_stat.st_ino) != (new_stat.st_dev, new_stat.st_ino)
+        assert (old_stat.st_dev, old_stat.st_ino) != (new_stat.st_dev, new_stat.st_ino)
 
-    old_server.shutdown()
-    assert socket_path.exists()
-    current_stat = socket_path.stat()
-    assert (current_stat.st_dev, current_stat.st_ino) == (new_stat.st_dev, new_stat.st_ino)
+        old_server.shutdown()
+        assert socket_path.exists()
+        current_stat = socket_path.stat()
+        assert (current_stat.st_dev, current_stat.st_ino) == (new_stat.st_dev, new_stat.st_ino)
 
-    new_server.shutdown()
-    assert not socket_path.exists()
+        new_server.shutdown()
+        assert not socket_path.exists()
 
 
 def test_ccbd_stop_all_does_not_run_post_shutdown_heartbeat(tmp_path: Path) -> None:

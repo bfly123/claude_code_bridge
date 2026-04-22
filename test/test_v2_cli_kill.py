@@ -58,6 +58,7 @@ def test_cmd_kill_terminates_session_and_force_kills_daemon(
         def kill_pane(self, pane_id: str) -> None:
             killed_panes.append(pane_id)
 
+    monkeypatch.setattr("cli.kill_runtime.sessions.shutil.which", lambda name: "/usr/bin/tmux" if name == "tmux" else None)
     monkeypatch.setattr(kill, "kill_pid", lambda pid, force=False: killed_pids.append((pid, force)) or True)
 
     result = kill.cmd_kill(
