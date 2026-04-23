@@ -54,7 +54,7 @@ def _resolve_timeout(explicit: float | None) -> float:
         try:
             return max(0.1, float(explicit))
         except Exception:
-            return 3.0
+            return 30.0
     for env_name in ('CCB_CCBD_CLIENT_TIMEOUT_S',):
         raw = os.environ.get(env_name)
         if not raw:
@@ -63,7 +63,7 @@ def _resolve_timeout(explicit: float | None) -> float:
             return max(0.1, float(raw))
         except Exception:
             continue
-    return 3.0
+    return 30.0
 
 
 __all__ = ['CcbdClient', 'CcbdClientError']

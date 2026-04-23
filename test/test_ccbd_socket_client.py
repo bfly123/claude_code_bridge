@@ -7,7 +7,7 @@ from ccbd.socket_client import CcbdClient, CcbdClientError
 
 def test_ccbd_client_uses_stable_default_timeout(tmp_path) -> None:
     client = CcbdClient(tmp_path / "ccbd.sock")
-    assert client._timeout_s == 3.0
+    assert client._timeout_s == 30.0
 
 
 def test_ccbd_client_reads_timeout_from_env(monkeypatch, tmp_path) -> None:
