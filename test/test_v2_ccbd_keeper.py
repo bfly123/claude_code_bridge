@@ -116,7 +116,8 @@ def test_project_keeper_spawns_missing_daemon(tmp_path: Path) -> None:
     assert len(spawn_calls) == 1
     assert spawn_calls[0]['project_root'] == project_root
     assert spawn_calls[0]['keeper_pid'] == 777
-    assert next_state.restart_count == 1
+    assert next_state.restart_count == 0
+    assert next_state.last_restart_at is None
     assert next_state.last_failure_reason is None
 
 
@@ -202,8 +203,47 @@ def test_project_keeper_restarts_stale_unreachable_daemon(tmp_path: Path, monkey
 
     assert terminated == [321]
     assert len(spawn_calls) == 1
-    assert next_state.restart_count == 1
+    assert next_state.restart_count == 0
+    assert next_state.last_restart_at is None
     assert next_state.last_failure_reason is None
+
+
+def test_project_keeper_stops_after_restart_limit(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-restart-limit'
+    ctx = _context(project_root, 'agent1:codex\n')
+    spawn_calls: list[dict] = []
+    keeper = ProjectKeeper(
+        project_root,
+        pid=990,
+        spawn_ccbd_process_fn=lambda **kwargs: spawn_calls.append(dict(kwargs)),
+    )
+    keeper._ownership_guard = SimpleNamespace(
+        inspect=lambda: _inspection(
+            ctx,
+            health=LeaseHealth.MISSING,
+            socket_connectable=False,
+            pid_alive=False,
+            heartbeat_fresh=False,
+            reason='lease_missing',
+        )
+    )
+    state = KeeperState(
+        project_id=ctx.project.project_id,
+        keeper_pid=990,
+        started_at='2026-04-02T00:00:00Z',
+        last_check_at='2026-04-02T00:00:00Z',
+        state='running',
+        restart_count=4,
+        last_restart_at='2026-04-02T00:00:01Z',
+        last_failure_reason='ccbd exited before ready with code 0',
+    )
+
+    next_state = keeper._reconcile_once(state=state, start_timeout_s=0.1)
+
+    assert spawn_calls == []
+    assert next_state.state == 'stopped'
+    assert next_state.restart_count == 5
+    assert next_state.last_failure_reason == 'restart_limit_reached:ccbd exited before ready with code 0'
 
 
 def test_project_keeper_stops_when_shutdown_intent_exists(tmp_path: Path) -> None:

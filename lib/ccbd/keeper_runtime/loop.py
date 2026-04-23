@@ -8,7 +8,7 @@ from ccbd.models import LeaseHealth
 from ccbd.socket_client import CcbdClient, CcbdClientError
 
 from .records import KeeperState
-from .state import compute_project_id, restart_backoff_active
+from .state import compute_project_id, restart_backoff_active, restart_limit_reached
 from .support import reap_child_processes, try_acquire_keeper_lock
 
 
@@ -16,7 +16,7 @@ def _probe_timeout_s(ipc_kind: str | None) -> float:
     return 1.0 if str(ipc_kind or '').strip().lower() == 'named_pipe' else 0.2
 
 
-def run_forever(app, *, poll_interval: float = 0.5, start_timeout_s: float = 5.0) -> int:
+def run_forever(app, *, poll_interval: float = 0.5, start_timeout_s: float = 20.0) -> int:
     lock_path = app.paths.ccbd_dir / 'keeper.lock'
     lock_handle = try_acquire_keeper_lock(lock_path)
     if lock_handle is None:
@@ -56,6 +56,11 @@ def reconcile_once(app, *, state: KeeperState, start_timeout_s: float) -> Keeper
         return connectable_state
     restart_state = restart_state_from_inspection(app, state=state, inspection=inspection, occurred_at=now)
     if restart_state is not None:
+        if restart_limit_reached(state=restart_state):
+            return restart_state.with_failure(
+                occurred_at=now,
+                reason=f'restart_limit_reached:{restart_state.last_failure_reason or "unknown_failure"}',
+            ).with_state('stopped', occurred_at=now)
         return app._spawn_daemon(state=restart_state, start_timeout_s=start_timeout_s)
     return state
 
@@ -85,6 +90,8 @@ def run_iteration(
         return state.with_state('stopped', occurred_at=now), True, cleanup_transient
     checked = state.with_check(now)
     next_state = app._reconcile_once(state=checked, start_timeout_s=start_timeout_s)
+    if next_state.state == 'stopped' and str(next_state.last_failure_reason or '').startswith('restart_limit_reached:'):
+        return next_state, True, cleanup_transient
     return next_state, False, cleanup_transient
 
 
@@ -157,6 +164,7 @@ def request_shutdown(app) -> None:
 def cleanup_transient_keeper_files(app, *, lock_path: Path) -> None:
     for path in (
         app.paths.ccbd_keeper_path,
+        app.paths.ccbd_keeper_path.with_name(f'.{app.paths.ccbd_keeper_path.name}.lock'),
         app.paths.ccbd_dir / 'keeper.stdout.log',
         app.paths.ccbd_dir / 'keeper.stderr.log',
         Path(lock_path),

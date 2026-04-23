@@ -7,6 +7,9 @@ from ccbd.system import parse_utc_timestamp, process_exists
 from .records import KeeperState
 
 
+_MAX_KEEPER_RESTARTS = 5
+
+
 def restart_backoff_active(*, state: KeeperState, now: str) -> bool:
     if state.restart_count <= 0 or state.last_failure_reason is None or state.last_restart_at is None:
         return False
@@ -20,6 +23,10 @@ def restart_backoff_active(*, state: KeeperState, now: str) -> bool:
 def restart_backoff_seconds(restart_count: int) -> float:
     capped = min(max(1, int(restart_count)), 5)
     return min(8.0, 0.5 * float(2 ** (capped - 1)))
+
+
+def restart_limit_reached(*, state: KeeperState) -> bool:
+    return bool(state.last_failure_reason) and int(state.restart_count or 0) >= _MAX_KEEPER_RESTARTS
 
 
 def compute_project_id(project_root: Path) -> str:
@@ -41,4 +48,5 @@ __all__ = [
     'keeper_state_is_running',
     'restart_backoff_active',
     'restart_backoff_seconds',
+    'restart_limit_reached',
 ]
