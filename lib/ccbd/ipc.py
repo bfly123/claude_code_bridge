@@ -216,6 +216,11 @@ class _SingleInstanceNamedPipeListener:
     def accept(self):
         handle = self._new_handle()
         try:
+            self._prime_pending_handle()
+        except BaseException:
+            _winapi.CloseHandle(handle)
+            raise
+        try:
             overlapped = _winapi.ConnectNamedPipe(handle, overlapped=True)
         except OSError as exc:
             if exc.winerror not in {_winapi.ERROR_NO_DATA, _winapi.ERROR_PIPE_CONNECTED}:
@@ -259,6 +264,11 @@ class _SingleInstanceNamedPipeListener:
             _winapi.NMPWAIT_WAIT_FOREVER,
             _winapi.NULL,
         )
+
+    def _prime_pending_handle(self) -> None:
+        if self._pending_handle is not None:
+            return
+        self._pending_handle = self._new_handle()
 
 
 def _build_named_pipe_listener(endpoint_ref: str):
