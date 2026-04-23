@@ -12,6 +12,7 @@ from completion.models import (
     CompletionStatus,
 )
 from provider_execution.base import ProviderRuntimeContext, ProviderSubmission
+from provider_execution.reliability import CompletionReliabilityPolicy
 from provider_execution.service_runtime.polling import poll_updates
 from provider_execution.service_runtime.restore import restore_submission
 from provider_execution.state_models import PersistedExecutionState
@@ -110,6 +111,55 @@ def test_poll_updates_keeps_terminal_pending_replay_until_acknowledged() -> None
     assert updates[0].job_id == "job_1"
     assert updates[0].decision is decision
     assert "job_1" in service._pending_replays
+
+
+def test_poll_updates_terminalizes_reliability_timeout(monkeypatch) -> None:
+    submission = _submission(provider="codex")
+    adapter = SimpleNamespace(
+        poll=lambda current, now: None,
+        completion_reliability_policy=CompletionReliabilityPolicy(
+            provider="codex",
+            primary_authority="protocol_log",
+            no_terminal_timeout_s=900.0,
+        ),
+    )
+    service = SimpleNamespace(
+        _clock=lambda: "2026-04-06T00:15:01Z",
+        _pending_replays={},
+        _active={"job_1": submission},
+        _runtime_contexts={"job_1": _runtime_context()},
+        _registry={"codex": adapter},
+    )
+    captured: dict[str, object] = {}
+
+    def _persist(service, job_id, pending_decision=None, pending_items=()):
+        captured["job_id"] = job_id
+        captured["decision"] = pending_decision
+        captured["items"] = pending_items
+        captured["submission"] = service._active.get(job_id)
+
+    monkeypatch.setattr(
+        "provider_execution.service_runtime.polling.persist_submission",
+        _persist,
+    )
+
+    updates = poll_updates(service)
+
+    assert len(updates) == 1
+    update = updates[0]
+    assert update.job_id == "job_1"
+    assert update.items == ()
+    assert update.decision is not None
+    assert update.decision.status is CompletionStatus.INCOMPLETE
+    assert update.decision.reason == "completion_timeout"
+    assert update.decision.confidence is CompletionConfidence.DEGRADED
+    assert update.decision.diagnostics["completion_primary_authority"] == "protocol_log"
+    assert captured["job_id"] == "job_1"
+    assert captured["decision"] is update.decision
+    assert captured["items"] == ()
+    assert captured["submission"].diagnostics["completion_fallback_source"] == "execution_reliability_monitor"
+    assert service._active == {}
+    assert service._runtime_contexts == {}
 
 
 def test_restore_submission_returns_terminal_pending_without_resume() -> None:

@@ -6,6 +6,7 @@ from ccbd.api_models import JobRecord
 from provider_core.protocol import request_anchor_for_job
 from provider_execution.base import ProviderPollResult, ProviderRuntimeContext, ProviderSubmission
 from provider_execution.common import request_anchor_from_runtime_state
+from provider_execution.reliability import CompletionReliabilityPolicy
 from terminal_runtime import get_backend_for_session
 
 from .comm import GeminiLogReader
@@ -25,6 +26,11 @@ from .session import load_project_session
 
 class GeminiProviderAdapter:
     provider = 'gemini'
+    completion_reliability_policy = CompletionReliabilityPolicy(
+        provider='gemini',
+        primary_authority='hook_artifact_or_session_snapshot',
+        no_terminal_timeout_s=900.0,
+    )
 
     def start(self, job: JobRecord, *, context: ProviderRuntimeContext | None, now: str) -> ProviderSubmission:
         return _start_active_submission(

@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from provider_backends.codex.runtime_artifacts import ensure_runtime_artifact_layout
+
 from .binding import CodexBindingTracker
 from .session import TerminalCodexSession
 
@@ -11,6 +13,7 @@ from .session import TerminalCodexSession
 class BridgePaths:
     runtime_dir: Path
     input_fifo: Path
+    completion_dir: Path
     history_dir: Path
     history_file: Path
     bridge_log: Path
@@ -24,14 +27,15 @@ class BridgeRuntimeState:
 
 
 def build_bridge_runtime_state(runtime_dir: Path, *, pane_id: str) -> BridgeRuntimeState:
+    artifacts = ensure_runtime_artifact_layout(runtime_dir)
     paths = BridgePaths(
-        runtime_dir=runtime_dir,
-        input_fifo=runtime_dir / 'input.fifo',
-        history_dir=runtime_dir / 'history',
-        history_file=(runtime_dir / 'history' / 'session.jsonl'),
-        bridge_log=runtime_dir / 'bridge.log',
+        runtime_dir=artifacts.runtime_dir,
+        input_fifo=artifacts.input_fifo,
+        completion_dir=artifacts.completion_dir,
+        history_dir=artifacts.history_dir,
+        history_file=artifacts.history_file,
+        bridge_log=artifacts.bridge_log,
     )
-    paths.history_dir.mkdir(parents=True, exist_ok=True)
     return BridgeRuntimeState(
         paths=paths,
         binding_tracker=CodexBindingTracker(runtime_dir),

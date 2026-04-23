@@ -6,6 +6,7 @@ from ccbd.api_models import JobRecord
 from provider_core.protocol import request_anchor_for_job, wrap_codex_turn_prompt
 from provider_execution.base import ProviderPollResult, ProviderRuntimeContext, ProviderSubmission
 from provider_execution.common import request_anchor_from_runtime_state
+from provider_execution.reliability import CompletionReliabilityPolicy
 from terminal_runtime import get_backend_for_session
 
 from .comm import CodexLogReader
@@ -18,6 +19,11 @@ from .session_runtime.follow_policy import codex_session_root_path, should_follo
 
 class CodexProviderAdapter:
     provider = 'codex'
+    completion_reliability_policy = CompletionReliabilityPolicy(
+        provider='codex',
+        primary_authority='protocol_log',
+        no_terminal_timeout_s=900.0,
+    )
 
     def start(self, job: JobRecord, *, context: ProviderRuntimeContext | None, now: str) -> ProviderSubmission:
         return _start_active_submission(

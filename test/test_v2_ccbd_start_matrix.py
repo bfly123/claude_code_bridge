@@ -10,6 +10,8 @@ from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from cli.phase2 import maybe_handle_phase2
 import cli.phase2 as phase2_module
 
@@ -93,6 +95,7 @@ def test_phase2_start_rejects_missing_config_when_anchor_has_persisted_state(tmp
     assert 'agents/demo/runtime.json' in stderr
 
 
+@pytest.mark.ccb_lifecycle_smoke
 def test_ccb_start_restarts_dead_daemon_on_subsequent_start(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-start-dead-daemon'
     config_path = project_root / '.ccb' / 'ccb.config'

@@ -48,6 +48,11 @@ For a managed Codex agent named `<agent>`:
 - stable provider state lives under:
   - `.ccb/agents/<agent>/provider-state/codex/`
 
+The canonical managed Codex runtime artifact layout includes at minimum:
+
+- `.ccb/agents/<agent>/provider-runtime/codex/completion/`
+- `.ccb/agents/<agent>/provider-runtime/codex/bridge.log`
+
 By default, the managed Codex home is:
 
 - `.ccb/agents/<agent>/provider-state/codex/home/`
@@ -92,6 +97,7 @@ When `ccb` starts a managed Codex agent:
 - it must refresh inheritable Codex config, auth, skills, and commands projections into the managed home on each managed launch so source-home updates become visible after restart
 - when API inheritance is enabled, it must pass the current inheritable Codex API environment into the managed Codex process at launch time rather than relying on stale one-time projection state
 - it must write the effective `codex_home` and `codex_session_root` into the agent session file
+- it must create the canonical runtime `completion/` directory and `bridge.log` before the managed launch is considered bootstrap-ready
 - it must not rely on global `~/.codex/sessions` as the default managed session namespace
 
 Profile-provided runtime-home overrides are explicit forward authority only after uniqueness and boundary validation.

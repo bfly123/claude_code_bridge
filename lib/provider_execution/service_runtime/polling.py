@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .models import ExecutionUpdate
 from .persistence import persist_submission
+from .reliability import apply_reliability_progress, timeout_poll_result
 
 
 def poll_updates(service) -> tuple[ExecutionUpdate, ...]:
@@ -62,7 +63,21 @@ def process_active_job(
 
     result = adapter.poll(submission, now=now)
     if result is None:
-        return
+        result = timeout_poll_result(
+            service,
+            job_id=job_id,
+            submission=submission,
+            adapter=adapter,
+            now=now,
+        )
+        if result is None:
+            return
+    else:
+        result = apply_reliability_progress(
+            result,
+            previous_submission=submission,
+            now=now,
+        )
 
     service._active[job_id] = result.submission
     persist_submission(

@@ -11,6 +11,8 @@ from ccbd.socket_client import CcbdClient, CcbdClientError
 
 _ATTACH_ESTABLISH_TIMEOUT_S = 1.5
 _ATTACH_ESTABLISH_POLL_INTERVAL_S = 0.05
+_ATTACH_TARGET_READY_TIMEOUT_S = 2.0
+_ATTACH_TARGET_READY_POLL_INTERVAL_S = 0.05
 
 
 @dataclass(frozen=True)
@@ -28,22 +30,10 @@ def attach_started_project_namespace(context: CliContext) -> ForegroundAttachSum
     if shutil.which('tmux') is None:
         raise ForegroundAttachError('tmux is required for interactive `ccb`')
     client = _client_for_started_project(context)
-    payload = client.ping('ccbd')
+    env = _attach_env()
+    payload = _wait_for_attach_target(client, env=env)
     tmux_socket_path = str(payload.get('namespace_tmux_socket_path') or '').strip()
     tmux_session_name = str(payload.get('namespace_tmux_session_name') or '').strip()
-    workspace_window_name = str(payload.get('namespace_workspace_window_name') or '').strip()
-    ui_attachable = bool(payload.get('namespace_ui_attachable'))
-    if not tmux_socket_path or not tmux_session_name or not ui_attachable:
-        raise ForegroundAttachError('project namespace is not attachable after successful `ccb` start')
-    env = _attach_env()
-    if not _tmux_has_session(tmux_socket_path, tmux_session_name, env=env):
-        raise ForegroundAttachError('project namespace session is missing after successful `ccb` start')
-    if workspace_window_name and not _tmux_select_window(
-        tmux_socket_path,
-        f'{tmux_session_name}:{workspace_window_name}',
-        env=env,
-    ):
-        raise ForegroundAttachError('project namespace workspace window is missing after successful `ccb` start')
     summary = ForegroundAttachSummary(
         project_id=context.project.project_id,
         tmux_socket_path=tmux_socket_path,
@@ -102,6 +92,42 @@ def _tmux_client_pid_attached(
         tmux_session_name,
         env=env,
     )
+
+
+def _wait_for_attach_target(client, *, env: dict[str, str]) -> dict[str, object]:
+    deadline = time.monotonic() + _ATTACH_TARGET_READY_TIMEOUT_S
+    last_error = 'project namespace is not attachable after successful `ccb` start'
+    while True:
+        try:
+            payload = client.ping('ccbd')
+        except CcbdClientError as exc:
+            last_error = f'project ccbd is unavailable after successful `ccb` start: {exc}'
+        else:
+            ready, error = _attach_target_ready(payload, env=env)
+            if ready:
+                return payload
+            last_error = error
+        if time.monotonic() >= deadline:
+            raise ForegroundAttachError(last_error)
+        time.sleep(_ATTACH_TARGET_READY_POLL_INTERVAL_S)
+
+
+def _attach_target_ready(payload: dict[str, object], *, env: dict[str, str]) -> tuple[bool, str]:
+    tmux_socket_path = str(payload.get('namespace_tmux_socket_path') or '').strip()
+    tmux_session_name = str(payload.get('namespace_tmux_session_name') or '').strip()
+    workspace_window_name = str(payload.get('namespace_workspace_window_name') or '').strip()
+    ui_attachable = bool(payload.get('namespace_ui_attachable'))
+    if not tmux_socket_path or not tmux_session_name or not ui_attachable:
+        return False, 'project namespace is not attachable after successful `ccb` start'
+    if not _tmux_has_session(tmux_socket_path, tmux_session_name, env=env):
+        return False, 'project namespace session is missing after successful `ccb` start'
+    if workspace_window_name and not _tmux_select_window(
+        tmux_socket_path,
+        f'{tmux_session_name}:{workspace_window_name}',
+        env=env,
+    ):
+        return False, 'project namespace workspace window is missing after successful `ccb` start'
+    return True, ''
 
 
 def _tmux_list_client_pids(

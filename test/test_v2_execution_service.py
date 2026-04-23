@@ -8,6 +8,7 @@ from ccbd.api_models import DeliveryScope, JobRecord, JobStatus, MessageEnvelope
 from completion.models import CompletionConfidence, CompletionItemKind, CompletionSourceKind, CompletionStatus
 from provider_execution.base import ProviderRuntimeContext
 from provider_execution.base import ProviderSubmission
+from provider_execution.reliability import CompletionReliabilityPolicy
 from provider_execution.registry import ProviderExecutionRegistry, build_default_execution_registry
 from provider_execution.service import ExecutionService
 from provider_execution.state_store import ExecutionStateStore
@@ -1859,6 +1860,48 @@ class _NoResumeAdapter:
         return None
 
 
+class _ReliabilityTimeoutAdapter:
+    provider = 'timed'
+    completion_reliability_policy = CompletionReliabilityPolicy(
+        provider='timed',
+        primary_authority='session_snapshot',
+        no_terminal_timeout_s=1.0,
+    )
+
+    def start(self, job: JobRecord, *, context, now: str) -> ProviderSubmission:
+        del context
+        return ProviderSubmission(
+            job_id=job.job_id,
+            agent_name=job.agent_name,
+            provider=self.provider,
+            accepted_at=now,
+            ready_at=now,
+            source_kind=CompletionSourceKind.SESSION_SNAPSHOT,
+            reply='',
+            diagnostics={'provider': self.provider},
+            runtime_state={'request_anchor': job.job_id},
+        )
+
+    def poll(self, submission: ProviderSubmission, *, now: str):
+        del submission, now
+        return None
+
+    def export_runtime_state(self, submission: ProviderSubmission) -> dict[str, object]:
+        return dict(submission.runtime_state)
+
+    def resume(
+        self,
+        job: JobRecord,
+        submission: ProviderSubmission,
+        *,
+        context,
+        persisted_state,
+        now: str,
+    ) -> ProviderSubmission:
+        del job, context, persisted_state, now
+        return submission
+
+
 def test_execution_service_persists_and_restores_fake_submission_across_restart(tmp_path: Path) -> None:
     layout = PathLayout(tmp_path / 'repo-resume')
     state_store = ExecutionStateStore(layout)
@@ -1988,6 +2031,54 @@ def test_execution_service_defaults_nonterminal_submission_state_until_decision(
     assert persisted.submission.reason == 'in_progress'
     assert persisted.submission.confidence is CompletionConfidence.OBSERVED
     assert persisted.pending_decision is None
+
+
+def test_execution_service_terminalizes_reliability_timeout_after_restore(tmp_path: Path) -> None:
+    layout = PathLayout(tmp_path / 'repo-reliability-timeout')
+    state_store = ExecutionStateStore(layout)
+    registry = ProviderExecutionRegistry([_ReliabilityTimeoutAdapter()])
+    start_clock = iter([
+        '2026-03-18T00:00:00Z',
+        '2026-03-18T00:00:00Z',
+    ])
+    service = ExecutionService(
+        registry,
+        clock=lambda: next(start_clock),
+        state_store=state_store,
+    )
+
+    job = _job_for_provider('timed', job_id='job_timeout', body='stall forever')
+    service.start(job, runtime_context=_runtime_context(tmp_path))
+
+    persisted = state_store.load(job.job_id)
+    assert persisted is not None
+    assert persisted.resume_capable is True
+    assert persisted.pending_decision is None
+
+    restarted = ExecutionService(
+        registry,
+        clock=lambda: '2026-03-18T00:00:02Z',
+        state_store=state_store,
+    )
+    restored = restarted.restore(job, runtime_context=_runtime_context(tmp_path))
+    assert restored.restored is True
+
+    updates = restarted.poll()
+    assert len(updates) == 1
+    update = updates[0]
+    assert update.job_id == job.job_id
+    assert update.items == ()
+    assert update.decision is not None
+    assert update.decision.status is CompletionStatus.INCOMPLETE
+    assert update.decision.reason == 'completion_timeout'
+    assert update.decision.confidence is CompletionConfidence.DEGRADED
+    assert update.decision.diagnostics['completion_primary_authority'] == 'session_snapshot'
+
+    persisted_after_timeout = state_store.load(job.job_id)
+    assert persisted_after_timeout is not None
+    assert persisted_after_timeout.pending_decision is not None
+    assert persisted_after_timeout.pending_decision.reason == 'completion_timeout'
+    assert persisted_after_timeout.submission.diagnostics['completion_fallback_source'] == 'execution_reliability_monitor'
 
 
 def test_execution_service_acknowledge_item_tracks_exact_apply_markers(tmp_path: Path) -> None:

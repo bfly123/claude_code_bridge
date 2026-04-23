@@ -306,6 +306,14 @@ project .ccb
 2. select 到当前 `workspace_window_name`
 3. 若 workspace 正在 reflow，可短暂落在 control window，再切回新 workspace
 
+补充时序规则：
+
+- `ui_attachable=true` 代表 namespace authority 已经成立，但 tmux session/window target 在不同平台上可能存在短暂可见性延迟
+- foreground attach 必须做有界等待，直到：
+  - authoritative session 可 `has-session`
+  - authoritative workspace window 可 `select-window`
+- 若超过有界等待仍不可见，才允许把该次 foreground attach 判为失败
+
 这样可以保证：
 
 - attach 对 workspace 重建不敏感

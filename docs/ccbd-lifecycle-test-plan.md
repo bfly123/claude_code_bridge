@@ -89,7 +89,26 @@
   - 没有 `helper.json`
   都能进入确定性迁移路径
 
-### 4.4 建议文件组织
+### 4.4 真实 CLI 生命周期 smoke 集
+
+以下用例是固定的真实 `ccb` 黑盒生命周期基线，必须通过 `ccb` 入口拉起项目，而不是只调用后台 service：
+
+- `test/test_v2_phase2_entrypoint.py::test_ccb_v2_project_lifecycle`
+- `test/test_v2_phase2_entrypoint.py::test_ccb_ping_ccbd_recovers_from_stale_mount_and_bumps_generation`
+- `test/test_v2_phase2_entrypoint.py::test_ccb_long_running_job_keeps_heartbeat_and_doctor_healthy`
+- `test/test_v2_phase2_entrypoint.py::test_ccb_fake_provider_recovers_running_execution_after_ccbd_restart`
+- `test/test_v2_ccbd_start_matrix.py::test_ccb_start_restarts_dead_daemon_on_subsequent_start`
+
+统一执行入口：
+
+- `python -m pytest -q -m ccb_lifecycle_smoke test/test_v2_phase2_entrypoint.py test/test_v2_ccbd_start_matrix.py`
+
+CI 接入要求：
+
+- GitHub macOS cross-platform workflow 必须运行这组 smoke，用于覆盖真实 tmux / namespace / socket / attach 时序
+- Linux 运行同一 marker 作为基线对照，避免只在 macOS 上单点发现回归
+
+### 4.5 建议文件组织
 
 - `test/test_v2_project_lifecycle_integration.py`
 - `test/test_v2_kill_lifecycle_integration.py`

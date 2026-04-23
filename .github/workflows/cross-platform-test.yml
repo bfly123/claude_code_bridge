@@ -28,9 +28,31 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
+        shell: bash
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
-          pip install pytest
+          pip install pytest tomli
+
+      - name: Install tmux
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            brew install tmux
+          else
+            sudo apt-get update
+            sudo apt-get install -y tmux
+          fi
+
+      - name: Run real ccb lifecycle smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          export TERM=xterm-256color
+          python -m pytest -q -m ccb_lifecycle_smoke \
+            test/test_v2_phase2_entrypoint.py \
+            test/test_v2_ccbd_start_matrix.py
 
       - name: Run project_id tests
         run: |

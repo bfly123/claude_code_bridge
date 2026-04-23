@@ -268,6 +268,9 @@ Foreground command split:
   - ensures desired agents are mounted
   - plain `ccb` is the default interactive start path and implicitly includes `-a -r`
   - in an interactive terminal, attaches the foreground to the project namespace after the start transaction succeeds
+  - foreground attach must tolerate short tmux visibility lag after namespace create/reflow:
+    - persisted namespace state may become visible slightly before tmux session/window targets are selectable
+    - `ccb` must therefore perform a bounded readiness wait for the authoritative session and workspace window before declaring foreground attach failure
   - in a non-interactive terminal, reports the start transaction without attaching to tmux
   - startup success and foreground attach success are distinct outcomes; foreground attach failure must not rewrite a successful startup report as failed
 - `ccb -n`

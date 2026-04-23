@@ -859,6 +859,7 @@ def _wait_for_pid_exit(pid: int, timeout: float = 2.0) -> None:
     raise AssertionError(f'timed out waiting for pid {pid} to exit')
 
 
+@pytest.mark.ccb_lifecycle_smoke
 def test_ccb_v2_project_lifecycle(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo'
     _write(project_root / '.ccb' / 'ccb.config', _config_text())
@@ -955,7 +956,7 @@ def test_ccb_logs_reads_agent_runtime_logs(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-logs'
     _write(project_root / '.ccb' / 'ccb.config', _named_agent_config_text('demo', 'codex'))
     _write(
-        project_root / '.ccb' / 'agents' / 'demo' / 'provider-runtime' / 'codex' / 'bridge_output.log',
+        project_root / '.ccb' / 'agents' / 'demo' / 'provider-runtime' / 'codex' / 'bridge.log',
         'first line\nsecond line\n',
     )
 
@@ -970,6 +971,7 @@ def test_ccb_logs_reads_agent_runtime_logs(tmp_path: Path) -> None:
     assert 'log_line: second line' in proc.stdout
 
 
+@pytest.mark.ccb_lifecycle_smoke
 def test_ccb_ping_ccbd_recovers_from_stale_mount_and_bumps_generation(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-stale-ccbd'
     _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('fake'))
@@ -1014,6 +1016,7 @@ def test_ccb_ping_ccbd_recovers_from_stale_mount_and_bumps_generation(tmp_path: 
     assert kill.returncode == 0, kill.stderr
 
 
+@pytest.mark.ccb_lifecycle_smoke
 def test_ccb_long_running_job_keeps_heartbeat_and_doctor_healthy(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-heartbeat'
     _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('fake'))
@@ -1073,6 +1076,7 @@ def test_ccb_long_running_job_keeps_heartbeat_and_doctor_healthy(tmp_path: Path)
     assert kill.returncode == 0, kill.stderr
 
 
+@pytest.mark.ccb_lifecycle_smoke
 def test_ccb_fake_provider_recovers_running_execution_after_ccbd_restart(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-resume-fake'
     _write(project_root / '.ccb' / 'ccb.config', _single_agent_config_text('fake'))

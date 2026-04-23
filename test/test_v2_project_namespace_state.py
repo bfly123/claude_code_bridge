@@ -61,6 +61,8 @@ class _FakeTmuxBackend:
     window_options: dict[str, dict[str, str]] = field(default_factory=dict)
     hooks: dict[str, dict[str, str]] = field(default_factory=dict)
     tmux_calls: list[tuple[list[str], bool]] = field(default_factory=list)
+    window_visibility_lag: dict[str, int] = field(default_factory=dict)
+    pane_visibility_lag: dict[str, int] = field(default_factory=dict)
     pane_counter: int = 0
     window_counter: int = 0
     server_killed: bool = False
@@ -100,6 +102,30 @@ class _FakeTmuxBackend:
             if record['name'] == maybe_window or record['id'] == maybe_window:
                 return record
         return None
+
+    def _window_visible(self, session_name: str, window_name: str) -> bool:
+        key = f'{session_name}:{window_name}'
+        remaining = int(self.window_visibility_lag.get(key, 0))
+        if remaining <= 0:
+            return True
+        self.window_visibility_lag[key] = remaining - 1
+        return False
+
+    def _panes_visible(self, target: str, record: dict[str, object] | None) -> bool:
+        candidates = [target]
+        if record is not None:
+            session_name, _, maybe_window = target.partition(':')
+            candidates.append(f'{session_name}:{record["name"]}')
+            candidates.append(f'{session_name}:{record["id"]}')
+            if maybe_window:
+                candidates.append(maybe_window)
+        for key in candidates:
+            remaining = int(self.pane_visibility_lag.get(key, 0))
+            if remaining <= 0:
+                continue
+            self.pane_visibility_lag[key] = remaining - 1
+            return False
+        return True
 
     def drop_session(self, session_name: str) -> None:
         self.sessions.pop(session_name, None)
@@ -141,12 +167,14 @@ class _FakeTmuxBackend:
             session_name = args[2]
             rows = []
             for record in self.sessions.get(session_name, []):
+                if not self._window_visible(session_name, str(record['name'])):
+                    continue
                 active = '1' if self.active_windows.get(session_name) == record['name'] else '0'
                 rows.append(f"{record['id']}\t{record['name']}\t{active}")
             return SimpleNamespace(returncode=0, stdout='\n'.join(rows), stderr='')
         if len(args) >= 4 and args[:2] == ['list-panes', '-t']:
             window = self._window_record(args[2])
-            panes = list(window['panes']) if window is not None else []
+            panes = list(window['panes']) if window is not None and self._panes_visible(args[2], window) else []
             if capture and len(args) >= 5 and args[4] == '#{?pane_active,#{pane_id},}':
                 active = panes[0] if panes else ''
                 return SimpleNamespace(returncode=0, stdout=f'{active}\n', stderr='')
@@ -367,6 +395,32 @@ def test_project_namespace_controller_recreates_session_when_layout_signature_ch
     assert latest_event.details['reason'] == 'layout_signature_changed'
 
 
+def test_project_namespace_controller_waits_for_delayed_window_and_pane_visibility(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root = tmp_path / 'repo-delayed-namespace-visibility'
+    layout = PathLayout(project_root)
+    backend = _FakeTmuxBackend()
+    backend.window_visibility_lag[f'{layout.ccbd_tmux_session_name}:{layout.ccbd_tmux_workspace_window_name}'] = 2
+    backend.pane_visibility_lag[f'{layout.ccbd_tmux_session_name}:{layout.ccbd_tmux_workspace_window_name}'] = 2
+    controller = ProjectNamespaceController(
+        layout,
+        'proj-delay-1',
+        clock=lambda: '2026-04-03T07:30:00Z',
+        backend_factory=lambda socket_path=None: backend,
+    )
+    monkeypatch.setenv('CCB_TMUX_OBJECT_READY_TIMEOUT_S', '0.2')
+    monkeypatch.setenv('CCB_TMUX_OBJECT_READY_POLL_INTERVAL_S', '0')
+
+    namespace = controller.ensure()
+    state = ProjectNamespaceStateStore(layout).load()
+
+    assert namespace.workspace_window_name == layout.ccbd_tmux_workspace_window_name
+    assert state is not None
+    assert state.workspace_window_name == layout.ccbd_tmux_workspace_window_name
+    assert backend.pane_titles['%2'] == 'cmd'
+
+
 def test_project_namespace_controller_destroy_marks_state_and_event(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-destroy'
     layout = PathLayout(project_root)
@@ -426,6 +480,32 @@ def test_project_namespace_controller_reflows_workspace_without_killing_server(t
     assert latest_event is not None
     assert latest_event.event_kind == 'workspace_reflowed'
     assert latest_event.details['reason'] == 'pane_recovery:agent1'
+
+
+def test_project_namespace_controller_reflow_waits_for_renamed_workspace_visibility(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root = tmp_path / 'repo-reflow-delayed-visibility'
+    layout = PathLayout(project_root)
+    backend = _FakeTmuxBackend()
+    controller = ProjectNamespaceController(
+        layout,
+        'proj-reflow-delay',
+        clock=lambda: '2026-04-03T08:30:00Z',
+        backend_factory=lambda socket_path=None: backend,
+    )
+    controller.ensure()
+    backend.window_visibility_lag[f'{layout.ccbd_tmux_session_name}:{layout.ccbd_tmux_workspace_window_name}'] = 2
+    monkeypatch.setenv('CCB_TMUX_OBJECT_READY_TIMEOUT_S', '0.2')
+    monkeypatch.setenv('CCB_TMUX_OBJECT_READY_POLL_INTERVAL_S', '0')
+
+    namespace = controller.reflow_workspace(
+        layout_signature='cmd; agent1:codex',
+        reason='pane_recovery:agent1',
+    )
+
+    assert namespace.workspace_epoch == 2
+    assert backend.active_windows[layout.ccbd_tmux_session_name] == layout.ccbd_tmux_workspace_window_name
 
 
 def test_project_namespace_reflow_targets_transient_window_by_id(tmp_path: Path) -> None:

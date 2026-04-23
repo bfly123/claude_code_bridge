@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
+import time
+from typing import Callable
 
 
 _PLACEHOLDER_CMD = 'while :; do sleep 3600; done'
+_TMUX_OBJECT_READY_TIMEOUT_S = 1.5
+_TMUX_OBJECT_READY_POLL_INTERVAL_S = 0.05
 
 
 @dataclass(frozen=True)
@@ -112,7 +117,7 @@ def create_window(backend, *, session_name: str, window_name: str, project_root,
         ],
         check=True,
     )  # type: ignore[attr-defined]
-    record = find_window(backend, session_name=session_name, window_name=window_name)
+    record = wait_for_window(backend, session_name=session_name, window_name=window_name)
     if record is None:
         raise RuntimeError(f'failed to resolve tmux window {window_name!r} for session {session_name!r}')
     if select:
@@ -141,12 +146,12 @@ def ensure_window(backend, *, session_name: str, window_name: str, project_root,
     return record
 
 
-def select_window(backend, *, target: str) -> None:
-    backend._tmux_run(['select-window', '-t', target], check=True)  # type: ignore[attr-defined]
-
-
 def rename_window(backend, *, target: str, new_name: str) -> None:
     backend._tmux_run(['rename-window', '-t', target, new_name], check=True)  # type: ignore[attr-defined]
+    session_name, _sep, _old_name = target.partition(':')
+    resolved_session_name = session_name.strip()
+    if resolved_session_name and wait_for_window(backend, session_name=resolved_session_name, window_name=new_name) is None:
+        raise RuntimeError(f'failed to observe renamed tmux window {new_name!r} for session {resolved_session_name!r}')
 
 
 def kill_window(backend, *, target: str) -> None:
@@ -168,12 +173,7 @@ def session_root_pane(backend, session_name: str) -> str:
 
 
 def window_root_pane(backend, *, target_window: str) -> str:
-    result = backend._tmux_run(  # type: ignore[attr-defined]
-        ['list-panes', '-t', target_window, '-F', '#{pane_id}'],
-        capture=True,
-        check=True,
-    )
-    pane_id = ((result.stdout or '').splitlines() or [''])[0].strip()
+    pane_id = wait_for_root_pane(backend, target_window=target_window)
     if not pane_id.startswith('%'):
         raise RuntimeError(f'failed to resolve root pane for tmux target {target_window!r}')
     return pane_id
@@ -185,6 +185,88 @@ def kill_server(backend) -> bool:
         return True
     except Exception:
         return False
+
+
+def wait_for_window(backend, *, session_name: str, window_name: str) -> TmuxWindowRecord | None:
+    return _wait_until(
+        lambda: find_window(backend, session_name=session_name, window_name=window_name),
+    )
+
+
+def select_window(backend, *, target: str) -> None:
+    _wait_until_ready(
+        lambda: backend._tmux_run(['select-window', '-t', target], check=True),  # type: ignore[attr-defined]
+        failure_message=f'failed to select tmux window target {target!r}',
+    )
+
+
+def wait_for_root_pane(backend, *, target_window: str) -> str:
+    pane_id = _wait_until(
+        lambda: _root_pane_once(backend, target_window=target_window),
+    )
+    if pane_id is None:
+        raise RuntimeError(f'failed to resolve root pane for tmux target {target_window!r}')
+    return pane_id
+
+
+def _root_pane_once(backend, *, target_window: str) -> str | None:
+    try:
+        result = backend._tmux_run(  # type: ignore[attr-defined]
+            ['list-panes', '-t', target_window, '-F', '#{pane_id}'],
+            capture=True,
+            check=True,
+        )
+    except Exception:
+        return None
+    pane_id = ((result.stdout or '').splitlines() or [''])[0].strip()
+    return pane_id or None
+
+
+def _wait_until(probe: Callable[[], object | None], *, timeout_s: float | None = None):
+    deadline = time.monotonic() + _tmux_object_ready_timeout_s(timeout_s)
+    while True:
+        value = probe()
+        if value is not None:
+            return value
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(_tmux_object_ready_poll_interval_s())
+
+
+def _wait_until_ready(action: Callable[[], object], *, failure_message: str, timeout_s: float | None = None) -> object:
+    deadline = time.monotonic() + _tmux_object_ready_timeout_s(timeout_s)
+    last_error: Exception | None = None
+    while True:
+        try:
+            return action()
+        except Exception as exc:
+            last_error = exc
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(_tmux_object_ready_poll_interval_s())
+    if last_error is not None:
+        raise RuntimeError(failure_message) from last_error
+    raise RuntimeError(failure_message)
+
+
+def _tmux_object_ready_timeout_s(timeout_s: float | None = None) -> float:
+    if timeout_s is not None:
+        return max(0.0, float(timeout_s))
+    return _env_float('CCB_TMUX_OBJECT_READY_TIMEOUT_S', _TMUX_OBJECT_READY_TIMEOUT_S)
+
+
+def _tmux_object_ready_poll_interval_s() -> float:
+    return max(0.0, _env_float('CCB_TMUX_OBJECT_READY_POLL_INTERVAL_S', _TMUX_OBJECT_READY_POLL_INTERVAL_S))
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = str(os.environ.get(name) or '').strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except Exception:
+        return default
 
 
 __all__ = [
@@ -203,5 +285,7 @@ __all__ = [
     'session_window_target',
     'select_window',
     'TmuxWindowRecord',
+    'wait_for_root_pane',
+    'wait_for_window',
     'window_root_pane',
 ]

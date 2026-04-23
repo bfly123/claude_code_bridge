@@ -180,6 +180,7 @@ def test_ensure_agent_runtime_launches_named_codex_session(monkeypatch, tmp_path
     assert payload['agent_name'] == 'agent1'
     assert payload['ccb_project_id'] == ctx.project.project_id
     assert payload['completion_artifact_dir'] == str(ctx.paths.agent_dir('agent1') / 'provider-runtime' / 'codex' / 'completion')
+    assert payload['bridge_log'] == str(ctx.paths.agent_dir('agent1') / 'provider-runtime' / 'codex' / 'bridge.log')
     assert payload['codex_home'] == str(expected_codex_home)
     assert payload['codex_session_root'] == str(expected_session_root)
     assert payload['pane_title_marker'].startswith('CCB-agent1-')
@@ -187,9 +188,11 @@ def test_ensure_agent_runtime_launches_named_codex_session(monkeypatch, tmp_path
     assert payload['tmux_socket_path'] == '/tmp/ccb-agent.sock'
     assert payload['work_dir'] == str(plan.workspace_path)
     assert payload['work_dir_norm']
+    assert payload['tmux_log'] == payload['bridge_log']
     assert payload['codex_start_cmd'].startswith('export ')
     assert 'disable_paste_burst=true' in payload['codex_start_cmd']
     assert spawned['kwargs']['env']['CCB_SESSION_FILE'] == str(expected_session)
+    assert spawned['kwargs']['env']['CODEX_TMUX_LOG'] == payload['bridge_log']
     assert spawned['kwargs']['env']['CODEX_HOME'] == str(expected_codex_home)
     assert spawned['kwargs']['env']['CODEX_SESSION_ROOT'] == str(expected_session_root)
     expected_lib_root = str((Path(codex_launcher.__file__).resolve().parents[2]))
@@ -200,6 +203,8 @@ def test_ensure_agent_runtime_launches_named_codex_session(monkeypatch, tmp_path
     assert tmux_state['user_option'] == ('%42', '@ccb_project_id', ctx.project.project_id)
     assert (ctx.paths.agent_dir('agent1') / 'provider-runtime' / 'codex' / 'bridge.pid').read_text(encoding='utf-8').strip() == '9911'
     assert (ctx.paths.agent_dir('agent1') / 'provider-runtime' / 'codex' / 'codex.pid').read_text(encoding='utf-8').strip() == '4242'
+    assert (ctx.paths.agent_dir('agent1') / 'provider-runtime' / 'codex' / 'completion').is_dir() is True
+    assert (ctx.paths.agent_dir('agent1') / 'provider-runtime' / 'codex' / 'bridge.log').is_file() is True
     assert spawned['args'][0] == __import__('sys').executable
     assert spawned['args'][1:4] == ['-m', 'provider_backends.codex.bridge', '--runtime-dir']
 
@@ -1167,6 +1172,20 @@ def test_ensure_agent_runtime_raises_when_launch_does_not_produce_usable_binding
 
     with pytest.raises(RuntimeError, match='failed to resolve usable binding'):
         ensure_agent_runtime(ctx, ctx.command, spec, plan, None)
+
+
+def test_codex_post_launch_requires_declared_runtime_artifacts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runtime_dir = tmp_path / 'codex-runtime'
+    codex_launcher.prepare_runtime(runtime_dir)
+
+    class FakeTmuxBackend:
+        def _tmux_run(self, args, capture=False, timeout=None):
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout='4242\n', stderr='')
+
+    monkeypatch.setattr('provider_backends.codex.launcher_runtime.bridge.spawn_codex_bridge', lambda **kwargs: None)
+
+    with pytest.raises(RuntimeError, match='bridge.pid'):
+        codex_launcher.post_launch(FakeTmuxBackend(), '%42', runtime_dir, 'ccb-agent1-test', {})
 
 
 def test_inside_tmux_detects_tmux_session_without_extra_flag(monkeypatch: pytest.MonkeyPatch) -> None:

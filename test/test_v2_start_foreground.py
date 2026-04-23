@@ -104,6 +104,93 @@ def test_start_foreground_attaches_to_namespace_tmux_session(tmp_path: Path, mon
     ]
 
 
+def test_start_foreground_waits_for_workspace_window_visibility_before_attach(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-attach-delayed-window'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    context = _context(project_root)
+
+    class _FakeClient:
+        def __init__(self, socket_path):
+            self.socket_path = socket_path
+            self.calls = 0
+
+        def ping(self, target: str) -> dict[str, object]:
+            assert target == 'ccbd'
+            self.calls += 1
+            return {
+                'namespace_tmux_socket_path': str(context.paths.ccbd_tmux_socket_path),
+                'namespace_tmux_session_name': context.paths.ccbd_tmux_session_name,
+                'namespace_workspace_window_name': context.paths.ccbd_tmux_workspace_window_name,
+                'namespace_ui_attachable': True,
+            }
+
+    run_calls: list[list[str]] = []
+    attach_calls: list[list[str]] = []
+    attach_process = _FakeAttachProcess(pid=4343, returncode=0)
+    select_attempts = 0
+
+    def _run(args, **kwargs):
+        nonlocal select_attempts
+        call = list(args)
+        run_calls.append(call)
+        if call[3:4] == ['list-clients']:
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout='4343\n')
+        if call[3:4] == ['select-window']:
+            select_attempts += 1
+            return subprocess.CompletedProcess(args=args, returncode=0 if select_attempts >= 2 else 1)
+        return subprocess.CompletedProcess(args=args, returncode=0)
+
+    def _popen(args, **kwargs):
+        del kwargs
+        attach_calls.append(list(args))
+        return attach_process
+
+    monkeypatch.setattr('cli.services.start_foreground.shutil.which', lambda name: f'/usr/bin/{name}')
+    monkeypatch.setattr('cli.services.start_foreground.CcbdClient', _FakeClient)
+    monkeypatch.setattr('cli.services.start_foreground.subprocess.run', _run)
+    monkeypatch.setattr('cli.services.start_foreground.subprocess.Popen', _popen)
+    monkeypatch.setattr('cli.services.start_foreground._ATTACH_TARGET_READY_POLL_INTERVAL_S', 0.0)
+
+    summary = attach_started_project_namespace(context)
+
+    assert summary.project_id == context.project.project_id
+    assert run_calls == [
+        ['tmux', '-S', str(context.paths.ccbd_tmux_socket_path), 'has-session', '-t', context.paths.ccbd_tmux_session_name],
+        [
+            'tmux',
+            '-S',
+            str(context.paths.ccbd_tmux_socket_path),
+            'select-window',
+            '-t',
+            f'{context.paths.ccbd_tmux_session_name}:{context.paths.ccbd_tmux_workspace_window_name}',
+        ],
+        ['tmux', '-S', str(context.paths.ccbd_tmux_socket_path), 'has-session', '-t', context.paths.ccbd_tmux_session_name],
+        [
+            'tmux',
+            '-S',
+            str(context.paths.ccbd_tmux_socket_path),
+            'select-window',
+            '-t',
+            f'{context.paths.ccbd_tmux_session_name}:{context.paths.ccbd_tmux_workspace_window_name}',
+        ],
+        [
+            'tmux',
+            '-S',
+            str(context.paths.ccbd_tmux_socket_path),
+            'list-clients',
+            '-t',
+            context.paths.ccbd_tmux_session_name,
+            '-F',
+            '#{client_pid}',
+        ],
+    ]
+    assert attach_calls == [
+        ['tmux', '-S', str(context.paths.ccbd_tmux_socket_path), 'attach-session', '-t', context.paths.ccbd_tmux_session_name]
+    ]
+
+
 def test_start_foreground_reports_clean_error_when_session_exits_before_attach(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / 'repo-attach-fail'
     (project_root / '.ccb').mkdir(parents=True, exist_ok=True)

@@ -6,6 +6,7 @@ from agents.models import AgentSpec
 from cli.context import CliContext
 from cli.models import ParsedStartCommand
 from provider_core.contracts import ProviderRuntimeLauncher
+from provider_backends.codex.runtime_artifacts import codex_runtime_artifact_layout
 from provider_profiles import load_resolved_provider_profile
 from workspace.models import WorkspacePlan
 from .launcher_runtime import build_start_cmd as _build_start_cmd_impl
@@ -47,20 +48,22 @@ def build_session_payload(
 ) -> dict[str, object]:
     input_fifo = Path(prepared_state['input_fifo'])
     output_fifo = Path(prepared_state['output_fifo'])
+    artifacts = codex_runtime_artifact_layout(runtime_dir)
     layout = _resolve_codex_home_layout_impl(runtime_dir, load_resolved_provider_profile(runtime_dir))
     payload = {
         'ccb_session_id': launch_session_id,
         'agent_name': spec.name,
         'ccb_project_id': context.project.project_id,
         'runtime_dir': str(runtime_dir),
-        'completion_artifact_dir': str(runtime_dir / 'completion'),
+        'completion_artifact_dir': str(artifacts.completion_dir),
         'input_fifo': str(input_fifo),
         'output_fifo': str(output_fifo),
         'terminal': 'tmux',
         'tmux_session': pane_id,
         'pane_id': pane_id,
         'pane_title_marker': pane_title_marker,
-        'tmux_log': str(runtime_dir / 'bridge_output.log'),
+        'tmux_log': str(artifacts.bridge_log),
+        'bridge_log': str(artifacts.bridge_log),
         'workspace_path': str(plan.workspace_path),
         'work_dir': str(run_cwd),
         'start_dir': str(context.project.project_root),

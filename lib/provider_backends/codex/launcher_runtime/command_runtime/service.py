@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Callable
 
 from provider_core.caller_env import caller_context_env
+from provider_backends.codex.runtime_artifacts import codex_runtime_artifact_layout
 
 
 def build_start_cmd(
@@ -75,6 +76,7 @@ def _codex_args(command, spec, runtime_dir: Path, *, provider_start_parts_fn, lo
 
 
 def _env_map(runtime_dir: Path, launch_session_id: str, *, spec, profile, codex_home_overrides: dict[str, str]) -> dict[str, str]:
+    artifacts = codex_runtime_artifact_layout(runtime_dir)
     inherited_api_env = _inherited_api_env(profile=profile)
     explicit_env: dict[str, str] = {}
     if profile is not None:
@@ -84,8 +86,8 @@ def _env_map(runtime_dir: Path, launch_session_id: str, *, spec, profile, codex_
         **inherited_api_env,
         **explicit_env,
         'CODEX_RUNTIME_DIR': str(runtime_dir),
-        'CODEX_INPUT_FIFO': str(runtime_dir / 'input.fifo'),
-        'CODEX_OUTPUT_FIFO': str(runtime_dir / 'output.fifo'),
+        'CODEX_INPUT_FIFO': str(artifacts.input_fifo),
+        'CODEX_OUTPUT_FIFO': str(artifacts.output_fifo),
         'CODEX_TERMINAL': 'tmux',
         **codex_home_overrides,
         **caller_context_env(actor=spec.name, runtime_dir=runtime_dir, launch_session_id=launch_session_id),
