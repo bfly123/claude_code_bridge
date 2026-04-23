@@ -24,8 +24,8 @@ class KillPreparation:
 
 def prepare_local_shutdown(context, *, force: bool, collect_agent_pid_candidates_fn) -> KillPreparation:
     store = AgentRuntimeStore(context.paths)
-    tmux_sockets = collect_candidate_tmux_sockets()
     configured_agent_names = _configured_agent_names(context)
+    tmux_sockets = collect_candidate_tmux_sockets() if configured_agent_names else set()
     extra_agent_names = extra_agent_dir_names(context, configured_agent_names)
     pid_candidates: dict[int, list[Path]] = {}
     priority_pids: list[int] = []
@@ -54,7 +54,7 @@ def prepare_local_shutdown(context, *, force: bool, collect_agent_pid_candidates
     return KillPreparation(
         configured_agent_names=configured_agent_names,
         extra_agent_names=extra_agent_names,
-        tmux_sockets=tuple(tmux_sockets or {None}),
+        tmux_sockets=tuple(tmux_sockets),
         priority_pids=tuple(priority_pids),
         pid_metadata=pid_metadata,
         pid_candidates=pid_candidates,

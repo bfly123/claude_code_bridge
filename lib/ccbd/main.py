@@ -10,6 +10,7 @@ if str(_LIB_ROOT) not in sys.path:
     sys.path.insert(0, str(_LIB_ROOT))
 
 from ccbd.app import CcbdApp
+from terminal_runtime.env import patch_subprocess_no_window
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -17,6 +18,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--project', required=True)
     args = parser.parse_args(argv)
 
+    patch_subprocess_no_window()
     app = CcbdApp(args.project)
     try:
         app.serve_forever()

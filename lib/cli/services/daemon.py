@@ -39,6 +39,7 @@ from .daemon_runtime import shutdown_daemon as _shutdown_daemon_runtime
 
 from .daemon_runtime.facade import SHUTDOWN_TIMEOUT_S as _DEF_SHUTDOWN_TIMEOUT_S
 from .daemon_runtime.facade import START_TIMEOUT_S as _DEF_START_TIMEOUT_S
+from .daemon_runtime.facade import KEEPER_READY_TIMEOUT_S as _DEF_KEEPER_READY_TIMEOUT_S
 
 
 def inspect_daemon(context: CliContext):
@@ -176,7 +177,7 @@ def _ensure_keeper_started(context: CliContext) -> bool:
         mount_manager_factory=MountManager,
         ownership_guard_factory=OwnershipGuard,
         process_exists_fn=is_pid_alive,
-        ready_timeout_s=2.0,
+        ready_timeout_s=_DEF_KEEPER_READY_TIMEOUT_S,
     )
 
 

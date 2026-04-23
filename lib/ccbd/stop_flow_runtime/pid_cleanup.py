@@ -38,7 +38,7 @@ def terminate_runtime_pids(*, project_root, pid_candidates, priority_pids=(), pi
         is_pid_alive_fn=is_pid_alive,
         pid_matches_project_fn=pid_matches_project,
         process_tree_owner=local_owner,
-        process_tree_owner_factory=process_tree_owner_factory or WindowsJobMetadataProcessTreeOwnerFactory(local_owner),
+        process_tree_owner_factory=process_tree_owner_factory or WindowsJobMetadataProcessTreeOwnerFactory(local_owner, is_windows_fn=lambda: True),
         remove_pid_files_fn=remove_pid_files,
         collect_project_process_candidates_fn=collect_project_process_candidates,
     )

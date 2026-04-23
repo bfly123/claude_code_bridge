@@ -8,10 +8,14 @@ _PLACEHOLDER_CMD = 'while :; do sleep 3600; done'
 _PLACEHOLDER_CMD_WINDOWS = 'ping -t 127.0.0.1 >nul'
 
 
+def _windows_cmd_exe() -> str:
+    return os.environ.get('COMSPEC', os.path.join(os.environ.get('SystemRoot', r'C:\WINDOWS'), 'System32', 'cmd.exe'))
+
+
 def _placeholder_spawn_args(backend) -> list[str]:
     backend_impl = str(getattr(backend, 'backend_impl', '') or '').strip().lower()
     if os.name == 'nt' and backend_impl == 'psmux':
-        return ['cmd.exe', '/d', '/s', '/c', _PLACEHOLDER_CMD_WINDOWS]
+        return [_windows_cmd_exe(), '/d', '/s', '/c', _PLACEHOLDER_CMD_WINDOWS]
     return ['sh', '-lc', _PLACEHOLDER_CMD]
 
 

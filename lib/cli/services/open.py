@@ -129,7 +129,7 @@ def _connect_attachable_daemon(context: CliContext):
 
 
 def _should_tolerate_keyboard_interrupt(context: CliContext) -> bool:
-    return os.name == 'nt' and getattr(context.paths, 'ccbd_ipc_kind', None) == 'named_pipe'
+    return getattr(context.paths, 'ccbd_ipc_kind', None) == 'named_pipe'
 
 
 def _deadline_after(duration_s: float, *, tolerate_interrupts: bool) -> float:

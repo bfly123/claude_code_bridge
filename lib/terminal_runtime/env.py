@@ -54,6 +54,32 @@ def subprocess_kwargs() -> dict:
         return {"creationflags": flags}
     return {}
 
+def patch_subprocess_no_window() -> None:
+    if os.name != "nt":
+        return
+    if getattr(subprocess, '_ccb_no_window_patched', False):
+        return
+    create_no_window = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
+    original_run = subprocess.run
+    original_popen = subprocess.Popen
+
+    def _inject(kwargs: dict) -> None:
+        flags = kwargs.get('creationflags')
+        kwargs['creationflags'] = create_no_window if flags is None else (int(flags) | int(create_no_window))
+
+    def _run(*args, **kwargs):
+        _inject(kwargs)
+        return original_run(*args, **kwargs)
+
+    class _CcbPopen(original_popen):
+        def __init__(self, *args, **kwargs):
+            _inject(kwargs)
+            super().__init__(*args, **kwargs)
+
+    subprocess.run = _run
+    subprocess.Popen = _CcbPopen
+    setattr(subprocess, '_ccb_no_window_patched', True)
+
 
 def is_wsl() -> bool:
     try:

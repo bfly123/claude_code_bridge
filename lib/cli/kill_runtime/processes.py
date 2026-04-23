@@ -8,6 +8,10 @@ import time
 from collections.abc import Callable
 
 
+def _system32_executable(name: str) -> str:
+    return os.path.join(os.environ.get('SystemRoot', r'C:\WINDOWS'), 'System32', name)
+
+
 def kill_pid(pid: int, *, force: bool = False) -> bool:
     if pid <= 0:
         return False
@@ -16,9 +20,9 @@ def kill_pid(pid: int, *, force: bool = False) -> bool:
             if not _windows_pid_safe_to_terminate(pid):
                 return False
             if force:
-                subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+                subprocess.run([_system32_executable("taskkill.exe"), "/F", "/PID", str(pid)], capture_output=True)
             else:
-                subprocess.run(["taskkill", "/PID", str(pid)], capture_output=True)
+                subprocess.run([_system32_executable("taskkill.exe"), "/PID", str(pid)], capture_output=True)
         else:
             sig = signal.SIGKILL if force else signal.SIGTERM
             os.kill(pid, sig)
@@ -46,7 +50,7 @@ def is_pid_alive(pid: int) -> bool:
 def _windows_pid_exists(pid: int) -> bool:
     try:
         result = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {int(pid)}", "/FO", "CSV", "/NH"],
+            [_system32_executable("tasklist.exe"), "/FI", f"PID eq {int(pid)}", "/FO", "CSV", "/NH"],
             capture_output=True,
             text=True,
             timeout=2,
@@ -103,7 +107,7 @@ def _kill_pid_tree_windows(pid: int, *, force: bool) -> bool:
 
 
 def _taskkill_tree_args(pid: int, *, force: bool) -> list[str]:
-    args = ["taskkill", "/T", "/PID", str(pid)]
+    args = [_system32_executable("taskkill.exe"), "/T", "/PID", str(pid)]
     if force:
         args.insert(1, "/F")
     return args
@@ -196,7 +200,7 @@ def _windows_process_parent_pid(pid: int) -> int | None:
     command = f"$p = Get-CimInstance Win32_Process -Filter \"ProcessId={int(pid)}\"; if ($p) {{ [Console]::Out.Write($p.ParentProcessId) }}"
     try:
         result = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+            [_system32_executable("WindowsPowerShell\\v1.0\\powershell.exe"), "-NoProfile", "-NonInteractive", "-Command", command],
             capture_output=True,
             text=True,
             timeout=2,

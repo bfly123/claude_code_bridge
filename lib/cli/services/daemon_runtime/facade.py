@@ -13,9 +13,9 @@ from .processes import (
 from .processes import spawn_ccbd as spawn_ccbd_runtime
 
 
-START_TIMEOUT_S = 5.0
+START_TIMEOUT_S = 20.0
 SHUTDOWN_TIMEOUT_S = 2.0
-KEEPER_READY_TIMEOUT_S = 2.0
+KEEPER_READY_TIMEOUT_S = 10.0
 
 
 def incompatible_daemon_error() -> str:

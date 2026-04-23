@@ -43,6 +43,10 @@ def read_boot_id() -> str:
     return platform.node() or 'unknown-boot'
 
 
+def _system32_executable(name: str) -> str:
+    return os.path.join(os.environ.get('SystemRoot', r'C:\WINDOWS'), 'System32', name)
+
+
 def process_exists(pid: int | None) -> bool:
     if pid is None or pid <= 0:
         return False
@@ -60,7 +64,7 @@ def process_exists(pid: int | None) -> bool:
 def _windows_pid_exists(pid: int) -> bool:
     try:
         result = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {int(pid)}", "/FO", "CSV", "/NH"],
+            [_system32_executable("tasklist.exe"), "/FI", f"PID eq {int(pid)}", "/FO", "CSV", "/NH"],
             capture_output=True,
             text=True,
             timeout=2,

@@ -12,10 +12,12 @@ from pathlib import Path
 script_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(script_dir / "lib"))
 from stdio_runtime import setup_windows_encoding
+from terminal_runtime.env import patch_subprocess_no_window
 from terminal_runtime.backend_env import get_backend_env
 from cli.entrypoint import run_cli_entrypoint
 
 setup_windows_encoding()
+patch_subprocess_no_window()
 
 backend_env = get_backend_env()
 if backend_env and not os.environ.get("CCB_BACKEND_ENV"):
