@@ -8,6 +8,10 @@ from typing import Callable
 
 _TMUX_RESPAWN_RETRY_TIMEOUT_S = 1.0
 _TMUX_RESPAWN_RETRY_INTERVAL_S = 0.05
+_TMUX_RESPAWN_TRANSIENT_ERROR_MARKERS = (
+    'fork failed',
+    'server exited unexpectedly',
+)
 
 
 @dataclass
@@ -126,4 +130,4 @@ def _respawn_failure_text(cp: subprocess.CompletedProcess | object, tmux_args: l
 
 def _is_retryable_respawn_error(exc: RuntimeError) -> bool:
     text = str(exc).strip().lower()
-    return 'fork failed' in text
+    return any(marker in text for marker in _TMUX_RESPAWN_TRANSIENT_ERROR_MARKERS)

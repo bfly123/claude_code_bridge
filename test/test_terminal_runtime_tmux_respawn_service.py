@@ -61,7 +61,17 @@ def test_tmux_respawn_service_requires_pane_and_cmd() -> None:
         pass
 
 
-def test_tmux_respawn_service_retries_transient_fork_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ('failure_stderr',),
+    [
+        ('fork failed: Device not configured\n',),
+        ('server exited unexpectedly\n',),
+    ],
+)
+def test_tmux_respawn_service_retries_transient_tmux_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stderr: str,
+) -> None:
     calls: list[list[str]] = []
     respawn_attempts = 0
 
@@ -73,7 +83,7 @@ def test_tmux_respawn_service_retries_transient_fork_failure(monkeypatch: pytest
         if args[:1] == ['respawn-pane']:
             respawn_attempts += 1
             if respawn_attempts == 1:
-                return _cp(returncode=1, stderr='fork failed: Device not configured\n')
+                return _cp(returncode=1, stderr=failure_stderr)
         return _cp()
 
     monkeypatch.setattr('terminal_runtime.tmux_respawn_service.time.sleep', lambda _: None)
