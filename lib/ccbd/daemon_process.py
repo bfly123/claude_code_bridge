@@ -7,6 +7,7 @@ import sys
 import time
 
 from ccbd.socket_client import CcbdClient, CcbdClientError
+from ccbd.system import ipc_endpoint_connectable
 
 
 class CcbdProcessError(RuntimeError):
@@ -31,13 +32,19 @@ def spawn_ccbd_process(
     ccbd_dir.mkdir(parents=True, exist_ok=True)
     stdout_log = open(ccbd_dir / 'ccbd.stdout.log', 'ab')
     stderr_log = open(ccbd_dir / 'ccbd.stderr.log', 'ab')
+    popen_kwargs = {
+        'cwd': str(project_root),
+        'env': env,
+        'stdout': stdout_log,
+        'stderr': stderr_log,
+    }
+    if os.name == 'nt':
+        popen_kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+    else:
+        popen_kwargs['start_new_session'] = True
     process = subprocess.Popen(
         [sys.executable, str(script), '--project', str(project_root)],
-        cwd=str(project_root),
-        env=env,
-        stdout=stdout_log,
-        stderr=stderr_log,
-        start_new_session=True,
+        **popen_kwargs,
     )
     _wait_for_ccbd_ready(process=process, socket_path=socket_path, ipc_kind=ipc_kind, timeout_s=timeout_s)
 
@@ -52,15 +59,30 @@ def _wait_for_ccbd_ready(*, process: subprocess.Popen[bytes], socket_path, ipc_k
             return
         except CcbdClientError as exc:
             last_error = str(exc)
+            if _ready_fallback_allowed(ipc_kind) and _endpoint_ready(socket_path, ipc_kind=ipc_kind, timeout_s=probe_timeout_s):
+                return
         if process.poll() is not None:
             try:
                 CcbdClient(socket_path, timeout_s=probe_timeout_s, ipc_kind=ipc_kind).ping('ccbd')
                 return
             except CcbdClientError as exc:
                 last_error = str(exc)
+                if _ready_fallback_allowed(ipc_kind) and _endpoint_ready(socket_path, ipc_kind=ipc_kind, timeout_s=probe_timeout_s):
+                    return
             raise CcbdProcessError(f'ccbd exited before ready with code {process.returncode}')
         time.sleep(0.05)
     raise CcbdProcessError(last_error or 'timed out waiting for ccbd to become ready')
+
+
+def _endpoint_ready(socket_path, *, ipc_kind: str | None, timeout_s: float) -> bool:
+    try:
+        return bool(ipc_endpoint_connectable(socket_path, ipc_kind=ipc_kind, timeout_s=timeout_s))
+    except TypeError:
+        return bool(ipc_endpoint_connectable(socket_path, timeout_s=timeout_s))
+
+
+def _ready_fallback_allowed(ipc_kind: str | None) -> bool:
+    return str(ipc_kind or '').strip().lower() == 'named_pipe'
 
 
 def _ccbd_env(*, keeper_pid: int | None) -> dict[str, str]:
