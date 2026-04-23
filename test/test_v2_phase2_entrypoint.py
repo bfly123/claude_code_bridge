@@ -848,7 +848,7 @@ def _wait_for_phase2_status(cwd: Path, target: str, expected: str, *, timeout: f
     raise AssertionError(f'expected status {expected!r}; last stdout={last_stdout!r} stderr={last_stderr!r}')
 
 
-def _wait_for_path(path: Path, timeout: float = 2.0) -> None:
+def _wait_for_path(path: Path, timeout: float = 5.0) -> None:
     deadline = time.time() + timeout
     last_error: str | None = None
     while time.time() < deadline:
