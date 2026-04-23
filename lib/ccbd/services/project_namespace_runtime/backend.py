@@ -2,28 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
-import shutil
 
-from terminal_runtime.env import default_shell, is_wsl, is_windows
 
 _PLACEHOLDER_CMD = 'while :; do sleep 3600; done'
-_PLACEHOLDER_CMD_WINDOWS = 'while ($true) { Start-Sleep -Seconds 3600 }'
+_PLACEHOLDER_CMD_WINDOWS = 'ping -t 127.0.0.1 >nul'
 
 
 def _placeholder_spawn_args(backend) -> list[str]:
     backend_impl = str(getattr(backend, 'backend_impl', '') or '').strip().lower()
     if os.name == 'nt' and backend_impl == 'psmux':
-        shell_flag = '-Command'
-        resolved_shell = str(os.environ.get('CCB_WINDOWS_SHELL_BIN') or '').strip()
-        placeholder = _PLACEHOLDER_CMD_WINDOWS
-        if resolved_shell:
-            return [resolved_shell, '-NoLogo', shell_flag, placeholder]
-        shell, shell_flag = default_shell(is_wsl_fn=is_wsl, is_windows_fn=is_windows)
-        if shell == 'pwsh':
-            return [shutil.which('pwsh') or 'pwsh', '-NoLogo', shell_flag, placeholder]
-        if shell == 'powershell':
-            return [shutil.which('powershell') or 'powershell', '-NoLogo', shell_flag, placeholder]
-        return [shutil.which('powershell') or 'powershell', '-NoLogo', '-Command', placeholder]
+        return ['cmd.exe', '/d', '/s', '/c', _PLACEHOLDER_CMD_WINDOWS]
     return ['sh', '-lc', _PLACEHOLDER_CMD]
 
 
