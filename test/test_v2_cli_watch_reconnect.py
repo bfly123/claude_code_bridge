@@ -2,15 +2,22 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from io import StringIO
 
 import pytest
 
+from ccbd.api_models import DeliveryScope, JobEvent, JobRecord, JobStatus, MessageEnvelope
 from ccbd.socket_client import CcbdClientError
 from cli.context import CliContext, CliContextBuilder
 from cli.models import ParsedPendCommand, ParsedWatchCommand
 from cli.services.daemon import CcbdServiceError
 from cli.services import pend as pend_service
 from cli.services import watch as watch_service
+from cli.services.ask_runtime.watch import watch_ask_job as watch_ask_job_impl
+from cli.render import render_watch_batch, write_lines
+from completion.models import CompletionConfidence, CompletionDecision, CompletionFamily, CompletionState, CompletionStatus
+from jobs.store import JobEventStore, JobStore
+from ccbd.services.snapshot_writer import SnapshotWriter
 from storage.paths import PathLayout
 
 
@@ -140,6 +147,72 @@ def _context(project_root: Path) -> CliContext:
     return CliContextBuilder().build(command, cwd=project_root, bootstrap_if_missing=False)
 
 
+def _persist_terminal_job(project_root: Path, *, job_id: str = 'job_demo') -> None:
+    layout = PathLayout(project_root)
+    request = MessageEnvelope(
+        project_id='proj_demo',
+        to_agent='codex',
+        from_actor='user',
+        body='hello',
+        task_id=None,
+        reply_to=None,
+        message_type='ask',
+        delivery_scope=DeliveryScope.SINGLE,
+    )
+    decision = CompletionDecision(
+        terminal=True,
+        status=CompletionStatus.COMPLETED,
+        reason='session_reply_stable',
+        confidence=CompletionConfidence.OBSERVED,
+        reply='persisted reply',
+        anchor_seen=True,
+        reply_started=True,
+        reply_stable=True,
+        provider_turn_ref=None,
+        source_cursor=None,
+        finished_at='2026-03-18T00:00:02Z',
+        diagnostics={},
+    )
+    JobStore(layout).append(
+        JobRecord(
+            job_id=job_id,
+            submission_id='sub_demo',
+            agent_name='codex',
+            provider='codex',
+            request=request,
+            status=JobStatus.COMPLETED,
+            terminal_decision=decision.to_record(),
+            cancel_requested_at=None,
+            created_at='2026-03-18T00:00:00Z',
+            updated_at='2026-03-18T00:00:02Z',
+            workspace_path=str(project_root),
+        )
+    )
+    JobEventStore(layout).append(
+        JobEvent(
+            event_id='evt1',
+            job_id=job_id,
+            agent_name='codex',
+            type='job_completed',
+            payload={'status': 'completed'},
+            timestamp='2026-03-18T00:00:02Z',
+        )
+    )
+    SnapshotWriter(layout).write_completion(
+        job_id=job_id,
+        agent_name='codex',
+        profile_family=CompletionFamily.ANCHORED_SESSION_STABILITY,
+        state=CompletionState(
+            anchor_seen=True,
+            reply_started=True,
+            reply_stable=True,
+            terminal=True,
+        ),
+        decision=decision,
+        updated_at='2026-03-18T00:00:02Z',
+    )
+
+
 def test_watch_target_reconnects_after_socket_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     project_root = tmp_path / 'repo'
     project_root.mkdir()
@@ -249,6 +322,86 @@ def test_watch_target_retries_when_reconnect_attempt_temporarily_fails(
     assert batches[0].reply == 'done'
     assert flaky.calls == [0]
     assert stable.calls == [0]
+
+
+def test_watch_target_falls_back_to_persisted_terminal_job_when_daemon_stays_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-watch-fallback'
+    project_root.mkdir()
+    context = _context(project_root)
+    _persist_terminal_job(project_root)
+
+    def _connect(context, allow_restart_stale):
+        del context, allow_restart_stale
+        raise CcbdServiceError('daemon restarting')
+
+    monkeypatch.setattr(watch_service, 'connect_mounted_daemon', _connect)
+    monkeypatch.setenv('CCB_WATCH_TIMEOUT_S', '1')
+    monkeypatch.setenv('CCB_WATCH_POLL_INTERVAL_S', '0')
+
+    batches = list(watch_service.watch_target(context, ParsedWatchCommand(project=None, target='job_demo')))
+
+    assert len(batches) == 1
+    assert batches[0].terminal is True
+    assert batches[0].status == 'completed'
+    assert batches[0].reply == 'persisted reply'
+    assert [event['event_id'] for event in batches[0].events] == ['evt1']
+
+
+def test_watch_target_initial_connect_error_still_raises_without_persisted_terminal_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-watch-no-fallback'
+    project_root.mkdir()
+    context = _context(project_root)
+
+    def _connect(context, allow_restart_stale):
+        del context, allow_restart_stale
+        raise CcbdServiceError('project ccbd is unmounted; run `ccb` first')
+
+    monkeypatch.setattr(watch_service, 'connect_mounted_daemon', _connect)
+
+    with pytest.raises(CcbdServiceError, match='project ccbd is unmounted'):
+        list(watch_service.watch_target(context, ParsedWatchCommand(project=None, target='job_demo')))
+
+
+def test_watch_ask_job_falls_back_to_persisted_terminal_job_when_daemon_stays_unreachable(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-ask-watch-fallback'
+    project_root.mkdir()
+    context = _context(project_root)
+    _persist_terminal_job(project_root)
+    out = StringIO()
+
+    def _connect(context, allow_restart_stale):
+        del context, allow_restart_stale
+        raise CcbdServiceError('daemon restarting')
+
+    batch = watch_ask_job_impl(
+        context,
+        'job_demo',
+        out,
+        timeout=1.0,
+        emit_output=True,
+        connect_mounted_daemon_fn=_connect,
+        reconnect_error_classes=(CcbdClientError, CcbdServiceError),
+        monotonic_fn=lambda: 0.0,
+        sleep_fn=lambda _seconds: None,
+        poll_interval_seconds_fn=lambda: 0.0,
+        timeout_seconds_fn=lambda: 1.0,
+        render_watch_batch_fn=render_watch_batch,
+        write_lines_fn=write_lines,
+    )
+
+    assert batch.terminal is True
+    assert batch.status == 'completed'
+    assert batch.reply == 'persisted reply'
+    assert 'watch_status: terminal' in out.getvalue()
+    assert 'reply: persisted reply' in out.getvalue()
 
 
 def test_pend_target_reconnects_after_socket_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import TextIO
 
 from cli.services.watch import WatchEventBatch
+from cli.services.watch_fallback import load_persisted_terminal_watch_payload
 
 
 def watch_ask_job(
@@ -22,28 +23,48 @@ def watch_ask_job(
     render_watch_batch_fn: Callable[[WatchEventBatch], tuple[str, ...]],
     write_lines_fn: Callable[[TextIO, tuple[str, ...]], None],
 ) -> WatchEventBatch:
-    handle = connect_mounted_daemon_fn(context, allow_restart_stale=True)
-    assert handle.client is not None
-    client = handle.client
     cursor = 0
     deadline = _watch_deadline(timeout, timeout_seconds_fn=timeout_seconds_fn, monotonic_fn=monotonic_fn)
     poll_interval = poll_interval_seconds_fn()
+    try:
+        handle = connect_mounted_daemon_fn(context, allow_restart_stale=True)
+    except reconnect_error_classes:
+        fallback = _persisted_terminal_batch(context, job_id, cursor=cursor)
+        if fallback is not None:
+            if emit_output:
+                write_lines_fn(out, render_watch_batch_fn(fallback))
+            return fallback
+        raise
+    assert handle.client is not None
+    client = handle.client
 
     while True:
         try:
             payload = client.watch(job_id, cursor=cursor)
         except reconnect_error_classes:
-            client = None
-            while client is None:
-                if _deadline_exceeded(deadline, monotonic_fn=monotonic_fn):
-                    raise RuntimeError(f'wait timed out for {job_id}')
-                try:
-                    handle = connect_mounted_daemon_fn(context, allow_restart_stale=True)
-                except reconnect_error_classes:
-                    sleep_fn(poll_interval)
-                    continue
-                assert handle.client is not None
-                client = handle.client
+            fallback = _persisted_terminal_batch(context, job_id, cursor=cursor)
+            if fallback is not None:
+                if emit_output:
+                    write_lines_fn(out, render_watch_batch_fn(fallback))
+                return fallback
+            client = _connect_client(
+                context,
+                job_id=job_id,
+                cursor=cursor,
+                connect_mounted_daemon_fn=connect_mounted_daemon_fn,
+                reconnect_error_classes=reconnect_error_classes,
+                monotonic_fn=monotonic_fn,
+                sleep_fn=sleep_fn,
+                deadline=deadline,
+                poll_interval=poll_interval,
+            )
+            if client is None:
+                fallback = _persisted_terminal_batch(context, job_id, cursor=cursor)
+                if fallback is not None:
+                    if emit_output:
+                        write_lines_fn(out, render_watch_batch_fn(fallback))
+                    return fallback
+                raise RuntimeError(f'wait timed out for {job_id}')
             sleep_fn(poll_interval)
             continue
 
@@ -56,6 +77,11 @@ def watch_ask_job(
                 write_lines_fn(out, render_watch_batch_fn(batch))
             return batch
         if _deadline_exceeded(deadline, monotonic_fn=monotonic_fn):
+            fallback = _persisted_terminal_batch(context, job_id, cursor=cursor)
+            if fallback is not None:
+                if emit_output:
+                    write_lines_fn(out, render_watch_batch_fn(fallback))
+                return fallback
             raise RuntimeError(f'wait timed out for {job_id}')
         sleep_fn(poll_interval)
 
@@ -92,6 +118,40 @@ def _watch_batch_from_payload(job_id: str, payload: dict) -> WatchEventBatch:
         reply=payload.get('reply') or '',
         events=tuple(payload.get('events', ())),
     )
+
+
+def _connect_client(
+    context,
+    *,
+    job_id: str,
+    cursor: int,
+    connect_mounted_daemon_fn: Callable,
+    reconnect_error_classes: tuple[type[BaseException], ...],
+    monotonic_fn: Callable[[], float],
+    sleep_fn: Callable[[float], None],
+    deadline: float | None,
+    poll_interval: float,
+):
+    while True:
+        try:
+            handle = connect_mounted_daemon_fn(context, allow_restart_stale=True)
+        except reconnect_error_classes:
+            fallback = _persisted_terminal_batch(context, job_id, cursor=cursor)
+            if fallback is not None:
+                return None
+            if _deadline_exceeded(deadline, monotonic_fn=monotonic_fn):
+                return None
+            sleep_fn(poll_interval)
+            continue
+        assert handle.client is not None
+        return handle.client
+
+
+def _persisted_terminal_batch(context, job_id: str, *, cursor: int) -> WatchEventBatch | None:
+    payload = load_persisted_terminal_watch_payload(context, job_id, cursor=cursor)
+    if payload is None:
+        return None
+    return _watch_batch_from_payload(job_id, payload)
 
 
 __all__ = ['watch_ask_job']

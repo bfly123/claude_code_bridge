@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .watch_fallback import load_persisted_terminal_watch_payload
+
 
 _DEFAULT_POLL_INTERVAL_S = 0.1
 _DEFAULT_TIMEOUT_S = 10.0
@@ -43,26 +45,44 @@ def watch_target(
     timeout_seconds_fn,
     poll_interval_seconds_fn,
 ):
-    handle = connect_mounted_daemon_fn(context, allow_restart_stale=True)
-    assert handle.client is not None
     cursor = 0
     deadline = time_fn() + timeout_seconds_fn()
+    try:
+        handle = connect_mounted_daemon_fn(context, allow_restart_stale=True)
+    except reconnect_error_classes:
+        fallback = _persisted_terminal_batch(context, command.target, cursor=cursor)
+        if fallback is not None:
+            yield fallback
+            return
+        raise
+    assert handle.client is not None
     poll_interval = poll_interval_seconds_fn()
 
     while True:
         try:
             payload = handle.client.watch(command.target, cursor=cursor)
         except reconnect_error_classes:
-            handle = None
-            while handle is None:
-                if _deadline_exceeded(deadline, time_fn=time_fn):
-                    raise RuntimeError(f"watch timed out for target {command.target}")
-                try:
-                    handle = connect_mounted_daemon_fn(context, allow_restart_stale=True)
-                except reconnect_error_classes:
-                    sleep_fn(poll_interval)
-                    continue
-                assert handle.client is not None
+            fallback = _persisted_terminal_batch(context, command.target, cursor=cursor)
+            if fallback is not None:
+                yield fallback
+                return
+            handle = _connect_handle(
+                context,
+                target=command.target,
+                cursor=cursor,
+                connect_mounted_daemon_fn=connect_mounted_daemon_fn,
+                reconnect_error_classes=reconnect_error_classes,
+                time_fn=time_fn,
+                sleep_fn=sleep_fn,
+                deadline=deadline,
+                poll_interval_seconds_fn=poll_interval_seconds_fn,
+            )
+            if handle is None:
+                fallback = _persisted_terminal_batch(context, command.target, cursor=cursor)
+                if fallback is not None:
+                    yield fallback
+                    return
+                raise RuntimeError(f"watch timed out for target {command.target}")
             sleep_fn(poll_interval)
             continue
 
@@ -75,6 +95,10 @@ def watch_target(
                 yield batch
             return
         if _deadline_exceeded(deadline, time_fn=time_fn):
+            fallback = _persisted_terminal_batch(context, command.target, cursor=cursor)
+            if fallback is not None:
+                yield fallback
+                return
             raise RuntimeError(f"watch timed out for target {command.target}")
         sleep_fn(poll_interval)
 
@@ -99,6 +123,41 @@ def _watch_batch_from_payload(target: str, payload: dict) -> WatchEventBatch:
         reply=payload.get("reply") or "",
         events=tuple(payload.get("events", [])),
     )
+
+
+def _connect_handle(
+    context,
+    *,
+    target: str,
+    cursor: int,
+    connect_mounted_daemon_fn,
+    reconnect_error_classes: tuple[type[BaseException], ...],
+    time_fn,
+    sleep_fn,
+    deadline: float | None,
+    poll_interval_seconds_fn,
+):
+    poll_interval = poll_interval_seconds_fn()
+    while True:
+        try:
+            handle = connect_mounted_daemon_fn(context, allow_restart_stale=True)
+        except reconnect_error_classes:
+            fallback = _persisted_terminal_batch(context, target, cursor=cursor)
+            if fallback is not None:
+                return None
+            if deadline is not None and _deadline_exceeded(deadline, time_fn=time_fn):
+                return None
+            sleep_fn(poll_interval)
+            continue
+        assert handle.client is not None
+        return handle
+
+
+def _persisted_terminal_batch(context, target: str, *, cursor: int) -> WatchEventBatch | None:
+    payload = load_persisted_terminal_watch_payload(context, target, cursor=cursor)
+    if payload is None:
+        return None
+    return _watch_batch_from_payload(target, payload)
 
 
 __all__ = [
