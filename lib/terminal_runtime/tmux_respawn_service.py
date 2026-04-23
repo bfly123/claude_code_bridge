@@ -10,6 +10,7 @@ _TMUX_RESPAWN_RETRY_TIMEOUT_S = 1.0
 _TMUX_RESPAWN_RETRY_INTERVAL_S = 0.05
 _TMUX_RESPAWN_TRANSIENT_ERROR_MARKERS = (
     'fork failed',
+    'no server running',
     'server exited unexpectedly',
 )
 

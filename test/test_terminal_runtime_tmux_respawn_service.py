@@ -65,6 +65,7 @@ def test_tmux_respawn_service_requires_pane_and_cmd() -> None:
     ('failure_stderr',),
     [
         ('fork failed: Device not configured\n',),
+        ('no server running on /tmp/ccb-runtime/test.sock\n',),
         ('server exited unexpectedly\n',),
     ],
 )
