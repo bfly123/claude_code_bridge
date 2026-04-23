@@ -17,6 +17,7 @@ from cli.services.daemon import KillSummary, shutdown_daemon
 from cli.services.kill import kill_project
 from cli.services.tmux_project_cleanup import ProjectTmuxCleanupSummary
 from project.resolver import bootstrap_project
+from runtime_pid_cleanup.process_tree_owner import ProcessTreeTarget
 from workspace.materializer import WorkspaceMaterializer
 from workspace.planner import WorkspacePlanner
 
@@ -363,6 +364,357 @@ def test_kill_project_terminates_runtime_pid_files(tmp_path: Path, monkeypatch) 
     assert runtime.reconcile_state == 'stopped'
 
 
+def test_kill_project_prioritizes_job_owner_pid_before_runtime_children(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-kill-job-owner'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    command = ParsedKillCommand(project=None, force=False)
+    context = CliContextBuilder().build(command, cwd=project_root, bootstrap_if_missing=False)
+
+    runtime_dir = context.paths.agent_provider_runtime_dir('demo', 'codex')
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    bridge_pid = runtime_dir / 'bridge.pid'
+    codex_pid = runtime_dir / 'codex.pid'
+    bridge_pid.write_text('111\n', encoding='utf-8')
+    codex_pid.write_text('222\n', encoding='utf-8')
+    AgentRuntimeStore(context.paths).save(
+        AgentRuntime(
+            agent_name='demo',
+            state=AgentState.IDLE,
+            pid=333,
+            started_at='2026-04-01T00:00:00Z',
+            last_seen_at='2026-04-01T00:00:00Z',
+            runtime_ref='tmux:%1',
+            session_ref=str(project_root / '.ccb' / '.codex-demo-session'),
+            workspace_path=str(context.paths.workspace_path('demo')),
+            project_id=context.project.project_id,
+            backend_type='pane-backed',
+            queue_depth=2,
+            socket_path=str(context.paths.ccbd_socket_path),
+            health='healthy',
+            job_id='job-object-1',
+            job_owner_pid=999,
+        )
+    )
+
+    live_pids = {111, 222, 333, 999}
+    terminated: list[int] = []
+    monkeypatch.setattr(
+        'cli.services.kill.shutdown_daemon',
+        lambda context, force: KillSummary(
+            project_id=context.project.project_id,
+            state='unmounted',
+            socket_path=str(context.paths.ccbd_socket_path),
+            forced=force,
+        ),
+    )
+    monkeypatch.setattr('cli.services.kill.set_tmux_ui_active', lambda active: None)
+    monkeypatch.setattr('cli.services.kill.ProjectNamespaceController', _namespace_controller(destroyed=False))
+    monkeypatch.setattr('cli.services.kill.cleanup_project_tmux_orphans_by_socket', lambda **kwargs: ())
+    monkeypatch.setattr(
+        'cli.services.kill.TmuxCleanupHistoryStore',
+        lambda paths: type('Store', (), {'append': staticmethod(lambda event: None)})(),
+    )
+    monkeypatch.setattr('cli.services.kill._pid_matches_project', lambda pid, project_root, hint_paths: True)
+    monkeypatch.setattr('cli.services.kill.is_pid_alive', lambda pid: pid in live_pids)
+
+    def _terminate(pid, timeout_s, is_pid_alive_fn):
+        terminated.append(pid)
+        if pid == 999:
+            live_pids.clear()
+        else:
+            live_pids.discard(pid)
+        return True
+
+    monkeypatch.setattr('cli.services.kill.terminate_pid_tree', _terminate)
+
+    kill_project(context, command)
+
+    assert terminated == [999]
+    assert bridge_pid.exists() is False
+    assert codex_pid.exists() is False
+
+
+def test_kill_project_prioritizes_bridge_pid_when_job_owner_pid_missing(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-kill-bridge-owner'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    command = ParsedKillCommand(project=None, force=False)
+    context = CliContextBuilder().build(command, cwd=project_root, bootstrap_if_missing=False)
+
+    runtime_dir = context.paths.agent_provider_runtime_dir('demo', 'codex')
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    bridge_pid = runtime_dir / 'bridge.pid'
+    codex_pid = runtime_dir / 'codex.pid'
+    bridge_pid.write_text('111\n', encoding='utf-8')
+    codex_pid.write_text('222\n', encoding='utf-8')
+    AgentRuntimeStore(context.paths).save(
+        AgentRuntime(
+            agent_name='demo',
+            state=AgentState.IDLE,
+            pid=333,
+            started_at='2026-04-01T00:00:00Z',
+            last_seen_at='2026-04-01T00:00:00Z',
+            runtime_ref='tmux:%1',
+            session_ref=str(project_root / '.ccb' / '.codex-demo-session'),
+            workspace_path=str(context.paths.workspace_path('demo')),
+            project_id=context.project.project_id,
+            backend_type='pane-backed',
+            queue_depth=2,
+            socket_path=str(context.paths.ccbd_socket_path),
+            health='healthy',
+        )
+    )
+
+    live_pids = {111, 222, 333}
+    terminated: list[int] = []
+    monkeypatch.setattr(
+        'cli.services.kill.shutdown_daemon',
+        lambda context, force: KillSummary(
+            project_id=context.project.project_id,
+            state='unmounted',
+            socket_path=str(context.paths.ccbd_socket_path),
+            forced=force,
+        ),
+    )
+    monkeypatch.setattr('cli.services.kill.set_tmux_ui_active', lambda active: None)
+    monkeypatch.setattr('cli.services.kill.ProjectNamespaceController', _namespace_controller(destroyed=False))
+    monkeypatch.setattr('cli.services.kill.cleanup_project_tmux_orphans_by_socket', lambda **kwargs: ())
+    monkeypatch.setattr(
+        'cli.services.kill.TmuxCleanupHistoryStore',
+        lambda paths: type('Store', (), {'append': staticmethod(lambda event: None)})(),
+    )
+    monkeypatch.setattr('cli.services.kill._pid_matches_project', lambda pid, project_root, hint_paths: True)
+    monkeypatch.setattr('cli.services.kill.is_pid_alive', lambda pid: pid in live_pids)
+
+    def _terminate(pid, timeout_s, is_pid_alive_fn):
+        terminated.append(pid)
+        if pid == 111:
+            live_pids.clear()
+        else:
+            live_pids.discard(pid)
+        return True
+
+    monkeypatch.setattr('cli.services.kill.terminate_pid_tree', _terminate)
+
+    kill_project(context, command)
+
+    assert terminated == [111]
+    assert bridge_pid.exists() is False
+    assert codex_pid.exists() is False
+
+
+def test_kill_project_passes_pid_job_metadata_to_cleanup(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-kill-job-metadata'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    command = ParsedKillCommand(project=None, force=False)
+    context = CliContextBuilder().build(command, cwd=project_root, bootstrap_if_missing=False)
+
+    runtime_dir = context.paths.agent_provider_runtime_dir('demo', 'codex')
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    bridge_pid = runtime_dir / 'bridge.pid'
+    codex_pid = runtime_dir / 'codex.pid'
+    bridge_pid.write_text('111\n', encoding='utf-8')
+    codex_pid.write_text('222\n', encoding='utf-8')
+    AgentRuntimeStore(context.paths).save(
+        AgentRuntime(
+            agent_name='demo',
+            state=AgentState.IDLE,
+            pid=333,
+            started_at='2026-04-01T00:00:00Z',
+            last_seen_at='2026-04-01T00:00:00Z',
+            runtime_ref='tmux:%1',
+            session_ref=str(project_root / '.ccb' / '.codex-demo-session'),
+            workspace_path=str(context.paths.workspace_path('demo')),
+            project_id=context.project.project_id,
+            backend_type='pane-backed',
+            queue_depth=2,
+            socket_path=str(context.paths.ccbd_socket_path),
+            health='healthy',
+            job_id='job-object-1',
+            job_owner_pid=111,
+        )
+    )
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        'cli.services.kill.shutdown_daemon',
+        lambda context, force: KillSummary(
+            project_id=context.project.project_id,
+            state='unmounted',
+            socket_path=str(context.paths.ccbd_socket_path),
+            forced=force,
+        ),
+    )
+    monkeypatch.setattr('cli.services.kill.set_tmux_ui_active', lambda active: None)
+    monkeypatch.setattr('cli.services.kill.ProjectNamespaceController', _namespace_controller(destroyed=False))
+    monkeypatch.setattr('cli.services.kill.cleanup_project_tmux_orphans_by_socket', lambda **kwargs: ())
+    monkeypatch.setattr(
+        'cli.services.kill.TmuxCleanupHistoryStore',
+        lambda paths: type('Store', (), {'append': staticmethod(lambda event: None)})(),
+    )
+    monkeypatch.setattr(
+        'cli.services.kill._terminate_runtime_pids',
+        lambda **kwargs: seen.update(kwargs),
+    )
+
+    kill_project(context, command)
+
+    assert seen['pid_metadata'][111]['job_id'] == 'job-object-1'
+    assert seen['pid_metadata'][111]['job_owner_pid'] == 111
+    assert seen['pid_metadata'][222]['job_id'] == 'job-object-1'
+    assert seen['pid_metadata'][222]['job_owner_pid'] == 111
+
+
+def test_kill_runtime_pid_wrapper_uses_windows_job_metadata_owner_factory(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo'
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        'cli.services.kill._terminate_runtime_pids_impl',
+        lambda **kwargs: seen.update(kwargs),
+    )
+
+    from cli.services.kill import _terminate_runtime_pids
+
+    _terminate_runtime_pids(
+        project_root=project_root,
+        pid_candidates={123: [project_root / 'hint.pid']},
+        pid_metadata={123: {'job_id': 'job-object-1', 'job_owner_pid': 123}},
+    )
+
+    owner_factory = seen['process_tree_owner_factory']
+    selected = owner_factory.build(
+        ProcessTreeTarget(
+            pid=123,
+            hint_paths=(project_root / 'hint.pid',),
+            metadata={'job_id': 'job-object-1', 'job_owner_pid': 123},
+        )
+    )
+
+    assert selected is not None
+
+
+def test_kill_project_recovers_job_metadata_from_extra_agent_runtime_without_runtime_record(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-kill-extra-agent-job-metadata'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    command = ParsedKillCommand(project=None, force=False)
+    context = CliContextBuilder().build(command, cwd=project_root, bootstrap_if_missing=False)
+
+    legacy_runtime_dir = context.paths.agent_provider_runtime_dir('legacy', 'codex')
+    legacy_runtime_dir.mkdir(parents=True, exist_ok=True)
+    (legacy_runtime_dir / 'bridge.pid').write_text('111\n', encoding='utf-8')
+    (legacy_runtime_dir / 'codex.pid').write_text('222\n', encoding='utf-8')
+    (legacy_runtime_dir / 'job.id').write_text('job-object-legacy\n', encoding='utf-8')
+
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(
+        'cli.services.kill.shutdown_daemon',
+        lambda context, force: KillSummary(
+            project_id=context.project.project_id,
+            state='unmounted',
+            socket_path=str(context.paths.ccbd_socket_path),
+            forced=force,
+        ),
+    )
+    monkeypatch.setattr('cli.services.kill.set_tmux_ui_active', lambda active: None)
+    monkeypatch.setattr('cli.services.kill.ProjectNamespaceController', _namespace_controller(destroyed=False))
+    monkeypatch.setattr('cli.services.kill.cleanup_project_tmux_orphans_by_socket', lambda **kwargs: ())
+    monkeypatch.setattr(
+        'cli.services.kill.TmuxCleanupHistoryStore',
+        lambda paths: type('Store', (), {'append': staticmethod(lambda event: None)})(),
+    )
+    monkeypatch.setattr(
+        'cli.services.kill._terminate_runtime_pids',
+        lambda **kwargs: seen.update(kwargs),
+    )
+
+    kill_project(context, command)
+
+    assert seen['priority_pids'] == (111,)
+    assert seen['pid_metadata'][111]['job_id'] == 'job-object-legacy'
+    assert seen['pid_metadata'][111]['job_owner_pid'] == 111
+    assert seen['pid_metadata'][222]['job_id'] == 'job-object-legacy'
+    assert seen['pid_metadata'][222]['job_owner_pid'] == 111
+
+
+def test_kill_project_force_falls_back_to_agent_runtime_for_bridge_owner_pid(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-kill-force-bridge-owner'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    command = ParsedKillCommand(project=None, force=True)
+    context = CliContextBuilder().build(command, cwd=project_root, bootstrap_if_missing=False)
+
+    runtime_dir = context.paths.agent_provider_runtime_dir('demo', 'codex')
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    bridge_pid = runtime_dir / 'bridge.pid'
+    codex_pid = runtime_dir / 'codex.pid'
+    bridge_pid.write_text('111\n', encoding='utf-8')
+    codex_pid.write_text('222\n', encoding='utf-8')
+    AgentRuntimeStore(context.paths).save(
+        AgentRuntime(
+            agent_name='demo',
+            state=AgentState.IDLE,
+            pid=333,
+            started_at='2026-04-01T00:00:00Z',
+            last_seen_at='2026-04-01T00:00:00Z',
+            runtime_ref='tmux:%1',
+            session_ref=str(project_root / '.ccb' / '.codex-demo-session'),
+            workspace_path=str(context.paths.workspace_path('demo')),
+            project_id=context.project.project_id,
+            backend_type='pane-backed',
+            queue_depth=2,
+            socket_path=str(context.paths.ccbd_socket_path),
+            health='healthy',
+            runtime_root=str(project_root / 'missing-runtime-root'),
+        )
+    )
+
+    live_pids = {111, 222, 333}
+    terminated: list[int] = []
+    monkeypatch.setattr(
+        'cli.services.kill.shutdown_daemon',
+        lambda context, force: KillSummary(
+            project_id=context.project.project_id,
+            state='unmounted',
+            socket_path=str(context.paths.ccbd_socket_path),
+            forced=force,
+        ),
+    )
+    monkeypatch.setattr('cli.services.kill.set_tmux_ui_active', lambda active: None)
+    monkeypatch.setattr('cli.services.kill.ProjectNamespaceController', _namespace_controller(destroyed=False))
+    monkeypatch.setattr('cli.services.kill.cleanup_project_tmux_orphans_by_socket', lambda **kwargs: ())
+    monkeypatch.setattr(
+        'cli.services.kill.TmuxCleanupHistoryStore',
+        lambda paths: type('Store', (), {'append': staticmethod(lambda event: None)})(),
+    )
+    monkeypatch.setattr('cli.services.kill._pid_matches_project', lambda pid, project_root, hint_paths: True)
+    monkeypatch.setattr('cli.services.kill.is_pid_alive', lambda pid: pid in live_pids)
+
+    def _terminate(pid, timeout_s, is_pid_alive_fn):
+        terminated.append(pid)
+        if pid == 111:
+            live_pids.clear()
+        else:
+            live_pids.discard(pid)
+        return True
+
+    monkeypatch.setattr('cli.services.kill.terminate_pid_tree', _terminate)
+
+    kill_project(context, command)
+
+    assert terminated == [111]
+    assert bridge_pid.exists() is False
+    assert codex_pid.exists() is False
+
+
 def test_shutdown_daemon_terminates_lingering_ccbd_pid(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / 'repo-kill-daemon-pid'
     project_root.mkdir(parents=True, exist_ok=True)
@@ -388,7 +740,7 @@ def test_shutdown_daemon_terminates_lingering_ccbd_pid(tmp_path: Path, monkeypat
     terminated: list[int] = []
 
     class FakeClient:
-        def __init__(self, _path):
+        def __init__(self, _path, ipc_kind=None):
             pass
 
         def shutdown(self):

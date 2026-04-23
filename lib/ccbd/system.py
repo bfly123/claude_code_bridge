@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import csv
 from datetime import datetime, timezone
 from pathlib import Path
 import os
 import platform
-import socket
+import subprocess
+
+from ccbd.ipc import endpoint_connectable
 
 
 def utc_now() -> str:
@@ -40,9 +43,15 @@ def read_boot_id() -> str:
     return platform.node() or 'unknown-boot'
 
 
+def _system32_executable(name: str) -> str:
+    return os.path.join(os.environ.get('SystemRoot', r'C:\WINDOWS'), 'System32', name)
+
+
 def process_exists(pid: int | None) -> bool:
     if pid is None or pid <= 0:
         return False
+    if os.name == 'nt':
+        return _windows_pid_exists(int(pid))
     try:
         os.kill(pid, 0)
     except OSError:
@@ -52,23 +61,33 @@ def process_exists(pid: int | None) -> bool:
     return True
 
 
-def unix_socket_connectable(path: str | Path, *, timeout_s: float = 0.2) -> bool:
-    target = Path(path)
-    if not target.exists() or not hasattr(socket, 'AF_UNIX'):
-        return False
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(timeout_s)
+def _windows_pid_exists(pid: int) -> bool:
     try:
-        sock.connect(str(target))
-        return True
-    except OSError:
+        result = subprocess.run(
+            [_system32_executable("tasklist.exe"), "/FI", f"PID eq {int(pid)}", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except Exception:
         return False
-    finally:
-        sock.close()
+    if result.returncode != 0:
+        return False
+    rows = [row for row in csv.reader((result.stdout or "").splitlines()) if row]
+    return any(len(row) > 1 and row[1].strip().strip('\"') == str(int(pid)) for row in rows)
+
+
+def unix_socket_connectable(path: str | Path, *, timeout_s: float = 0.2) -> bool:
+    return endpoint_connectable(path, timeout_s=timeout_s, ipc_kind='unix_socket')
+
+
+def ipc_endpoint_connectable(path: str | Path, *, timeout_s: float = 0.2, ipc_kind: str | None = None) -> bool:
+    return endpoint_connectable(path, timeout_s=timeout_s, ipc_kind=ipc_kind)
 
 
 __all__ = [
     'current_uid',
+    'ipc_endpoint_connectable',
     'parse_utc_timestamp',
     'process_exists',
     'read_boot_id',

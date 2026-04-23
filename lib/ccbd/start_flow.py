@@ -28,8 +28,17 @@ from cli.services.tmux_project_cleanup import ProjectTmuxCleanupSummary, cleanup
 from cli.services.tmux_start_layout import prepare_tmux_start_layout
 from cli.services.tmux_ui import set_tmux_ui_active
 from provider_core.session_binding_evidence import resolve_agent_binding
-from terminal_runtime import TmuxBackend
+from terminal_runtime import TmuxBackend as _LegacyTmuxBackend, default_mux_backend_cls
 from terminal_runtime.tmux_identity import apply_ccb_pane_identity
+
+
+TmuxBackend = _LegacyTmuxBackend
+
+
+def _tmux_backend_cls():
+    if TmuxBackend is not _LegacyTmuxBackend:
+        return TmuxBackend
+    return default_mux_backend_cls()
 
 
 def _deps() -> StartFlowDeps:
@@ -56,7 +65,7 @@ def _deps() -> StartFlowDeps:
         resolve_agent_binding_fn=resolve_agent_binding,
         cleanup_project_tmux_orphans_by_socket_fn=cleanup_project_tmux_orphans_by_socket,
         tmux_cleanup_history_store_cls=TmuxCleanupHistoryStore,
-        tmux_backend_cls=TmuxBackend,
+        tmux_backend_cls=_tmux_backend_cls(),
         inspect_project_namespace_pane_fn=inspect_project_namespace_pane,
         same_tmux_socket_path_fn=same_tmux_socket_path,
         apply_ccb_pane_identity_fn=apply_ccb_pane_identity,

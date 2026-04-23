@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from .helpers import build_tmux_backend, detect_ccb_version, script_path
 from .tmux import active_session_pane_id, pane_option_value, tmux_run
 
@@ -34,7 +36,13 @@ def apply_project_tmux_ui(
     _apply_active_pane_border(resolved_backend, session_name=session_name)
 
 
+def _skip_external_ui_scripts(backend) -> bool:
+    backend_impl = str(getattr(backend, 'backend_impl', '') or '').strip().lower()
+    return os.name == 'nt' and backend_impl == 'psmux'
+
+
 def _apply_session_theme(backend, *, session_name: str, ccb_version: str, status_script: str | None, git_script: str | None) -> None:
+    skip_external = _skip_external_ui_scripts(backend)
     tmux_run(backend, ['set-option', '-t', session_name, '@ccb_active', '1'])
     tmux_run(backend, ['set-option', '-t', session_name, '@ccb_version', ccb_version])
     tmux_run(backend, ['set-option', '-t', session_name, 'status-position', 'bottom'])
@@ -65,7 +73,7 @@ def _apply_session_theme(backend, *, session_name: str, ccb_version: str, status
     )
     accent = '#{?client_prefix,#f38ba8,#{?pane_in_mode,#fab387,#f5c2e7}}'
     label = '#{?client_prefix,KEY,#{?pane_in_mode,COPY,INPUT}}'
-    git_info = f'#({git_script} "#{{pane_current_path}}")' if git_script is not None else '-'
+    git_info = '-' if skip_external else (f'#({git_script} "#{{pane_current_path}}")' if git_script is not None else '-')
     tmux_run(
         backend,
         [
@@ -77,7 +85,7 @@ def _apply_session_theme(backend, *, session_name: str, ccb_version: str, status
         ],
     )
     focus_agent = '#{?#{@ccb_agent},#{@ccb_agent},-}'
-    status_indicator = f'#({status_script} modern "#{{pane_current_path}}")' if status_script is not None else '-'
+    status_indicator = '-' if skip_external else (f'#({status_script} modern "#{{pane_current_path}}")' if status_script is not None else '-')
     status_right = (
         f'#[fg=#f38ba8,bg=#1e1e2e]#[fg=#1e1e2e,bg=#f38ba8,bold] {focus_agent} '
         f'#[fg=#cba6f7,bg=#f38ba8]#[fg=#1e1e2e,bg=#cba6f7,bold] CCB:{ccb_version} '
@@ -91,6 +99,7 @@ def _apply_session_theme(backend, *, session_name: str, ccb_version: str, status
 
 
 def _apply_pane_theme(backend, *, session_name: str, border_script: str | None) -> None:
+    skip_external = _skip_external_ui_scripts(backend)
     tmux_run(backend, ['set-window-option', '-t', session_name, 'pane-border-status', 'top'])
     tmux_run(backend, ['set-window-option', '-t', session_name, 'pane-border-style', 'fg=#3b4261,bold'])
     tmux_run(backend, ['set-window-option', '-t', session_name, 'pane-active-border-style', 'fg=#7aa2f7,bold'])
@@ -104,7 +113,7 @@ def _apply_pane_theme(backend, *, session_name: str, border_script: str | None) 
             '#{?#{@ccb_agent},#{?#{@ccb_label_style},#{@ccb_label_style},#[fg=#1e1e2e]#[bg=#7aa2f7]#[bold]} #{@ccb_agent} #[default],#[fg=#565f89] #{pane_title} #[default]}',
         ],
     )
-    if border_script is not None:
+    if border_script is not None and not skip_external:
         hook = f'run-shell "{border_script} \\"#{{pane_id}}\\""'
         tmux_run(backend, ['set-hook', '-t', session_name, 'after-select-pane', hook])
 

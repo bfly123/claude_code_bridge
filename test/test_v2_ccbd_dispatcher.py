@@ -46,21 +46,25 @@ def _bootstrap_test_project(project_root: Path) -> ProjectContext:
     )
 
 
-def _runtime(agent_name: str, *, project_id: str, layout: PathLayout, pid: int) -> AgentRuntime:
+def _runtime(agent_name: str, *, project_id: str, layout: PathLayout, pid: int, **overrides) -> AgentRuntime:
+    values = {
+        'agent_name': agent_name,
+        'state': AgentState.IDLE,
+        'pid': pid,
+        'started_at': '2026-03-18T00:00:00Z',
+        'last_seen_at': '2026-03-18T00:00:00Z',
+        'runtime_ref': f'{agent_name}-runtime',
+        'session_ref': f'{agent_name}-session',
+        'workspace_path': str(layout.workspace_path(agent_name)),
+        'project_id': project_id,
+        'backend_type': 'tmux',
+        'queue_depth': 0,
+        'socket_path': None,
+        'health': 'healthy',
+    }
+    values.update(overrides)
     return AgentRuntime(
-        agent_name=agent_name,
-        state=AgentState.IDLE,
-        pid=pid,
-        started_at='2026-03-18T00:00:00Z',
-        last_seen_at='2026-03-18T00:00:00Z',
-        runtime_ref=f'{agent_name}-runtime',
-        session_ref=f'{agent_name}-session',
-        workspace_path=str(layout.workspace_path(agent_name)),
-        project_id=project_id,
-        backend_type='tmux',
-        queue_depth=0,
-        socket_path=None,
-        health='healthy',
+        **values,
     )
 
 
@@ -177,6 +181,19 @@ class FailingRestoreExecutionService(RecordingExecutionService):
             status='abandoned',
             reason='provider_resume_unsupported',
             resume_capable=False,
+        )
+
+
+class RecordingRestoreExecutionService(RecordingExecutionService):
+    def restore(self, job, *, runtime_context=None):
+        self.calls.append((job, runtime_context))
+        return ExecutionRestoreResult(
+            job_id=job.job_id,
+            agent_name=job.agent_name,
+            provider=job.provider,
+            status='restored',
+            reason='provider_resumed',
+            resume_capable=True,
         )
 
 
@@ -537,7 +554,20 @@ def test_dispatcher_passes_runtime_context_to_execution_service(tmp_path: Path) 
     layout = PathLayout(project_root)
     config = _provider_config('codex')
     registry = AgentRegistry(layout, config)
-    runtime = _runtime('codex', project_id=ctx.project_id, layout=layout, pid=101)
+    runtime = _runtime(
+        'codex',
+        project_id=ctx.project_id,
+        layout=layout,
+        pid=101,
+        runtime_pid=909,
+        terminal_backend='psmux',
+        session_file='C:/tmp/codex.session.json',
+        session_id='sid-codex',
+        tmux_socket_name='psmux-codex',
+        tmux_socket_path=r'\\.\pipe\psmux-codex',
+        job_id='job-object-1',
+        job_owner_pid=654,
+    )
     registry.upsert(runtime)
     execution_service = RecordingExecutionService()
     dispatcher = JobDispatcher(layout, config, registry, execution_service=execution_service, clock=lambda: '2026-03-18T00:00:00Z')
@@ -563,7 +593,15 @@ def test_dispatcher_passes_runtime_context_to_execution_service(tmp_path: Path) 
     assert runtime_context.workspace_path == str(layout.workspace_path('codex'))
     assert runtime_context.runtime_ref == 'codex-runtime'
     assert runtime_context.session_ref == 'codex-session'
-    assert runtime_context.runtime_pid == 101
+    assert runtime_context.runtime_pid == 909
+    assert runtime_context.runtime_binding_source == 'provider-session'
+    assert runtime_context.terminal_backend == 'psmux'
+    assert runtime_context.session_file == 'C:/tmp/codex.session.json'
+    assert runtime_context.session_id == 'sid-codex'
+    assert runtime_context.tmux_socket_name == 'psmux-codex'
+    assert runtime_context.tmux_socket_path == r'\\.\pipe\psmux-codex'
+    assert runtime_context.job_id == 'job-object-1'
+    assert runtime_context.job_owner_pid == 654
 
 
 def test_dispatcher_uses_latest_attached_binding_refs(tmp_path: Path) -> None:
@@ -1093,6 +1131,92 @@ def test_dispatcher_restore_running_jobs_marks_unrecoverable_execution_incomplet
     event_types = [event['type'] for event in watched['events']]
     assert 'execution_restore_failed' in event_types
     assert watched['terminal'] is True
+
+
+def test_dispatcher_restore_running_jobs_passes_latest_runtime_binding_context(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-restore-context'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _fake_config()
+    registry = AgentRegistry(layout, config)
+    runtime = _runtime(
+        'demo',
+        project_id=ctx.project_id,
+        layout=layout,
+        pid=201,
+        runtime_root=str(layout.agent_provider_runtime_dir('demo', 'fake')),
+        runtime_pid=777,
+        terminal_backend='psmux',
+        session_file='C:/tmp/demo.session.json',
+        session_id='sid-demo',
+        tmux_socket_name='psmux-demo',
+        tmux_socket_path=r'\\.\pipe\psmux-demo',
+        job_id='job-object-demo',
+        job_owner_pid=654,
+    )
+    registry.upsert(runtime)
+    clock = StepClock(
+        '2026-03-18T00:00:00Z',
+        '2026-03-18T00:00:00Z',
+        '2026-03-18T00:00:00Z',
+        '2026-03-18T00:00:00Z',
+    )
+    execution_service = ExecutionService(
+        build_default_execution_registry(),
+        clock=clock,
+        state_store=ExecutionStateStore(layout),
+    )
+    dispatcher = JobDispatcher(layout, config, registry, execution_service=execution_service, clock=clock)
+
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='demo',
+            from_actor='user',
+            body='restore with runtime context',
+            task_id='fake;latency_ms=1500',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    job_id = receipt.jobs[0].job_id
+    dispatcher.tick()
+    running = dispatcher.get(job_id)
+    assert running is not None
+    assert running.status is JobStatus.RUNNING
+
+    restarted = JobDispatcher(
+        layout,
+        config,
+        registry,
+        execution_service=RecordingRestoreExecutionService(),
+        clock=lambda: '2026-03-18T00:00:05Z',
+    )
+    restored = restarted.restore_running_jobs()
+
+    assert len(restored) == 1
+    assert len(restarted._execution_service.calls) == 1
+    _, runtime_context = restarted._execution_service.calls[0]
+    assert runtime_context is not None
+    assert runtime_context.runtime_root == str(layout.agent_provider_runtime_dir('demo', 'fake'))
+    assert runtime_context.runtime_pid == 777
+    assert runtime_context.terminal_backend == 'psmux'
+    assert runtime_context.session_file == 'C:/tmp/demo.session.json'
+    assert runtime_context.session_id == 'sid-demo'
+    assert runtime_context.tmux_socket_name == 'psmux-demo'
+    assert runtime_context.tmux_socket_path == r'\\.\pipe\psmux-demo'
+    assert runtime_context.job_id == 'job-object-demo'
+    assert runtime_context.job_owner_pid == 654
+    report = restarted.last_restore_report(project_id=ctx.project_id)
+    assert report.entries[0].runtime_root == str(layout.agent_provider_runtime_dir('demo', 'fake'))
+    assert report.entries[0].runtime_job_id == 'job-object-demo'
+    assert report.entries[0].job_owner_pid == 654
+    assert report.summary_fields()['last_restore_results_text'] == (
+        'demo/fake:restored(provider_resumed) terminal=psmux runtime=demo-runtime '
+        'session=sid-demo runtime_root=' + str(layout.agent_provider_runtime_dir('demo', 'fake')) +
+        ' pid=777 job=job-object-demo owner=654'
+    )
 
 
 def test_dispatcher_broadcast_does_not_lazy_restore_offline_agents(tmp_path: Path) -> None:

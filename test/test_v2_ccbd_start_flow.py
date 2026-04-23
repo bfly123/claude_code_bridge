@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 import threading
 import time
 from types import SimpleNamespace
 
 from ccbd.app import CcbdApp
 from ccbd.lifecycle_report_store import CcbdStartupReportStore
+from ccbd.models import CcbdStartupReport
 from ccbd.start_flow import StartFlowSummary
 from ccbd.start_flow_runtime.service_tmux import project_socket_active_panes
 from ccbd.socket_client import CcbdClient
@@ -17,13 +19,91 @@ from project.resolver import bootstrap_project
 import pytest
 
 
-def _wait_for(path: Path, timeout: float = 2.0) -> None:
+def _client(app: CcbdApp, *, timeout_s: float | None = None) -> CcbdClient:
+    return CcbdClient(app.paths.ccbd_ipc_ref, timeout_s=timeout_s, ipc_kind=app.paths.ccbd_ipc_kind)
+
+
+def _ready_ping_timeout_s(app: CcbdApp) -> float:
+    return 1.0 if app.paths.ccbd_ipc_kind == 'named_pipe' else 0.2
+
+
+def _wait_for_app_ready(app: CcbdApp, timeout: float = 2.0) -> None:
     deadline = time.time() + timeout
+    startup_store = CcbdStartupReportStore(app.paths)
+    last_error: Exception | None = None
     while time.time() < deadline:
-        if path.exists():
-            return
+        if app.paths.ccbd_ipc_kind != 'named_pipe' and not app.paths.ccbd_socket_path.exists():
+            time.sleep(0.02)
+            continue
+        if startup_store.load() is None:
+            time.sleep(0.02)
+            continue
+        try:
+            if _client(app, timeout_s=_ready_ping_timeout_s(app)).ping('ccbd').get('mount_state') == 'mounted':
+                return
+        except Exception as exc:
+            last_error = exc
         time.sleep(0.02)
-    raise AssertionError(f'timed out waiting for {path}')
+    detail = f'; last_error={last_error}' if last_error is not None else ''
+    raise AssertionError(f'timed out waiting for ccbd readiness: {app.paths.ccbd_ipc_ref}{detail}')
+
+
+def test_ccbd_start_flow_client_helper_uses_ipc_ref_and_kind(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-ccbd-start-helper'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    app = CcbdApp(project_root)
+
+    client = _client(app, timeout_s=1.5)
+
+    assert client._socket_path == app.paths.ccbd_ipc_ref
+    assert client._ipc_kind == app.paths.ccbd_ipc_kind
+    assert client._timeout_s == 1.5
+
+
+def test_ccbd_start_flow_wait_for_app_ready_uses_named_pipe_probe_timeout(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-ccbd-start-ready-helper-named-pipe'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    monkeypatch.setenv('CCB_EXPERIMENTAL_WINDOWS_NATIVE', '1')
+    monkeypatch.setenv('CCB_IPC_KIND', 'named_pipe')
+    app = CcbdApp(project_root)
+    app.startup_report_store.save(
+        CcbdStartupReport(
+            project_id=app.project_id,
+            generated_at='2026-04-21T00:00:00Z',
+            trigger='daemon_boot',
+            status='ok',
+            requested_agents=(),
+            desired_agents=('demo',),
+            restore_requested=False,
+            auto_permission=False,
+            daemon_generation=1,
+            daemon_started=True,
+            config_signature='sig',
+            inspection={},
+            restore_summary={},
+            actions_taken=('mount_backend', 'listen_socket', 'restore_running_jobs'),
+            cleanup_summaries=(),
+            agent_results=(),
+            failure_reason=None,
+        )
+    )
+    seen: list[tuple[float | None, str]] = []
+
+    def _fake_client(current_app: CcbdApp, *, timeout_s: float | None = None):
+        assert current_app is app
+        return SimpleNamespace(
+            ping=lambda target: seen.append((timeout_s, target)) or {'mount_state': 'mounted'}
+        )
+
+    monkeypatch.setattr(sys.modules[__name__], '_client', _fake_client)
+
+    _wait_for_app_ready(app, timeout=0.2)
+
+    assert seen == [(1.0, 'ccbd')]
 
 
 class _FakeNamespaceTmuxBackend:
@@ -104,9 +184,9 @@ def test_ccbd_start_flow_writes_runtime_authority_via_rpc(tmp_path: Path, monkey
 
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
     thread.start()
-    _wait_for(app.paths.ccbd_socket_path)
+    _wait_for_app_ready(app)
 
-    client = CcbdClient(app.paths.ccbd_socket_path)
+    client = _client(app)
     payload = client.start(agent_names=('demo',), restore=False, auto_permission=False)
     runtime = app.registry.get('demo')
 
@@ -276,6 +356,10 @@ def test_runtime_supervisor_start_persists_startup_report(tmp_path: Path, monkey
     assert len(report.agent_results) == 1
     assert report.agent_results[0].agent_name == 'demo'
     assert report.agent_results[0].action == 'launched'
+    assert report.agent_results[0].session_file == str(project_root / '.ccb' / 'demo.session.json')
+    assert report.agent_results[0].session_id == 'session-880'
+    assert report.agent_results[0].job_id is None
+    assert report.agent_results[0].job_owner_pid is None
 
 
 def test_runtime_supervisor_start_passes_visible_layout_signature_to_namespace(tmp_path: Path, monkeypatch) -> None:
@@ -367,6 +451,61 @@ def test_runtime_supervisor_background_mount_does_not_redefine_namespace_layout_
         'force_recreate': False,
         'recreate_reason': None,
     }
+
+
+def test_runtime_supervisor_start_uses_generic_namespace_aliases_for_start_flow(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-start-generic-alias'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('agent1:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    app = CcbdApp(project_root)
+    seen: dict[str, object] = {}
+
+    class FakeProjectNamespace:
+        def ensure(self, *, layout_signature=None, force_recreate=False, recreate_reason=None):
+            seen['layout_signature'] = layout_signature
+            seen['force_recreate'] = force_recreate
+            seen['recreate_reason'] = recreate_reason
+            return SimpleNamespace(
+                backend_ref=r'\\.\pipe\psmux-start',
+                session_name='ccb-psmux-start',
+                workspace_name='workspace-psmux-start',
+                workspace_window_id='@5',
+                workspace_epoch=4,
+                namespace_epoch=11,
+                created_this_call=True,
+                workspace_recreated_this_call=True,
+            )
+
+    def _run_start_flow(**kwargs):
+        seen['start_flow'] = kwargs
+        return StartFlowSummary(
+            project_root=str(project_root),
+            project_id=app.project_id,
+            started=('agent1',),
+            socket_path=str(app.paths.ccbd_socket_path),
+        )
+
+    monkeypatch.setattr(app.runtime_supervisor, '_project_namespace', FakeProjectNamespace())
+    monkeypatch.setattr('ccbd.supervisor.run_start_flow', _run_start_flow)
+
+    summary = app.runtime_supervisor.start(
+        agent_names=('agent1',),
+        restore=False,
+        auto_permission=False,
+        interactive_tmux_layout=False,
+    )
+
+    assert summary.started == ('agent1',)
+    assert seen['layout_signature'] is None
+    assert seen['start_flow']['tmux_socket_path'] == r'\\.\pipe\psmux-start'
+    assert seen['start_flow']['tmux_session_name'] == 'ccb-psmux-start'
+    assert seen['start_flow']['tmux_workspace_window_name'] == 'workspace-psmux-start'
+    assert seen['start_flow']['workspace_window_id'] == '@5'
+    assert seen['start_flow']['workspace_epoch'] == 4
+    assert seen['start_flow']['namespace_epoch'] == 11
+    assert seen['start_flow']['fresh_namespace'] is True
+    assert seen['start_flow']['fresh_workspace'] is True
 
 
 def test_runtime_supervisor_relabels_reused_project_namespace_pane_by_agent_name(tmp_path: Path, monkeypatch) -> None:
@@ -981,3 +1120,182 @@ def test_ccbd_start_rolls_back_mount_when_restore_fails(tmp_path: Path, monkeypa
     assert lease is not None
     assert lease.mount_state.value == 'unmounted'
     assert not app.paths.ccbd_socket_path.exists()
+
+
+def test_ccbd_start_records_startup_report_before_return(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-ccbd-start-report-before-return'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    app = CcbdApp(project_root)
+
+    monkeypatch.setattr(app.socket_server, 'listen', lambda: None)
+    monkeypatch.setattr(app.dispatcher, 'restore_running_jobs', lambda: None)
+    monkeypatch.setattr(app.dispatcher, 'last_restore_report', lambda **kwargs: None)
+    monkeypatch.setattr(app.restore_report_store, 'save', lambda report: None)
+
+    lease = app.start()
+    report = CcbdStartupReportStore(app.paths).load()
+
+    assert lease is not None
+    assert report is not None
+    assert report.status == 'ok'
+    assert report.actions_taken == ('mount_backend', 'listen_socket', 'restore_running_jobs')
+    assert app._startup_completed is True
+
+    app.request_shutdown()
+
+
+def test_ccbd_serve_forever_defers_restore_until_socket_loop_tick(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-ccbd-serve-forever-startup-tick'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    monkeypatch.delenv('CCB_EXPERIMENTAL_WINDOWS_NATIVE', raising=False)
+    monkeypatch.delenv('CCB_IPC_KIND', raising=False)
+    app = CcbdApp(project_root)
+    events: list[str] = []
+
+    monkeypatch.setattr(app.socket_server, 'listen', lambda: events.append('listen'))
+    monkeypatch.setattr(app.dispatcher, 'restore_running_jobs', lambda: events.append('restore'))
+    monkeypatch.setattr(app.dispatcher, 'last_restore_report', lambda **kwargs: None)
+    monkeypatch.setattr(app.restore_report_store, 'save', lambda report: events.append('save_restore_report'))
+    monkeypatch.setattr(app, 'heartbeat', lambda: events.append('heartbeat') or app.lease)
+    monkeypatch.setattr(app.socket_server, 'shutdown', lambda: events.append('shutdown'))
+
+    def fake_serve_forever(*, poll_interval: float, on_tick):
+        assert poll_interval == 0.05
+        events.append('serve_forever')
+        assert events == ['listen', 'serve_forever']
+        assert CcbdStartupReportStore(app.paths).load() is None
+        on_tick()
+        events.append('after_tick')
+
+    monkeypatch.setattr(app.socket_server, 'serve_forever', fake_serve_forever)
+
+    app.serve_forever(poll_interval=0.05)
+
+    report = CcbdStartupReportStore(app.paths).load()
+
+    assert report is not None
+    assert report.status == 'ok'
+    assert report.actions_taken == ('mount_backend', 'listen_socket', 'restore_running_jobs')
+    assert events == ['listen', 'serve_forever', 'restore', 'heartbeat', 'after_tick', 'shutdown']
+    assert app._startup_completed is False
+
+
+def test_ccbd_serve_forever_completes_startup_before_socket_loop_for_named_pipe(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-ccbd-serve-forever-named-pipe-startup'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    monkeypatch.setenv('CCB_EXPERIMENTAL_WINDOWS_NATIVE', '1')
+    monkeypatch.setenv('CCB_IPC_KIND', 'named_pipe')
+    app = CcbdApp(project_root)
+    events: list[str] = []
+
+    monkeypatch.setattr(app.socket_server, 'listen', lambda: events.append('listen'))
+    monkeypatch.setattr(app.dispatcher, 'restore_running_jobs', lambda: events.append('restore'))
+    monkeypatch.setattr(app.dispatcher, 'last_restore_report', lambda **kwargs: None)
+    monkeypatch.setattr(app.restore_report_store, 'save', lambda report: events.append('save_restore_report'))
+    monkeypatch.setattr(app, 'heartbeat', lambda: events.append('heartbeat') or app.lease)
+    monkeypatch.setattr(app.socket_server, 'shutdown', lambda: events.append('shutdown'))
+
+    def fake_serve_forever(*, poll_interval: float, on_tick):
+        assert poll_interval == 0.05
+        events.append('serve_forever')
+        report = CcbdStartupReportStore(app.paths).load()
+        assert report is not None
+        assert report.actions_taken == ('mount_backend', 'listen_socket', 'restore_running_jobs')
+        assert events == ['listen', 'restore', 'serve_forever']
+        on_tick()
+        events.append('after_tick')
+
+    monkeypatch.setattr(app.socket_server, 'serve_forever', fake_serve_forever)
+
+    app.serve_forever(poll_interval=0.05)
+
+    report = CcbdStartupReportStore(app.paths).load()
+
+    assert report is not None
+    assert report.status == 'ok'
+    assert report.actions_taken == ('mount_backend', 'listen_socket', 'restore_running_jobs')
+    assert events == ['listen', 'restore', 'serve_forever', 'heartbeat', 'after_tick', 'shutdown']
+    assert app._startup_completed is False
+
+
+def test_ccbd_start_runs_restore_again_after_request_shutdown(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-ccbd-start-repeat'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    app = CcbdApp(project_root)
+    events: list[str] = []
+
+    monkeypatch.setattr(app.socket_server, 'listen', lambda: events.append('listen'))
+    monkeypatch.setattr(app.socket_server, 'shutdown', lambda: events.append('shutdown'))
+    monkeypatch.setattr(app.dispatcher, 'restore_running_jobs', lambda: events.append('restore'))
+    monkeypatch.setattr(app.dispatcher, 'last_restore_report', lambda **kwargs: None)
+    monkeypatch.setattr(app.restore_report_store, 'save', lambda report: events.append('save_restore_report'))
+
+    first = app.start()
+    app.request_shutdown()
+    second = app.start()
+
+    report = CcbdStartupReportStore(app.paths).load()
+
+    assert first is not None
+    assert second is not None
+    assert events == ['listen', 'restore', 'shutdown', 'listen', 'restore']
+    assert report is not None
+    assert report.status == 'ok'
+    assert app._startup_completed is True
+
+    app.request_shutdown()
+
+
+def test_ccbd_serve_forever_runs_startup_tick_again_after_request_shutdown(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-ccbd-serve-forever-repeat'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    app = CcbdApp(project_root)
+    events: list[str] = []
+
+    monkeypatch.setattr(app.socket_server, 'listen', lambda: events.append('listen'))
+    monkeypatch.setattr(app.dispatcher, 'restore_running_jobs', lambda: events.append('restore'))
+    monkeypatch.setattr(app.dispatcher, 'last_restore_report', lambda **kwargs: None)
+    monkeypatch.setattr(app.restore_report_store, 'save', lambda report: events.append('save_restore_report'))
+    monkeypatch.setattr(app, 'heartbeat', lambda: events.append('heartbeat') or app.lease)
+    monkeypatch.setattr(app.socket_server, 'shutdown', lambda: events.append('shutdown'))
+
+    def fake_serve_forever(*, poll_interval: float, on_tick):
+        assert poll_interval == 0.05
+        events.append('serve_forever')
+        on_tick()
+        events.append('after_tick')
+
+    monkeypatch.setattr(app.socket_server, 'serve_forever', fake_serve_forever)
+
+    app.serve_forever(poll_interval=0.05)
+    app.serve_forever(poll_interval=0.05)
+
+    report = CcbdStartupReportStore(app.paths).load()
+
+    assert report is not None
+    assert report.status == 'ok'
+    assert events == [
+        'listen',
+        'serve_forever',
+        'restore',
+        'heartbeat',
+        'after_tick',
+        'shutdown',
+        'listen',
+        'serve_forever',
+        'restore',
+        'heartbeat',
+        'after_tick',
+        'shutdown',
+    ]
+    assert app._startup_completed is False

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from ccbd.api_models import DeliveryScope, JobRecord, JobStatus, MessageEnvelope
 from completion.models import CompletionConfidence, CompletionSourceKind, CompletionStatus
+from provider_execution.active_runtime.start import prepare_active_start
 from provider_execution.active_runtime.resume import resume_active_submission
 from provider_execution.base import ProviderRuntimeContext, ProviderSubmission
 
@@ -111,3 +112,77 @@ def test_resume_active_submission_restores_reader_backend_and_completion_dir(tmp
     assert resumed.runtime_state['reader'] == {'reader': 'ok'}
     assert resumed.runtime_state['completion_dir'] == '/tmp/completions'
     assert configured[0][1]['mode'] == 'active'
+
+
+def test_prepare_active_start_passes_runtime_session_hints_to_loader(tmp_path) -> None:
+    captured: dict[str, object] = {}
+    session = SimpleNamespace(
+        data={'provider': 'codex'},
+        ensure_pane=lambda: (True, '%7'),
+    )
+
+    def load_session(work_dir, **kwargs):
+        captured['work_dir'] = work_dir
+        captured.update(kwargs)
+        return session
+
+    prepared = prepare_active_start(
+        _job(),
+        context=ProviderRuntimeContext(
+            agent_name='agent1',
+            workspace_path=str(tmp_path),
+            backend_type='tmux',
+            runtime_ref=None,
+            session_ref='session-ref-1',
+            session_file='C:/tmp/agent1.session.json',
+            session_id='sid-1',
+        ),
+        provider='codex',
+        source_kind=CompletionSourceKind.SESSION_EVENT_LOG,
+        now='2026-04-07T00:00:00Z',
+        missing_session_reason='missing_session',
+        load_session_fn=load_session,
+        backend_for_session_fn=lambda _data: 'tmux-backend',
+    )
+
+    assert prepared.pane_id == '%7'
+    assert captured['agent_name'] == 'agent1'
+    assert captured['session_ref'] == 'session-ref-1'
+    assert captured['session_file'] == 'C:/tmp/agent1.session.json'
+    assert captured['session_id'] == 'sid-1'
+
+
+def test_resume_active_submission_passes_runtime_session_hints_to_loader(tmp_path) -> None:
+    captured: dict[str, object] = {}
+    session = SimpleNamespace(
+        data={'provider': 'codex'},
+        ensure_pane=lambda: (True, '%9'),
+    )
+
+    def load_session(work_dir, **kwargs):
+        captured['work_dir'] = work_dir
+        captured.update(kwargs)
+        return session
+
+    resumed = resume_active_submission(
+        _job(),
+        _submission(),
+        context=ProviderRuntimeContext(
+            agent_name='agent1',
+            workspace_path=str(tmp_path),
+            backend_type='tmux',
+            runtime_ref=None,
+            session_ref='session-ref-9',
+            session_file='C:/tmp/agent9.session.json',
+            session_id='sid-9',
+        ),
+        load_session_fn=load_session,
+        backend_for_session_fn=lambda _data: 'tmux-backend',
+        reader_factory=lambda _session: {'reader': 'ok'},
+    )
+
+    assert resumed is not None
+    assert captured['agent_name'] == 'agent1'
+    assert captured['session_ref'] == 'session-ref-9'
+    assert captured['session_file'] == 'C:/tmp/agent9.session.json'
+    assert captured['session_id'] == 'sid-9'

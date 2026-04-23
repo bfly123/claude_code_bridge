@@ -82,10 +82,24 @@ def _reader_factory(session):
     return ClaudeLogReader(work_dir=Path(session.work_dir))
 
 
-def _load_session(work_dir: Path, *, agent_name: str):
+def _load_session(
+    work_dir: Path,
+    *,
+    agent_name: str,
+    session_file: str | None = None,
+    session_id: str | None = None,
+    session_ref: str | None = None,
+):
     from .execution_runtime.start import load_session as _runtime_load_session
 
-    return _runtime_load_session(load_project_session, work_dir, agent_name=agent_name)
+    return _runtime_load_session(
+        load_project_session,
+        work_dir,
+        agent_name=agent_name,
+        session_file=session_file,
+        session_id=session_id,
+        session_ref=session_ref,
+    )
 
 
 def build_execution_adapter() -> ClaudeProviderAdapter:

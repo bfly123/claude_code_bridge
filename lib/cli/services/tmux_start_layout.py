@@ -4,8 +4,17 @@ from dataclasses import dataclass
 
 from agents.models import ProjectConfig, ProjectLayoutPlan, build_project_layout_plan
 from cli.context import CliContext
-from terminal_runtime import TmuxBackend
+from terminal_runtime import TmuxBackend as _LegacyTmuxBackend, default_mux_backend_cls
 from terminal_runtime.tmux_identity import apply_ccb_pane_identity
+
+
+TmuxBackend = _LegacyTmuxBackend
+
+
+def _tmux_backend_cls():
+    if TmuxBackend is not _LegacyTmuxBackend:
+        return TmuxBackend
+    return default_mux_backend_cls()
 
 
 @dataclass(frozen=True)
@@ -26,7 +35,7 @@ def prepare_tmux_start_layout(
     if not targets:
         return TmuxStartLayout(cmd_pane_id=None, agent_panes={})
 
-    backend = tmux_backend or TmuxBackend()
+    backend = tmux_backend or _tmux_backend_cls()()
     resolved_root_pane_id = root_pane_id or backend.get_current_pane_id()
     resolved_layout_plan = layout_plan or build_project_layout_plan(
         config,
@@ -109,7 +118,7 @@ def _materialize_layout(
 
 
 def _label_pane(
-    backend: TmuxBackend,
+    backend,
     pane_id: str,
     *,
     title: str,

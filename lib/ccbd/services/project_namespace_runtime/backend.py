@@ -1,9 +1,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 
 
 _PLACEHOLDER_CMD = 'while :; do sleep 3600; done'
+_PLACEHOLDER_CMD_WINDOWS = 'ping -t 127.0.0.1 >nul'
+
+
+def _windows_cmd_exe() -> str:
+    return os.environ.get('COMSPEC', os.path.join(os.environ.get('SystemRoot', r'C:\WINDOWS'), 'System32', 'cmd.exe'))
+
+
+def _placeholder_spawn_args(backend) -> list[str]:
+    backend_impl = str(getattr(backend, 'backend_impl', '') or '').strip().lower()
+    if os.name == 'nt' and backend_impl == 'psmux':
+        return [_windows_cmd_exe(), '/d', '/s', '/c', _PLACEHOLDER_CMD_WINDOWS]
+    return ['sh', '-lc', _PLACEHOLDER_CMD]
 
 
 @dataclass(frozen=True)
@@ -25,6 +38,20 @@ def prepare_server(backend) -> None:
     backend._tmux_run(['set-option', '-g', 'destroy-unattached', 'off'], check=False, capture=True)  # type: ignore[attr-defined]
 
 
+def _enable_placeholder_remain_on_exit(backend, *, pane_id: str) -> None:
+    backend_impl = str(getattr(backend, 'backend_impl', '') or '').strip().lower()
+    if os.name != 'nt' or backend_impl != 'psmux':
+        return
+    pane_text = str(pane_id or '').strip()
+    if not pane_text:
+        return
+    backend._tmux_run(  # type: ignore[attr-defined]
+        ['set-option', '-p', '-t', pane_text, 'remain-on-exit', 'on'],
+        check=False,
+        capture=True,
+    )
+
+
 def create_session(backend, *, session_name: str, project_root, window_name: str | None = None) -> None:
     args = [
         'new-session',
@@ -38,16 +65,12 @@ def create_session(backend, *, session_name: str, project_root, window_name: str
     ]
     if str(window_name or '').strip():
         args.extend(['-n', str(window_name).strip()])
-    args.extend(
-        [
-            '-c',
-            str(project_root),
-            'sh',
-            '-lc',
-            _PLACEHOLDER_CMD,
-        ]
-    )
+    args.extend(['-c', str(project_root), *_placeholder_spawn_args(backend)])
     backend._tmux_run(args, check=True)  # type: ignore[attr-defined]
+    _enable_placeholder_remain_on_exit(
+        backend,
+        pane_id=session_root_pane(backend, session_name),
+    )
 
 
 def session_window_target(session_name: str, window_name: str | None = None) -> str:
@@ -106,15 +129,20 @@ def create_window(backend, *, session_name: str, window_name: str, project_root,
             window_name,
             '-c',
             str(project_root),
-            'sh',
-            '-lc',
-            _PLACEHOLDER_CMD,
+            *_placeholder_spawn_args(backend),
         ],
         check=True,
     )  # type: ignore[attr-defined]
     record = find_window(backend, session_name=session_name, window_name=window_name)
     if record is None:
         raise RuntimeError(f'failed to resolve tmux window {window_name!r} for session {session_name!r}')
+    _enable_placeholder_remain_on_exit(
+        backend,
+        pane_id=window_root_pane(
+            backend,
+            target_window=session_window_target(session_name, record.window_id or window_name),
+        ),
+    )
     if select:
         select_window(
             backend,
@@ -179,7 +207,15 @@ def window_root_pane(backend, *, target_window: str) -> str:
     return pane_id
 
 
-def kill_server(backend) -> bool:
+def kill_server(backend, *, session_name: str | None = None) -> bool:
+    session_text = str(session_name or '').strip()
+    if session_text:
+        killer = getattr(backend, 'kill_session', None)
+        if callable(killer):
+            try:
+                return bool(killer(session_text))
+            except Exception:
+                pass
     try:
         backend._tmux_run(['kill-server'], check=False, capture=True)  # type: ignore[attr-defined]
         return True

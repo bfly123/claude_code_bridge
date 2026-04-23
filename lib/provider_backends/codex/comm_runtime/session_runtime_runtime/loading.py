@@ -43,19 +43,25 @@ def _load_project_session_info(*, session_finder: Callable[[], Path | None]):
         return None
 
     data["_session_file"] = str(project_session)
-    return data
+    return _merge_runtime_binding(data)
 
 
 def _merge_project_binding(result: dict[str, object], *, session_file: Path | None):
     if session_file is None:
-        return result
+        return _merge_runtime_binding(result)
     file_data = _load_session_file(session_file)
     if file_data is None:
-        return result
+        return _merge_runtime_binding(result)
     result["codex_session_path"] = file_data.get("codex_session_path")
     result["codex_session_id"] = file_data.get("codex_session_id")
+    if "job_id" in file_data:
+        result["job_id"] = file_data.get("job_id")
+    if "runtime_pid" in file_data:
+        result["runtime_pid"] = file_data.get("runtime_pid")
+    if "job_owner_pid" in file_data:
+        result["job_owner_pid"] = file_data.get("job_owner_pid")
     result["_session_file"] = str(session_file)
-    return result
+    return _merge_runtime_binding(result)
 
 
 def _load_session_file(session_file: Path) -> dict | None:
@@ -65,6 +71,58 @@ def _load_session_file(session_file: Path) -> dict | None:
     except Exception:
         return None
     return data if isinstance(data, dict) else None
+
+
+def _merge_runtime_binding(result: dict[str, object]) -> dict[str, object]:
+    runtime_dir = str(result.get("runtime_dir") or "").strip()
+    if not runtime_dir:
+        return result
+    runtime_path = Path(runtime_dir)
+    if not str(result.get("job_id") or "").strip():
+        job_id = _load_runtime_job_id(runtime_path)
+        if job_id:
+            result["job_id"] = job_id
+    if _coerce_pid(result.get("job_owner_pid")) is None:
+        job_owner_pid = _load_runtime_job_owner_pid(runtime_path)
+        if job_owner_pid is not None:
+            result["job_owner_pid"] = job_owner_pid
+    return result
+
+
+def _load_runtime_job_id(runtime_dir: Path) -> str | None:
+    job_path = runtime_dir / "job.id"
+    try:
+        text = job_path.read_text(encoding="utf-8").strip()
+    except Exception:
+        return None
+    return text or None
+
+
+def _load_runtime_job_owner_pid(runtime_dir: Path) -> int | None:
+    for path in (
+        runtime_dir / "job-owner.pid",
+        runtime_dir / "owner.pid",
+        runtime_dir / "bridge.pid",
+    ):
+        pid = _load_runtime_pid(path)
+        if pid is not None:
+            return pid
+    return None
+
+
+def _load_runtime_pid(path: Path) -> int | None:
+    try:
+        return _coerce_pid(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _coerce_pid(value: object) -> int | None:
+    text = str(value or "").strip()
+    if not text.isdigit():
+        return None
+    pid = int(text)
+    return pid if pid > 0 else None
 
 
 __all__ = ["load_codex_session_info"]

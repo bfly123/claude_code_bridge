@@ -40,10 +40,12 @@ def start_active_submission(
     preferred_session = preferred_session_path(
         str(getattr(prepared.session, 'gemini_session_path', '') or ''),
         context.session_ref,
+        context.session_file,
     )
     if preferred_session is not None:
         reader.set_preferred_session(preferred_session)
     state = reader.capture_state()
+    session_path = state_session_path(state) or (str(preferred_session) if preferred_session is not None else '')
     request_anchor = request_anchor_fn(job.job_id)
     completion_dir = completion_dir_for_session(prepared.session)
     no_wrap = no_wrap_requested(job)
@@ -76,7 +78,7 @@ def start_active_submission(
             'next_seq': 1,
             'anchor_emitted': no_wrap,
             'reply_buffer': '',
-            'session_path': state_session_path(state),
+            'session_path': session_path,
             'completion_dir': completion_dir,
             'no_wrap': no_wrap,
             'prompt_text': prompt,

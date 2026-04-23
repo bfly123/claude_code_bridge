@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from agents.config_identity import project_config_identity_payload
@@ -8,11 +9,17 @@ from ccbd.models import LeaseHealth
 from ccbd.socket_client import CcbdClient, CcbdClientError
 
 from .records import KeeperState
-from .state import compute_project_id, restart_backoff_active
+from .state import compute_project_id, restart_backoff_active, restart_limit_reached
 from .support import reap_child_processes, try_acquire_keeper_lock
 
 
-def run_forever(app, *, poll_interval: float = 0.5, start_timeout_s: float = 5.0) -> int:
+def _probe_timeout_s(ipc_kind: str | None) -> float:
+    if str(ipc_kind or '').strip().lower() != 'named_pipe':
+        return 0.2
+    return 30.0 if os.name == 'nt' else 1.0
+
+
+def run_forever(app, *, poll_interval: float = 0.5, start_timeout_s: float = 20.0) -> int:
     lock_path = app.paths.ccbd_dir / 'keeper.lock'
     lock_handle = try_acquire_keeper_lock(lock_path)
     if lock_handle is None:
@@ -52,6 +59,11 @@ def reconcile_once(app, *, state: KeeperState, start_timeout_s: float) -> Keeper
         return connectable_state
     restart_state = restart_state_from_inspection(app, state=state, inspection=inspection, occurred_at=now)
     if restart_state is not None:
+        if restart_limit_reached(state=restart_state):
+            return restart_state.with_failure(
+                occurred_at=now,
+                reason=f'restart_limit_reached:{restart_state.last_failure_reason or "unknown_failure"}',
+            ).with_state('stopped', occurred_at=now)
         return app._spawn_daemon(state=restart_state, start_timeout_s=start_timeout_s)
     return state
 
@@ -81,6 +93,8 @@ def run_iteration(
         return state.with_state('stopped', occurred_at=now), True, cleanup_transient
     checked = state.with_check(now)
     next_state = app._reconcile_once(state=checked, start_timeout_s=start_timeout_s)
+    if next_state.state == 'stopped' and str(next_state.last_failure_reason or '').startswith('restart_limit_reached:'):
+        return next_state, True, cleanup_transient
     return next_state, False, cleanup_transient
 
 
@@ -102,12 +116,26 @@ def reconcile_connectable_daemon(app, *, state: KeeperState, inspection, now: st
 
 
 def restart_state_from_inspection(app, *, state: KeeperState, inspection, occurred_at: str) -> KeeperState | None:
+    if fresh_named_pipe_daemon_busy(inspection):
+        return None
     stale = stale_restart_state(app, state=state, inspection=inspection, occurred_at=occurred_at)
     if stale is not None:
         return stale
     if inspection.health in {LeaseHealth.MISSING, LeaseHealth.UNMOUNTED, LeaseHealth.STALE}:
         return state.with_restart_attempt(occurred_at=occurred_at)
     return None
+
+
+def fresh_named_pipe_daemon_busy(inspection) -> bool:
+    lease = inspection.lease
+    return (
+        os.name == 'nt'
+        and lease is not None
+        and str(getattr(lease, 'ipc_kind', '') or '').strip().lower() == 'named_pipe'
+        and inspection.pid_alive
+        and inspection.heartbeat_fresh
+        and not inspection.socket_connectable
+    )
 
 
 def stale_restart_state(app, *, state: KeeperState, inspection, occurred_at: str) -> KeeperState | None:
@@ -121,7 +149,11 @@ def stale_restart_state(app, *, state: KeeperState, inspection, occurred_at: str
 
 def daemon_matches_project_config(app) -> bool:
     expected = project_config_identity_payload(load_project_config(app.project_root).config)
-    payload = CcbdClient(app.paths.ccbd_socket_path, timeout_s=0.2).ping('ccbd')
+    payload = CcbdClient(
+        app.paths.ccbd_ipc_ref,
+        timeout_s=_probe_timeout_s(app.paths.ccbd_ipc_kind),
+        ipc_kind=app.paths.ccbd_ipc_kind,
+    ).ping('ccbd')
     actual_signature = str(payload.get('config_signature') or '').strip()
     if actual_signature:
         return actual_signature == expected['config_signature']
@@ -133,7 +165,11 @@ def daemon_matches_project_config(app) -> bool:
 
 
 def request_shutdown(app) -> None:
-    client = CcbdClient(app.paths.ccbd_socket_path, timeout_s=0.2)
+    client = CcbdClient(
+        app.paths.ccbd_ipc_ref,
+        timeout_s=_probe_timeout_s(app.paths.ccbd_ipc_kind),
+        ipc_kind=app.paths.ccbd_ipc_kind,
+    )
     try:
         client.shutdown()
     except CcbdClientError:
@@ -145,6 +181,7 @@ def request_shutdown(app) -> None:
 def cleanup_transient_keeper_files(app, *, lock_path: Path) -> None:
     for path in (
         app.paths.ccbd_keeper_path,
+        app.paths.ccbd_keeper_path.with_name(f'.{app.paths.ccbd_keeper_path.name}.lock'),
         app.paths.ccbd_dir / 'keeper.stdout.log',
         app.paths.ccbd_dir / 'keeper.stderr.log',
         Path(lock_path),

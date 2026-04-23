@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document defines the non-drifting user-facing contract for project configuration, pane layout, and tmux presentation in `ccb_source`.
+This document defines the non-drifting user-facing contract for project configuration, pane layout, and mux presentation in `ccb_source`.
 
 It is the authoritative design anchor for:
 
@@ -10,7 +10,7 @@ It is the authoritative design anchor for:
 - compact layout grammar
 - default bootstrap layout generation
 - pane naming and pane color identity
-- tmux split sizing rules for the project UI
+- mux split sizing rules for the project UI
 
 ## 2. User-Facing Config Contract
 
@@ -75,7 +75,7 @@ General rule:
 - stack each half vertically
 - keep pane areas uniform by sizing each split according to descendant leaf counts
 
-## 6. Tmux Layout Execution Contract
+## 6. Mux Layout Execution Contract
 
 - The current pane is the `cmd` anchor pane.
 - Layout execution must prune the configured layout to the requested foreground agent subset plus `cmd`.
@@ -84,7 +84,7 @@ General rule:
 - Recursive split percentages must be computed from leaf-count ratios, not hardcoded repeated `50%` splits.
 - Pane pruning must never silently reorder agents.
 - Incremental in-place splitting on top of an already materialized project namespace is not a valid way to realize a different visible layout signature.
-- When the desired visible layout signature changes, startup must recreate the project namespace before rematerializing tmux panes.
+- When the desired visible layout signature changes, startup must recreate the project namespace before rematerializing panes through the active mux backend.
 
 ## 7. Pane Presentation Contract
 
@@ -92,21 +92,24 @@ General rule:
 - Pane titles must be the exact logical names:
   - `cmd`
   - `agent1`, `agent2`, ...
-- Pane border labels must show the logical pane name, not tmux pane numbers.
+- Pane border labels must show the logical pane name, not backend-specific pane numbers.
 - Provider-specific pane markers such as `CCB-agent1-...` are internal runtime evidence only:
   - they may be persisted in provider session files
   - they must not override pane titles, pane headers, or focus labels in the project namespace UI
-- Tmux pane user options and visible titles must be reconciled back to the configured logical name whenever a project-owned pane is reused or rebound.
+- Pane user options and visible titles must be reconciled back to the configured logical name whenever a project-owned pane is reused or rebound.
 - The command pane and agent panes must have stable, distinct color identities.
-- Pane styling is session-scoped CCB UI state and must not permanently overwrite unrelated user tmux themes.
+- Pane styling is session-scoped CCB UI state and must not permanently overwrite unrelated user mux themes.
 
 ## 8. Project Namespace UI Contract
 
-- The project-owned tmux socket/session is responsible for its own theme and pane header rendering.
-- Project UI correctness must not depend on whether the invoking shell is already inside some outer tmux server.
-- Namespace creation or reuse must reapply session-scoped CCB tmux options on the project-owned socket.
+- Platform mapping is backend-driven, not config-driven:
+  - Linux/macOS/WSL use `backend_family=tmux` with `backend_impl=tmux`
+  - Native Windows uses `backend_family=tmux` with `backend_impl=psmux`
+- The project-owned mux namespace is responsible for its own theme and pane header rendering.
+- Project UI correctness must not depend on whether the invoking shell is already inside some outer tmux server or outside on a native Windows terminal host.
+- Namespace creation or reuse must reapply session-scoped CCB UI options on the authoritative project namespace.
 - When a project-owned pane dies and the daemon chooses namespace-level recovery, it must recreate and re-project the configured layout so each logical pane returns to its canonical position.
-- Namespace `layout_version` is the compatibility key for visible pane topology and tmux UI presentation:
+- Namespace `layout_version` is the compatibility key for visible pane topology and mux UI presentation:
   - when the stored namespace layout version differs from the current code contract, the project namespace must be recreated
   - recreating the namespace is the preferred healing path for stale pane geometry or stale session-scoped UI options
 - Namespace state must also track the current visible layout signature derived from `.ccb/ccb.config` after foreground pruning.

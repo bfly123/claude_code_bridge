@@ -23,7 +23,7 @@ def request_remote_stop(
     try:
         record_shutdown_intent_fn(context, reason='kill')
         stop_all_client = (
-            ccbd_client_cls(context.paths.ccbd_socket_path, timeout_s=stop_all_timeout_s)
+            ccbd_client_cls(context.paths.ccbd_ipc_ref, timeout_s=stop_all_timeout_s, ipc_kind=context.paths.ccbd_ipc_kind)
             if isinstance(handle.client, ccbd_client_cls)
             else handle.client
         )
@@ -55,7 +55,7 @@ def resolve_shutdown_summary(
         return kill_summary_cls(
             project_id=context.project.project_id,
             state='unmounted',
-            socket_path=str(context.paths.ccbd_socket_path),
+            socket_path=str(context.paths.ccbd_ipc_ref),
             forced=force,
         )
 
@@ -85,7 +85,7 @@ def await_remote_shutdown(
     return kill_summary_cls(
         project_id=context.project.project_id,
         state=lease.mount_state.value if lease is not None else 'unmounted',
-        socket_path=str(context.paths.ccbd_socket_path),
+        socket_path=str(context.paths.ccbd_ipc_ref),
         forced=force,
     )
 

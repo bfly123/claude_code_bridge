@@ -44,6 +44,8 @@ def _runtime(**overrides) -> AgentRuntime:
         'provider': 'codex',
         'runtime_root': '/tmp/runtime',
         'runtime_pid': 22,
+        'job_id': 'job-object-1',
+        'job_owner_pid': 222,
         'terminal_backend': 'tmux',
         'pane_id': '%1',
         'active_pane_id': '%1',
@@ -94,6 +96,8 @@ def test_attach_runtime_updates_active_existing_runtime() -> None:
         session_ref='session-9',
         health='healthy',
         runtime_pid=99,
+        job_id='job-object-9',
+        job_owner_pid=909,
         pane_title_marker='agent1-next',
     )
 
@@ -107,6 +111,8 @@ def test_attach_runtime_updates_active_existing_runtime() -> None:
     assert updated.session_ref == 'session-9'
     assert updated.runtime_pid == 99
     assert updated.pid == 99
+    assert updated.job_id == 'job-object-9'
+    assert updated.job_owner_pid == 909
     assert updated.binding_generation == 3
     assert updated.queue_depth == 3
     assert updated.socket_path == '/tmp/agent.sock'
@@ -140,3 +146,45 @@ def test_attach_runtime_creates_new_runtime_with_runtime_ref_derived_fields() ->
     assert created.binding_generation == 1
     assert created.binding_source is RuntimeBindingSource.PROVIDER_SESSION
     assert created.slot_key == 'agent1'
+    assert created.job_id is None
+    assert created.job_owner_pid is None
+
+
+def test_attach_runtime_external_attach_promotes_failed_runtime_to_healthy() -> None:
+    existing = _runtime(health='start-failed', state=AgentState.FAILED)
+    registry = _Registry(existing=existing)
+
+    updated = attach_runtime(
+        registry=registry,
+        project_id='proj-new',
+        clock=lambda: '2026-04-06T00:00:00Z',
+        agent_name='agent1',
+        workspace_path='/tmp/ws-next',
+        backend_type='pane-backed',
+        runtime_ref='tmux:%9',
+        session_ref='session-9',
+        binding_source='external-attach',
+    )
+
+    assert updated.health == 'healthy'
+    assert updated.state is AgentState.IDLE
+
+
+def test_attach_runtime_external_attach_preserves_restored_health() -> None:
+    existing = _runtime(health='restored', state=AgentState.IDLE)
+    registry = _Registry(existing=existing)
+
+    updated = attach_runtime(
+        registry=registry,
+        project_id='proj-new',
+        clock=lambda: '2026-04-06T00:00:00Z',
+        agent_name='agent1',
+        workspace_path='/tmp/ws-next',
+        backend_type='pane-backed',
+        runtime_ref='tmux:%9',
+        session_ref='session-9',
+        binding_source='external-attach',
+    )
+
+    assert updated.health == 'restored'
+    assert updated.state is AgentState.IDLE

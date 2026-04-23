@@ -25,6 +25,8 @@ def _runtime(**overrides) -> AgentRuntime:
         'provider': 'codex',
         'runtime_root': '/tmp/runtime',
         'runtime_pid': 22,
+        'job_id': 'job-object-old',
+        'job_owner_pid': 44,
         'terminal_backend': 'tmux',
         'pane_id': '%1',
         'active_pane_id': '%1',
@@ -42,6 +44,8 @@ def test_rebind_runtime_uses_provider_facts_and_clears_degraded_state() -> None:
         session_ref='fact-session',
         runtime_root='/new/runtime',
         runtime_pid=33,
+        job_id='job-object-9',
+        job_owner_pid=909,
         terminal_backend='tmux',
         pane_id='%9',
         pane_title_marker='agent1-new',
@@ -78,6 +82,8 @@ def test_rebind_runtime_uses_provider_facts_and_clears_degraded_state() -> None:
     assert updated.runtime_root == '/new/runtime'
     assert updated.session_file == '/tmp/session.json'
     assert updated.session_id == 'sid-9'
+    assert updated.job_id == 'job-object-9'
+    assert updated.job_owner_pid == 909
     assert updated.pane_state == 'alive'
 
 
@@ -93,6 +99,50 @@ def test_rebind_runtime_falls_back_to_session_binding_when_facts_missing(monkeyp
         'ccbd.services.health_monitor_runtime.updates_runtime.rebind.session_ref',
         lambda session, session_id_attr, session_path_attr: 'bound-session',
     )
+    monkeypatch.setattr(
+        'ccbd.services.health_monitor_runtime.updates_runtime.common.session_runtime_ref',
+        lambda session: 'tmux:%7',
+    )
+    monkeypatch.setattr(
+        'ccbd.services.health_monitor_runtime.updates_runtime.common.session_runtime_root',
+        lambda session: '/session/runtime',
+    )
+    monkeypatch.setattr(
+        'ccbd.services.health_monitor_runtime.updates_runtime.common.session_runtime_pid',
+        lambda session, provider: 707,
+    )
+    monkeypatch.setattr(
+        'ccbd.services.health_monitor_runtime.updates_runtime.common.session_terminal',
+        lambda session: 'psmux',
+    )
+    monkeypatch.setattr(
+        'ccbd.services.health_monitor_runtime.updates_runtime.common.session_pane_title_marker',
+        lambda session: 'agent1-session',
+    )
+    monkeypatch.setattr(
+        'ccbd.services.health_monitor_runtime.updates_runtime.common.session_tmux_socket_name',
+        lambda session: 'sock-session',
+    )
+    monkeypatch.setattr(
+        'ccbd.services.health_monitor_runtime.updates_runtime.common.session_tmux_socket_path',
+        lambda session: r'\\.\pipe\psmux-session',
+    )
+    monkeypatch.setattr(
+        'ccbd.services.health_monitor_runtime.updates_runtime.common.session_file',
+        lambda session: '/tmp/session.json',
+    )
+    monkeypatch.setattr(
+        'ccbd.services.health_monitor_runtime.updates_runtime.common.session_id',
+        lambda session, session_id_attr: 'sid-session',
+    )
+    monkeypatch.setattr(
+        'ccbd.services.health_monitor_runtime.updates_runtime.common.session_job_id',
+        lambda session: 'job-object-session',
+    )
+    monkeypatch.setattr(
+        'ccbd.services.health_monitor_runtime.updates_runtime.common.session_job_owner_pid',
+        lambda session: 808,
+    )
 
     updated = rebind_runtime(
         monitor,
@@ -105,6 +155,17 @@ def test_rebind_runtime_falls_back_to_session_binding_when_facts_missing(monkeyp
     assert updated.state is AgentState.IDLE
     assert updated.health == 'restored'
     assert updated.session_ref == 'bound-session'
+    assert updated.runtime_ref == 'tmux:%7'
     assert updated.pane_id == '%7'
     assert updated.active_pane_id == '%7'
+    assert updated.runtime_root == '/session/runtime'
+    assert updated.runtime_pid == 707
+    assert updated.terminal_backend == 'psmux'
+    assert updated.pane_title_marker == 'agent1-session'
+    assert updated.tmux_socket_name == 'sock-session'
+    assert updated.tmux_socket_path == r'\\.\pipe\psmux-session'
+    assert updated.session_file == '/tmp/session.json'
+    assert updated.session_id == 'sid-session'
+    assert updated.job_id == 'job-object-session'
+    assert updated.job_owner_pid == 808
     assert updated.pane_state == 'alive'

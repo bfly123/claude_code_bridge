@@ -28,3 +28,8 @@ GEMINI.md
 openspec
 *.log
 .hippocampus
+tmp_*
+.tmp_*
+.testlogs/
+
+.gemini/

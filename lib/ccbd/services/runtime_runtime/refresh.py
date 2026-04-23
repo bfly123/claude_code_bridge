@@ -25,9 +25,25 @@ def _attach_missing_session(*, attach_runtime_fn, agent_name: str, workspace_pat
         runtime_ref=runtime.runtime_ref,
         session_ref=runtime.session_ref,
         health='session-missing',
+        provider=getattr(runtime, 'provider', None),
+        runtime_root=getattr(runtime, 'runtime_root', None),
+        runtime_pid=getattr(runtime, 'runtime_pid', None),
+        job_id=getattr(runtime, 'job_id', None),
+        job_owner_pid=getattr(runtime, 'job_owner_pid', None),
+        terminal_backend=getattr(runtime, 'terminal_backend', None),
+        pane_id=getattr(runtime, 'pane_id', None),
+        active_pane_id=getattr(runtime, 'active_pane_id', None),
+        pane_title_marker=getattr(runtime, 'pane_title_marker', None),
+        pane_state=getattr(runtime, 'pane_state', None),
+        tmux_socket_name=getattr(runtime, 'tmux_socket_name', None),
+        tmux_socket_path=getattr(runtime, 'tmux_socket_path', None),
+        session_file=getattr(runtime, 'session_file', None),
+        session_id=getattr(runtime, 'session_id', None),
         slot_key=getattr(runtime, 'slot_key', None) or agent_name,
         window_id=getattr(runtime, 'window_id', None),
         workspace_epoch=getattr(runtime, 'workspace_epoch', None),
+        lifecycle_state=getattr(runtime, 'lifecycle_state', None),
+        managed_by=getattr(runtime, 'managed_by', None),
         binding_source=runtime.binding_source,
     )
 
@@ -55,29 +71,49 @@ def _attach_healthy_runtime(
     window_id: str | None,
     workspace_epoch: int | None,
 ) -> object:
+    runtime_ref = facts.runtime_ref or runtime.runtime_ref
+    session_ref = facts.session_ref or runtime.session_ref
+    runtime_root = facts.runtime_root or getattr(runtime, 'runtime_root', None)
+    runtime_pid = facts.runtime_pid if facts.runtime_pid is not None else getattr(runtime, 'runtime_pid', None)
+    job_id = facts.job_id or getattr(runtime, 'job_id', None)
+    job_owner_pid = (
+        facts.job_owner_pid if facts.job_owner_pid is not None else getattr(runtime, 'job_owner_pid', None)
+    )
+    terminal_backend = facts.terminal_backend or getattr(runtime, 'terminal_backend', None)
+    pane_id = facts.pane_id or getattr(runtime, 'pane_id', None)
+    pane_title_marker = facts.pane_title_marker or getattr(runtime, 'pane_title_marker', None)
+    pane_state = facts.pane_state or getattr(runtime, 'pane_state', None)
+    tmux_socket_name = facts.tmux_socket_name or getattr(runtime, 'tmux_socket_name', None)
+    tmux_socket_path = facts.tmux_socket_path or getattr(runtime, 'tmux_socket_path', None)
+    session_file = facts.session_file or getattr(runtime, 'session_file', None)
+    session_id = facts.session_id or getattr(runtime, 'session_id', None)
     return attach_runtime_fn(
         agent_name=agent_name,
         workspace_path=workspace_path,
         backend_type=runtime.backend_type,
         pid=runtime.pid,
-        runtime_ref=facts.runtime_ref or runtime.runtime_ref,
-        session_ref=facts.session_ref or runtime.session_ref,
+        runtime_ref=runtime_ref,
+        session_ref=session_ref,
         health='healthy',
         provider=provider,
-        runtime_root=facts.runtime_root,
-        runtime_pid=facts.runtime_pid,
-        terminal_backend=facts.terminal_backend,
-        pane_id=facts.pane_id,
-        active_pane_id=active_pane_id,
-        pane_title_marker=facts.pane_title_marker,
-        pane_state=facts.pane_state,
-        tmux_socket_name=facts.tmux_socket_name,
-        tmux_socket_path=facts.tmux_socket_path,
-        session_file=facts.session_file,
-        session_id=facts.session_id,
-        slot_key=slot_key,
-        window_id=window_id,
-        workspace_epoch=workspace_epoch,
+        runtime_root=runtime_root,
+        runtime_pid=runtime_pid,
+        job_id=job_id,
+        job_owner_pid=job_owner_pid,
+        terminal_backend=terminal_backend,
+        pane_id=pane_id,
+        active_pane_id=active_pane_id or pane_id or getattr(runtime, 'active_pane_id', None),
+        pane_title_marker=pane_title_marker,
+        pane_state=pane_state,
+        tmux_socket_name=tmux_socket_name,
+        tmux_socket_path=tmux_socket_path,
+        session_file=session_file,
+        session_id=session_id,
+        slot_key=slot_key or getattr(runtime, 'slot_key', None) or agent_name,
+        window_id=window_id if window_id is not None else getattr(runtime, 'window_id', None),
+        workspace_epoch=workspace_epoch if workspace_epoch is not None else getattr(runtime, 'workspace_epoch', None),
+        lifecycle_state=getattr(runtime, 'lifecycle_state', None),
+        managed_by=getattr(runtime, 'managed_by', None),
         binding_source=runtime.binding_source,
     )
 

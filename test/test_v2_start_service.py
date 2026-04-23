@@ -6,8 +6,10 @@ from types import SimpleNamespace
 
 from agents.models import AgentSpec, PermissionMode, QueuePolicy, RestoreMode, RuntimeMode, WorkspaceMode
 from agents.store import AgentSpecStore
+from ccbd.socket_client import CcbdClient
 from ccbd.lifecycle_report_store import CcbdStartupReportStore
 from ccbd.models import CcbdStartupReport
+import cli.services.start_runtime as start_runtime_module
 from cli.context import CliContextBuilder
 from cli.models import ParsedStartCommand
 from cli.services.start import start_agents
@@ -320,3 +322,21 @@ def test_start_agents_reports_active_unmerged_worktree_warning(tmp_path: Path, m
     assert len(summary.worktree_warnings) == 1
     assert summary.worktree_warnings[0].agent_name == 'agent1'
     assert summary.worktree_warnings[0].merged is False
+
+
+def test_start_request_client_upgrades_short_ccbd_timeout(tmp_path: Path) -> None:
+    client = CcbdClient(tmp_path / 'ccbd.sock', timeout_s=0.2, ipc_kind='named_pipe')
+
+    upgraded = start_runtime_module._start_request_client(client)
+
+    assert isinstance(upgraded, CcbdClient)
+    assert upgraded is not client
+    assert upgraded._socket_path == client._socket_path
+    assert upgraded._ipc_kind == 'named_pipe'
+    assert upgraded._timeout_s >= 15.0
+
+
+def test_start_request_client_keeps_non_ccbd_clients_untouched() -> None:
+    client = object()
+
+    assert start_runtime_module._start_request_client(client) is client

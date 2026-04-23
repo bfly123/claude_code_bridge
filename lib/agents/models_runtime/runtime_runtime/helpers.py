@@ -9,6 +9,14 @@ def normalized_text(value: str | None) -> str | None:
     return text or None
 
 
+def normalized_positive_int(value: int | str | None) -> int | None:
+    text = str(value or '').strip()
+    if not text.isdigit():
+        return None
+    number = int(text)
+    return number if number > 0 else None
+
+
 def default_desired_state(state: AgentState) -> str:
     if state is AgentState.STOPPED:
         return 'stopped'
@@ -31,6 +39,8 @@ def normalize_runtime_defaults(runtime) -> None:
     runtime.window_id = normalized_text(getattr(runtime, 'window_id', None))
     workspace_epoch = getattr(runtime, 'workspace_epoch', None)
     runtime.workspace_epoch = int(workspace_epoch) if workspace_epoch is not None else None
+    runtime.job_id = normalized_text(getattr(runtime, 'job_id', None))
+    runtime.job_owner_pid = normalized_positive_int(getattr(runtime, 'job_owner_pid', None))
     if not str(runtime.lifecycle_state or '').strip():
         runtime.lifecycle_state = runtime.state.value
     runtime.desired_state = normalized_text(runtime.desired_state) or default_desired_state(runtime.state)
@@ -56,6 +66,8 @@ def validate_runtime_fields(runtime) -> None:
         raise AgentValidationError('restart_count cannot be negative')
     if not str(runtime.managed_by or '').strip():
         raise AgentValidationError('managed_by cannot be empty')
+    if runtime.job_owner_pid is not None and runtime.job_owner_pid <= 0:
+        raise AgentValidationError('job_owner_pid must be positive when set')
 
 
 def validate_restore_state(state) -> None:
@@ -67,6 +79,7 @@ __all__ = [
     'default_desired_state',
     'default_reconcile_state',
     'normalize_runtime_defaults',
+    'normalized_positive_int',
     'normalized_text',
     'validate_restore_state',
     'validate_runtime_fields',

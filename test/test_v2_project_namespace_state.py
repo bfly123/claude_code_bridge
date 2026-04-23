@@ -40,7 +40,37 @@ def test_project_namespace_state_store_round_trip(tmp_path: Path) -> None:
 
     assert loaded == state
     assert loaded is not None
-    assert loaded.summary_fields()['namespace_tmux_socket_path'] == str(layout.ccbd_tmux_socket_path)
+    summary = loaded.summary_fields()
+    assert loaded.backend_ref == str(layout.ccbd_tmux_socket_path)
+    assert loaded.session_name == layout.ccbd_tmux_session_name
+    assert loaded.workspace_name == layout.ccbd_tmux_workspace_window_name
+    assert summary['namespace_backend_ref'] == str(layout.ccbd_tmux_socket_path)
+    assert summary['namespace_session_name'] == layout.ccbd_tmux_session_name
+    assert summary['namespace_workspace_name'] == layout.ccbd_tmux_workspace_window_name
+    assert summary['namespace_tmux_socket_path'] == str(layout.ccbd_tmux_socket_path)
+
+
+def test_project_namespace_event_summary_fields_include_backend_alias(tmp_path: Path) -> None:
+    layout = PathLayout(tmp_path / 'repo')
+    event = ProjectNamespaceEvent(
+        event_kind='namespace_created',
+        project_id='proj-1',
+        occurred_at='2026-04-03T01:00:00Z',
+        namespace_epoch=3,
+        tmux_socket_path=str(layout.ccbd_tmux_socket_path),
+        tmux_session_name=layout.ccbd_tmux_session_name,
+    )
+
+    assert event.backend_ref == str(layout.ccbd_tmux_socket_path)
+    assert event.session_name == layout.ccbd_tmux_session_name
+    assert event.summary_fields() == {
+        'namespace_last_event_kind': 'namespace_created',
+        'namespace_last_event_at': '2026-04-03T01:00:00Z',
+        'namespace_last_event_epoch': 3,
+        'namespace_last_event_backend_ref': str(layout.ccbd_tmux_socket_path),
+        'namespace_last_event_socket_path': str(layout.ccbd_tmux_socket_path),
+        'namespace_last_event_session_name': layout.ccbd_tmux_session_name,
+    }
 
 
 def test_path_layout_normalizes_tmux_session_name_for_tmux_targets(tmp_path: Path) -> None:
@@ -428,6 +458,85 @@ def test_project_namespace_controller_reflows_workspace_without_killing_server(t
     assert latest_event.details['reason'] == 'pane_recovery:agent1'
 
 
+def test_project_namespace_controller_reflows_workspace_using_generic_state_aliases(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-reflow-generic-alias'
+    layout = PathLayout(project_root)
+    backend = _FakeTmuxBackend()
+    backend.sessions[layout.ccbd_tmux_session_name] = [
+        {'id': '@1', 'name': layout.ccbd_tmux_control_window_name, 'panes': ['%1']},
+        {'id': '@2', 'name': 'workspace-generic', 'panes': ['%2']},
+    ]
+    backend.active_windows[layout.ccbd_tmux_session_name] = 'workspace-generic'
+    backend.window_counter = 2
+    backend.pane_counter = 2
+
+    class _StateStore:
+        def __init__(self, current) -> None:
+            self.current = current
+            self.saved: list[ProjectNamespaceState] = []
+
+        def load(self):
+            return self.current
+
+        def save(self, state) -> None:
+            self.saved.append(state)
+            self.current = state
+
+    class _EventStore:
+        def __init__(self) -> None:
+            self.events: list[ProjectNamespaceEvent] = []
+
+        def append(self, event) -> None:
+            self.events.append(event)
+
+    state_store = _StateStore(
+        SimpleNamespace(
+            project_id='proj-generic-reflow',
+            namespace_epoch=3,
+            backend_ref=str(layout.ccbd_tmux_socket_path),
+            session_name=layout.ccbd_tmux_session_name,
+            layout_version=3,
+            layout_signature='cmd; agent1:codex',
+            control_window_name=layout.ccbd_tmux_control_window_name,
+            control_window_id='@1',
+            workspace_name='workspace-generic',
+            workspace_window_id='@2',
+            workspace_epoch=2,
+            ui_attachable=True,
+            last_started_at='2026-04-03T08:00:00Z',
+            last_destroyed_at=None,
+            last_destroy_reason=None,
+            backend_family='mux',
+            backend_impl='psmux',
+        )
+    )
+    event_store = _EventStore()
+    controller = ProjectNamespaceController(
+        layout,
+        'proj-generic-reflow',
+        clock=lambda: '2026-04-03T08:10:00Z',
+        backend_factory=lambda socket_path=None: backend,
+        state_store=state_store,
+        event_store=event_store,
+    )
+
+    namespace = controller.reflow_workspace(
+        layout_signature='cmd; agent1:codex',
+        reason='pane_recovery:agent1',
+    )
+
+    assert namespace.workspace_epoch == 3
+    assert namespace.workspace_window_id == '@3'
+    assert namespace.workspace_name == layout.ccbd_tmux_workspace_window_name
+    assert [record['name'] for record in backend.sessions[layout.ccbd_tmux_session_name]] == [
+        layout.ccbd_tmux_control_window_name,
+        layout.ccbd_tmux_workspace_window_name,
+    ]
+    assert state_store.saved[-1].workspace_window_id == '@3'
+    assert state_store.saved[-1].backend_impl == 'psmux'
+    assert event_store.events[-1].event_kind == 'workspace_reflowed'
+
+
 def test_project_namespace_reflow_targets_transient_window_by_id(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-reflow-targets'
     layout = PathLayout(project_root)
@@ -480,3 +589,34 @@ def test_project_namespace_controller_uses_silent_server_commands(tmp_path: Path
     assert (['start-server'], True) in backend.tmux_calls
     assert (['set-option', '-g', 'destroy-unattached', 'off'], True) in backend.tmux_calls
     assert (['kill-server'], True) in backend.tmux_calls
+
+
+def test_project_namespace_controller_root_pane_uses_generic_namespace_aliases(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-root-pane-generic'
+    layout = PathLayout(project_root)
+    backend = _FakeTmuxBackend()
+    backend.sessions['ccb-generic'] = [{'id': '@1', 'name': 'workspace-generic', 'panes': ['%9']}]
+    backend.active_windows['ccb-generic'] = 'workspace-generic'
+    seen_socket_paths: list[str | None] = []
+
+    def _backend_factory(socket_path=None):
+        seen_socket_paths.append(socket_path)
+        return backend
+
+    controller = ProjectNamespaceController(
+        layout,
+        'proj-generic',
+        clock=lambda: '2026-04-03T05:00:00Z',
+        backend_factory=_backend_factory,
+    )
+
+    pane_id = controller.root_pane_id(
+        SimpleNamespace(
+            backend_ref=r'\\.\pipe\psmux-demo',
+            session_name='ccb-generic',
+            workspace_name='workspace-generic',
+        )
+    )
+
+    assert pane_id == '%9'
+    assert seen_socket_paths == [r'\\.\pipe\psmux-demo']

@@ -34,6 +34,7 @@ class ProjectKeeper(KeeperAppStateMixin):
         resolved_project_root = Path(project_root).expanduser().resolve()
         paths = PathLayout(resolved_project_root)
         mount_manager = MountManager(paths, clock=clock)
+        heartbeat_grace_seconds = 30.0 if os.name == 'nt' and paths.ccbd_ipc_kind == 'named_pipe' else 15.0
         self._runtime_state = KeeperAppState(
             project_root=resolved_project_root,
             paths=paths,
@@ -43,12 +44,17 @@ class ProjectKeeper(KeeperAppStateMixin):
             spawn_ccbd_process=spawn_ccbd_process_fn,
             process_exists=process_exists_fn,
             mount_manager=mount_manager,
-            ownership_guard=OwnershipGuard(paths, mount_manager, clock=clock),
+            ownership_guard=OwnershipGuard(
+                paths,
+                mount_manager,
+                clock=clock,
+                heartbeat_grace_seconds=heartbeat_grace_seconds,
+            ),
             state_store=KeeperStateStore(paths),
             intent_store=ShutdownIntentStore(paths),
         )
 
-    def run_forever(self, *, poll_interval: float = 0.5, start_timeout_s: float = 5.0) -> int:
+    def run_forever(self, *, poll_interval: float = 0.5, start_timeout_s: float = 20.0) -> int:
         return run_forever(self, poll_interval=poll_interval, start_timeout_s=start_timeout_s)
 
     def _reconcile_once(self, *, state: KeeperState, start_timeout_s: float) -> KeeperState:
@@ -79,7 +85,8 @@ def _spawn_daemon(app: ProjectKeeper, *, state: KeeperState, start_timeout_s: fl
         load_project_config(app.project_root)
         app._spawn_ccbd_process(
             project_root=app.project_root,
-            socket_path=app.paths.ccbd_socket_path,
+            socket_path=app.paths.ccbd_ipc_ref,
+            ipc_kind=app.paths.ccbd_ipc_kind,
             ccbd_dir=app.paths.ccbd_dir,
             timeout_s=start_timeout_s,
             keeper_pid=app.pid,

@@ -11,6 +11,7 @@ from cli.context import CliContext
 from cli.models import ParsedStartCommand
 import cli.services.daemon as daemon_service
 import ccbd.keeper as keeper_module
+import ccbd.keeper_runtime.loop as keeper_loop
 from project.resolver import bootstrap_project
 from storage.paths import PathLayout
 
@@ -115,7 +116,8 @@ def test_project_keeper_spawns_missing_daemon(tmp_path: Path) -> None:
     assert len(spawn_calls) == 1
     assert spawn_calls[0]['project_root'] == project_root
     assert spawn_calls[0]['keeper_pid'] == 777
-    assert next_state.restart_count == 1
+    assert next_state.restart_count == 0
+    assert next_state.last_restart_at is None
     assert next_state.last_failure_reason is None
 
 
@@ -201,8 +203,47 @@ def test_project_keeper_restarts_stale_unreachable_daemon(tmp_path: Path, monkey
 
     assert terminated == [321]
     assert len(spawn_calls) == 1
-    assert next_state.restart_count == 1
+    assert next_state.restart_count == 0
+    assert next_state.last_restart_at is None
     assert next_state.last_failure_reason is None
+
+
+def test_project_keeper_stops_after_restart_limit(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-restart-limit'
+    ctx = _context(project_root, 'agent1:codex\n')
+    spawn_calls: list[dict] = []
+    keeper = ProjectKeeper(
+        project_root,
+        pid=990,
+        spawn_ccbd_process_fn=lambda **kwargs: spawn_calls.append(dict(kwargs)),
+    )
+    keeper._ownership_guard = SimpleNamespace(
+        inspect=lambda: _inspection(
+            ctx,
+            health=LeaseHealth.MISSING,
+            socket_connectable=False,
+            pid_alive=False,
+            heartbeat_fresh=False,
+            reason='lease_missing',
+        )
+    )
+    state = KeeperState(
+        project_id=ctx.project.project_id,
+        keeper_pid=990,
+        started_at='2026-04-02T00:00:00Z',
+        last_check_at='2026-04-02T00:00:00Z',
+        state='running',
+        restart_count=4,
+        last_restart_at='2026-04-02T00:00:01Z',
+        last_failure_reason='ccbd exited before ready with code 0',
+    )
+
+    next_state = keeper._reconcile_once(state=state, start_timeout_s=0.1)
+
+    assert spawn_calls == []
+    assert next_state.state == 'stopped'
+    assert next_state.restart_count == 5
+    assert next_state.last_failure_reason == 'restart_limit_reached:ccbd exited before ready with code 0'
 
 
 def test_project_keeper_stops_when_shutdown_intent_exists(tmp_path: Path) -> None:
@@ -364,3 +405,60 @@ def test_shutdown_daemon_records_intent_and_terminates_keeper(tmp_path: Path, mo
     assert terminated == [654]
     assert intent is not None
     assert intent.reason == 'kill'
+
+
+def test_project_keeper_daemon_matches_project_config_uses_named_pipe_probe_timeout(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo-keeper-named-pipe-probe'
+    monkeypatch.setenv('CCB_EXPERIMENTAL_WINDOWS_NATIVE', '1')
+    monkeypatch.setenv('CCB_IPC_KIND', 'named_pipe')
+    _write(project_root / '.ccb' / 'ccb.config', 'agent1:codex\n')
+    keeper = ProjectKeeper(project_root, pid=777)
+    expected = project_config_identity_payload(load_project_config(project_root).config)
+    seen: list[tuple[float | None, str | None, str]] = []
+
+    class FakeClient:
+        def __init__(self, socket_path, *, timeout_s=None, ipc_kind=None) -> None:
+            del socket_path
+            seen.append((timeout_s, ipc_kind, 'init'))
+
+        def ping(self, target: str = 'ccbd') -> dict:
+            seen.append((None, None, target))
+            return {
+                'known_agents': list(expected['known_agents']),
+                'config_signature': expected['config_signature'],
+            }
+
+    monkeypatch.setattr(keeper_loop, 'CcbdClient', FakeClient)
+
+    assert keeper._daemon_matches_project_config() is True
+    assert seen == [(1.0, 'named_pipe', 'init'), (None, None, 'ccbd')]
+
+
+def test_project_keeper_request_shutdown_uses_named_pipe_probe_timeout(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo-keeper-named-pipe-shutdown'
+    monkeypatch.setenv('CCB_EXPERIMENTAL_WINDOWS_NATIVE', '1')
+    monkeypatch.setenv('CCB_IPC_KIND', 'named_pipe')
+    _write(project_root / '.ccb' / 'ccb.config', 'agent1:codex\n')
+    keeper = ProjectKeeper(project_root, pid=778)
+    seen: list[tuple[float | None, str | None, str]] = []
+
+    class FakeClient:
+        def __init__(self, socket_path, *, timeout_s=None, ipc_kind=None) -> None:
+            del socket_path
+            seen.append((timeout_s, ipc_kind, 'init'))
+
+        def shutdown(self) -> dict:
+            seen.append((None, None, 'shutdown'))
+            return {'state': 'unmounted'}
+
+    monkeypatch.setattr(keeper_loop, 'CcbdClient', FakeClient)
+
+    keeper._request_shutdown()
+
+    assert seen == [(1.0, 'named_pipe', 'init'), (None, None, 'shutdown')]

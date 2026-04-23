@@ -18,10 +18,14 @@ class _RuntimeService:
         return SimpleNamespace(
             runtime_ref=kwargs['runtime_ref'],
             session_ref=kwargs['session_ref'],
+            session_file=kwargs['session_file'],
+            session_id=kwargs['session_id'],
             lifecycle_state=kwargs['lifecycle_state'],
             desired_state=None,
             reconcile_state=None,
             binding_source=binding_source,
+            job_id=kwargs['job_id'],
+            job_owner_pid=kwargs['job_owner_pid'],
             terminal_backend=kwargs['terminal_backend'],
             tmux_socket_name=kwargs['tmux_socket_name'],
             tmux_socket_path=kwargs['tmux_socket_path'],
@@ -43,6 +47,8 @@ def _binding(**overrides) -> AgentBinding:
         'provider': 'codex',
         'runtime_root': '/tmp/runtime',
         'runtime_pid': 55,
+        'job_id': 'job-object-1',
+        'job_owner_pid': 654,
         'session_file': '/tmp/session.json',
         'session_id': 'session-5',
         'tmux_socket_name': 'sock-a',
@@ -122,6 +128,12 @@ def test_start_agent_runtime_reuses_binding_and_restores_when_requested() -> Non
     assert execution.runtime_pane_id == '%5'
     assert execution.project_socket_active_pane_id == '%5'
     assert runtime_service.restore_calls == ['agent1']
+    assert runtime_service.attach_calls[-1]['job_id'] == 'job-object-1'
+    assert runtime_service.attach_calls[-1]['job_owner_pid'] == 654
+    assert execution.agent_result.session_file == '/tmp/session.json'
+    assert execution.agent_result.session_id == 'session-5'
+    assert execution.agent_result.job_id == 'job-object-1'
+    assert execution.agent_result.job_owner_pid == 654
 
 
 def test_start_agent_runtime_relaunches_and_tracks_project_socket_pane() -> None:
@@ -157,3 +169,7 @@ def test_start_agent_runtime_relaunches_and_tracks_project_socket_pane() -> None
     assert execution.runtime_pane_id == '%7'
     assert execution.project_socket_active_pane_id == '%7'
     assert runtime_service.attach_calls[-1]['runtime_ref'] == 'tmux:%7'
+    assert execution.agent_result.session_file == '/tmp/session.json'
+    assert execution.agent_result.session_id == 'session-5'
+    assert execution.agent_result.job_id == 'job-object-1'
+    assert execution.agent_result.job_owner_pid == 654

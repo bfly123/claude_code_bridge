@@ -14,7 +14,7 @@ from provider_core.runtime_shared import (
     provider_executable as resolve_provider_executable,
     provider_start_parts as resolve_provider_start_parts,
 )
-from terminal_runtime import TmuxBackend
+from terminal_runtime import TmuxBackend as _LegacyTmuxBackend, default_mux_backend_cls
 from workspace.models import WorkspacePlan
 
 from .provider_hooks import prepare_provider_workspace
@@ -33,6 +33,14 @@ from .runtime_launch_runtime import (
     session_filename as _session_filename_impl,
     write_session_file as _write_session_file_impl,
 )
+
+TmuxBackend = _LegacyTmuxBackend
+
+
+def _tmux_backend_cls():
+    if TmuxBackend is not _LegacyTmuxBackend:
+        return TmuxBackend
+    return default_mux_backend_cls()
 
 
 @dataclass(frozen=True)
@@ -98,7 +106,7 @@ def _launch_tmux_runtime(
         spec,
         plan,
         launcher,
-        backend_factory=TmuxBackend,
+        backend_factory=_tmux_backend_cls(),
         pane_title_marker_fn=_pane_title_marker,
         launch_session_id_fn=_launch_session_id,
         create_detached_tmux_pane_fn=_create_detached_tmux_pane,
@@ -164,13 +172,13 @@ def _pane_title_marker(context: CliContext, spec: AgentSpec) -> str:
 
 
 def _binding_runtime_alive(binding: AgentBinding) -> bool:
-    return _binding_runtime_alive_impl(binding, tmux_backend_cls=TmuxBackend)
+    return _binding_runtime_alive_impl(binding, tmux_backend_cls=_tmux_backend_cls())
 
 
 def _cleanup_stale_tmux_binding(binding: AgentBinding | None) -> None:
     _cleanup_stale_tmux_binding_impl(
         binding,
-        tmux_backend_cls=TmuxBackend,
+        tmux_backend_cls=_tmux_backend_cls(),
         kill_tmux_pane_fn=_best_effort_kill_tmux_pane,
     )
 
@@ -179,17 +187,17 @@ def _inside_tmux() -> bool:
     return bool((os.environ.get('TMUX') or os.environ.get('TMUX_PANE') or '').strip())
 
 
-def _prepare_detached_tmux_server(backend: TmuxBackend) -> None:
+def _prepare_detached_tmux_server(backend) -> None:
     from .runtime_launch_runtime import prepare_detached_tmux_server as _prepare_detached_tmux_server_impl
 
     _prepare_detached_tmux_server_impl(backend)
 
 
-def _create_detached_tmux_pane(backend: TmuxBackend, *, cmd: str, cwd: Path, session_name: str) -> str:
+def _create_detached_tmux_pane(backend, *, cmd: str, cwd: Path, session_name: str) -> str:
     return _create_detached_tmux_pane_impl(backend, cmd=cmd, cwd=cwd, session_name=session_name)
 
 
-def _pane_meets_minimum_size(backend: TmuxBackend, pane_id: str, *, min_width: int = 20, min_height: int = 8) -> bool:
+def _pane_meets_minimum_size(backend, pane_id: str, *, min_width: int = 20, min_height: int = 8) -> bool:
     return _pane_meets_minimum_size_impl(
         backend,
         pane_id,
@@ -198,5 +206,5 @@ def _pane_meets_minimum_size(backend: TmuxBackend, pane_id: str, *, min_width: i
     )
 
 
-def _best_effort_kill_tmux_pane(backend: TmuxBackend, pane_id: str) -> None:
+def _best_effort_kill_tmux_pane(backend, pane_id: str) -> None:
     _best_effort_kill_tmux_pane_impl(backend, pane_id)

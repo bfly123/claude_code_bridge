@@ -29,6 +29,9 @@ class LocalPingSummary:
     heartbeat_fresh: bool
     takeover_allowed: bool
     reason: str
+    ipc_kind: str | None = None
+    backend_family: str | None = None
+    backend_impl: str | None = None
 
 
 @dataclass(frozen=True)

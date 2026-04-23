@@ -68,8 +68,17 @@ def _runtime_context_to_record(value: ProviderRuntimeContext | None) -> dict[str
         'backend_type': value.backend_type,
         'runtime_ref': value.runtime_ref,
         'session_ref': value.session_ref,
+        'runtime_root': value.runtime_root,
         'runtime_pid': value.runtime_pid,
         'runtime_health': value.runtime_health,
+        'runtime_binding_source': value.runtime_binding_source,
+        'terminal_backend': value.terminal_backend,
+        'session_file': value.session_file,
+        'session_id': value.session_id,
+        'tmux_socket_name': value.tmux_socket_name,
+        'tmux_socket_path': value.tmux_socket_path,
+        'job_id': value.job_id,
+        'job_owner_pid': value.job_owner_pid,
     }
 
 
@@ -82,8 +91,17 @@ def _runtime_context_from_record(record: dict[str, Any] | None) -> ProviderRunti
         backend_type=record.get('backend_type'),
         runtime_ref=record.get('runtime_ref'),
         session_ref=record.get('session_ref'),
+        runtime_root=record.get('runtime_root'),
         runtime_pid=record.get('runtime_pid'),
         runtime_health=record.get('runtime_health'),
+        runtime_binding_source=record.get('runtime_binding_source'),
+        terminal_backend=record.get('terminal_backend'),
+        session_file=record.get('session_file'),
+        session_id=record.get('session_id'),
+        tmux_socket_name=record.get('tmux_socket_name'),
+        tmux_socket_path=record.get('tmux_socket_path'),
+        job_id=record.get('job_id'),
+        job_owner_pid=record.get('job_owner_pid'),
     )
 
 

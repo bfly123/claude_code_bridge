@@ -94,3 +94,40 @@ def test_pane_outside_namespace_rejects_old_workspace_window(monkeypatch) -> Non
         backend=object(),
         pane_id='%3',
     ) is True
+
+
+def test_pane_outside_namespace_uses_generic_namespace_aliases(monkeypatch) -> None:
+    runtime = SimpleNamespace(project_id='proj-1', agent_name='agent1', tmux_socket_path=r'\\.\pipe\psmux-demo')
+    namespace_store = SimpleNamespace(
+        load=lambda: SimpleNamespace(
+            backend_ref=r'\\.\pipe\psmux-demo',
+            session_name='sess-psmux',
+            workspace_window_id='@2',
+        )
+    )
+    record = SimpleNamespace(
+        window_id='@2',
+        matches=lambda **kwargs: kwargs == {
+            'tmux_session_name': 'sess-psmux',
+            'project_id': 'proj-1',
+            'role': 'agent',
+            'slot_key': 'agent1',
+            'managed_by': 'ccbd',
+        },
+    )
+
+    monkeypatch.setattr(
+        'ccbd.services.health_assessment.tmux_runtime.namespace.backend_socket_matches',
+        lambda backend, tmux_socket_path: tmux_socket_path == r'\\.\pipe\psmux-demo',
+    )
+    monkeypatch.setattr(
+        'ccbd.services.health_assessment.tmux_runtime.namespace.inspect_project_namespace_pane',
+        lambda backend, pane_id: record,
+    )
+
+    assert pane_outside_project_namespace(
+        runtime=runtime,
+        namespace_state_store=namespace_store,
+        backend=object(),
+        pane_id='%3',
+    ) is False

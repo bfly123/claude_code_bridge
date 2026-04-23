@@ -8,12 +8,20 @@ from ccbd.models import CcbdRuntimeSnapshot
 
 def build_shutdown_runtime_snapshots(*, paths, config, registry) -> tuple[CcbdRuntimeSnapshot, ...]:
     runtime_store = AgentRuntimeStore(paths)
+    configured_agent_names = tuple(sorted(config.agents))
     return tuple(
         snapshot
         for snapshot in (
-            snapshot_for_runtime(runtime_store.load_best_effort(agent_name))
+            snapshot_for_runtime(
+                best_effort_runtime(
+                    agent_name=agent_name,
+                    configured_agent_names=configured_agent_names,
+                    registry=registry,
+                    runtime_store=runtime_store,
+                )
+            )
             for agent_name in (
-                *tuple(sorted(config.agents)),
+                *configured_agent_names,
                 *extra_agent_dir_names(paths, tuple(registry.list_known_agents())),
             )
         )

@@ -60,6 +60,8 @@ class KeeperState:
         return replace(
             self,
             last_check_at=occurred_at,
+            restart_count=0,
+            last_restart_at=None,
             last_failure_reason=None,
         )
 

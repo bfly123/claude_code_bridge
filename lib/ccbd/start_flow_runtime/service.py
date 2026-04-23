@@ -155,7 +155,7 @@ def run_start_flow(
         project_root=str(project_root),
         project_id=project_id,
         started=targets,
-        socket_path=str(paths.ccbd_socket_path),
+        socket_path=str(paths.ccbd_ipc_ref),
         cleanup_summaries=tuple(cleanup_summaries),
         actions_taken=tuple(actions_taken),
         agent_results=tuple(agent_results),

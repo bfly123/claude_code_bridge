@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+import os
 from typing import Any
 
 from .common import ensure_session_health, remember_log_hint
@@ -16,7 +17,8 @@ def send_message(comm, content: str) -> tuple[str, dict[str, Any]]:
     }
 
     state = comm.log_reader.capture_state()
-    with open(comm.input_fifo, "w", encoding="utf-8") as fifo:
+    mode = "a" if not hasattr(os, 'mkfifo') else "w"
+    with open(comm.input_fifo, mode, encoding="utf-8") as fifo:
         fifo.write(json.dumps(message, ensure_ascii=False) + "\n")
         fifo.flush()
     return marker, state

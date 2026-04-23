@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 
 from agents.config_identity import project_config_identity_payload
@@ -37,7 +38,10 @@ def connect_compatible_daemon(
 ) -> DaemonHandle | None:
     if not inspection.socket_connectable:
         return None
-    client = client_factory(context.paths.ccbd_socket_path)
+    try:
+        client = client_factory(context.paths.ccbd_ipc_ref, ipc_kind=context.paths.ccbd_ipc_kind)
+    except TypeError:
+        client = client_factory(context.paths.ccbd_ipc_ref)
     try:
         matches_config = daemon_matches_project_config_fn(context, client)
     except CcbdClientError:
@@ -66,18 +70,54 @@ def shutdown_incompatible_daemon(
         client.shutdown()
     except CcbdClientError:
         pass
-    deadline = time.time() + shutdown_timeout_s
-    while time.time() < deadline:
+    tolerate_interrupts = _should_tolerate_keyboard_interrupt(context)
+    deadline = _deadline_after(shutdown_timeout_s, tolerate_interrupts=tolerate_interrupts)
+    while not _deadline_expired(deadline, tolerate_interrupts=tolerate_interrupts):
         _, _, inspection = inspect_daemon_fn(context)
         if (
             not inspection.socket_connectable
             or inspection.health in unavailable_health_states
         ):
             return
-        time.sleep(0.05)
+        _sleep(0.05, tolerate_interrupts=tolerate_interrupts)
     raise CcbdServiceError(
         f'{incompatible_daemon_error}; old ccbd did not shut down in time'
     )
+
+
+def _should_tolerate_keyboard_interrupt(context) -> bool:
+    return getattr(context.paths, 'ccbd_ipc_kind', None) == 'named_pipe'
+
+
+def _deadline_after(duration_s: float, *, tolerate_interrupts: bool) -> float:
+    return _monotonic_now(tolerate_interrupts=tolerate_interrupts) + max(0.0, float(duration_s))
+
+
+def _deadline_expired(deadline: float, *, tolerate_interrupts: bool) -> bool:
+    return _monotonic_now(tolerate_interrupts=tolerate_interrupts) >= deadline
+
+
+def _monotonic_now(*, tolerate_interrupts: bool) -> float:
+    while True:
+        try:
+            return time.monotonic()
+        except KeyboardInterrupt:
+            if not tolerate_interrupts:
+                raise
+
+
+def _sleep(duration_s: float, *, tolerate_interrupts: bool) -> None:
+    deadline = _deadline_after(duration_s, tolerate_interrupts=tolerate_interrupts)
+    while True:
+        remaining = deadline - _monotonic_now(tolerate_interrupts=tolerate_interrupts)
+        if remaining <= 0:
+            return
+        try:
+            time.sleep(remaining)
+            return
+        except KeyboardInterrupt:
+            if not tolerate_interrupts:
+                raise
 
 
 __all__ = [

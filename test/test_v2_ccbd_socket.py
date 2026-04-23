@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
-import socket
 import threading
 import time
 from types import SimpleNamespace
@@ -13,6 +13,10 @@ from agents.models import AgentRuntime, AgentState, AgentRestoreState, RestoreMo
 from agents.store import AgentRuntimeStore
 from ccbd.api_models import DeliveryScope, MessageEnvelope
 from ccbd.app import CcbdApp
+from ccbd.ipc import connect_client
+from ccbd.lifecycle_report_store import CcbdStartupReportStore
+from ccbd.models import CcbdStartupReport
+from ccbd.stop_flow_runtime.models import StopAllSummary
 from ccbd.services.project_namespace_state import ProjectNamespaceEvent, ProjectNamespaceState
 from ccbd.socket_client import CcbdClient, CcbdClientError
 from completion.models import CompletionConfidence, CompletionDecision, CompletionStatus
@@ -66,23 +70,240 @@ def _runtime(agent_name: str, *, project_id: str, workspace_path: str, pid: int)
     )
 
 
-def _wait_for(path: Path, timeout: float = 2.0) -> None:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if path.exists():
+def _bound_runtime(agent_name: str, *, project_id: str, workspace_path: str, pid: int) -> AgentRuntime:
+    return AgentRuntime(
+        agent_name=agent_name,
+        state=AgentState.IDLE,
+        pid=pid,
+        started_at='2026-03-18T00:00:00Z',
+        last_seen_at='2026-03-18T00:00:00Z',
+        runtime_ref=f'psmux:%{pid}',
+        session_ref=f'{agent_name}-session',
+        workspace_path=workspace_path,
+        project_id=project_id,
+        backend_type='pane-backed',
+        queue_depth=0,
+        socket_path=None,
+        health='healthy',
+        provider='codex',
+        runtime_root=f'C:/runtime/{agent_name}',
+        runtime_pid=pid + 1000,
+        job_id=f'job-{agent_name}',
+        job_owner_pid=pid + 2000,
+        terminal_backend='psmux',
+        pane_id=f'%{pid}',
+        active_pane_id=f'%{pid}',
+        pane_title_marker=f'CCB-{agent_name}',
+        pane_state='alive',
+        tmux_socket_name=f'psmux-{agent_name}',
+        tmux_socket_path=rf'\\.\pipe\psmux-{agent_name}',
+        session_file=f'C:/sessions/{agent_name}.json',
+        session_id=f'{agent_name}-session-id',
+        desired_state='mounted',
+        reconcile_state='stable',
+    )
+
+
+def _client(app: CcbdApp, *, timeout_s: float | None = None) -> CcbdClient:
+    return CcbdClient(app.paths.ccbd_ipc_ref, timeout_s=timeout_s, ipc_kind=app.paths.ccbd_ipc_kind)
+
+
+def _ready_ping_timeout_s(app: CcbdApp) -> float:
+    return 1.0 if app.paths.ccbd_ipc_kind == 'named_pipe' else 0.2
+
+
+def _monotonic_now_ignoring_keyboard_interrupt() -> float:
+    while True:
+        try:
+            return time.monotonic()
+        except KeyboardInterrupt:
+            continue
+
+
+def _sleep_ignoring_keyboard_interrupt(duration_s: float) -> None:
+    deadline = _monotonic_now_ignoring_keyboard_interrupt() + max(0.0, float(duration_s))
+    while True:
+        remaining = deadline - _monotonic_now_ignoring_keyboard_interrupt()
+        if remaining <= 0:
             return
-        time.sleep(0.02)
-    raise AssertionError(f'timed out waiting for {path}')
+        try:
+            time.sleep(remaining)
+            return
+        except KeyboardInterrupt:
+            continue
+
+
+def _start_thread_ignoring_keyboard_interrupt(thread: threading.Thread) -> None:
+    while True:
+        try:
+            thread.start()
+            return
+        except KeyboardInterrupt:
+            if thread.is_alive():
+                return
+            _sleep_ignoring_keyboard_interrupt(0.01)
+
+
+def _join_thread_ignoring_keyboard_interrupt(thread: threading.Thread, *, timeout: float | None = None) -> None:
+    deadline = None if timeout is None else _monotonic_now_ignoring_keyboard_interrupt() + max(0.0, float(timeout))
+    while True:
+        remaining = None if deadline is None else max(0.0, deadline - _monotonic_now_ignoring_keyboard_interrupt())
+        try:
+            thread.join(timeout=remaining)
+            return
+        except KeyboardInterrupt:
+            if deadline is not None and _monotonic_now_ignoring_keyboard_interrupt() >= deadline:
+                return
+            continue
+
+
+def _wait_for_app_ready(app: CcbdApp, timeout: float = 2.0) -> None:
+    deadline = _monotonic_now_ignoring_keyboard_interrupt() + timeout
+    startup_store = CcbdStartupReportStore(app.paths)
+    last_error: Exception | None = None
+    while _monotonic_now_ignoring_keyboard_interrupt() < deadline:
+        if app.paths.ccbd_ipc_kind != 'named_pipe' and not app.paths.ccbd_socket_path.exists():
+            _sleep_ignoring_keyboard_interrupt(0.02)
+            continue
+        if startup_store.load() is None:
+            _sleep_ignoring_keyboard_interrupt(0.02)
+            continue
+        try:
+            if _client(app, timeout_s=_ready_ping_timeout_s(app)).ping('ccbd').get('mount_state') == 'mounted':
+                return
+        except Exception as exc:
+            last_error = exc
+        _sleep_ignoring_keyboard_interrupt(0.02)
+    detail = f'; last_error={last_error}' if last_error is not None else ''
+    raise AssertionError(f'timed out waiting for ccbd readiness: {app.paths.ccbd_ipc_ref}{detail}')
+
+
+def _open_transport(app: CcbdApp, *, timeout_s: float = 1.0):
+    return connect_client(app.paths.ccbd_ipc_ref, timeout_s=timeout_s, ipc_kind=app.paths.ccbd_ipc_kind)
+
+
+def test_ccbd_socket_client_helper_uses_ipc_ref_and_kind(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-client-helper'
+    _prepare_project(project_root, _single_agent_config_text('codex', 'codex'))
+    app = CcbdApp(project_root)
+
+    client = _client(app, timeout_s=1.25)
+
+    assert client._socket_path == app.paths.ccbd_ipc_ref
+    assert client._ipc_kind == app.paths.ccbd_ipc_kind
+    assert client._timeout_s == 1.25
+
+
+def test_ccbd_socket_transport_helper_uses_ipc_ref_and_kind(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-transport-helper'
+    _prepare_project(project_root, _single_agent_config_text('codex', 'codex'))
+    app = CcbdApp(project_root)
+    seen: list[tuple[str, float, str]] = []
+
+    def _fake_connect(endpoint_ref, *, timeout_s: float, ipc_kind: str | None = None):
+        seen.append((endpoint_ref, timeout_s, ipc_kind))
+        return SimpleNamespace(close=lambda: None)
+
+    monkeypatch.setattr(sys.modules[__name__], 'connect_client', _fake_connect)
+
+    transport = _open_transport(app, timeout_s=0.75)
+
+    assert transport.close is not None
+    assert seen == [(app.paths.ccbd_ipc_ref, 0.75, app.paths.ccbd_ipc_kind)]
+
+
+def test_ccbd_socket_wait_for_app_ready_pings_ccbd_after_startup_report(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-ready-helper'
+    _prepare_project(project_root, _single_agent_config_text('codex', 'codex'))
+    app = CcbdApp(project_root)
+    app.paths.ccbd_socket_path.parent.mkdir(parents=True, exist_ok=True)
+    app.paths.ccbd_socket_path.touch()
+    app.startup_report_store.save(
+        CcbdStartupReport(
+            project_id=app.project_id,
+            generated_at='2026-04-21T00:00:00Z',
+            trigger='daemon_boot',
+            status='ok',
+            requested_agents=(),
+            desired_agents=('codex',),
+            restore_requested=False,
+            auto_permission=False,
+            daemon_generation=1,
+            daemon_started=True,
+            config_signature='sig',
+            inspection={},
+            restore_summary={},
+            actions_taken=('mount_backend', 'listen_socket'),
+            cleanup_summaries=(),
+            agent_results=(),
+            failure_reason=None,
+        )
+    )
+    seen: list[tuple[float | None, str]] = []
+
+    def _fake_client(current_app: CcbdApp, *, timeout_s: float | None = None):
+        assert current_app is app
+        return SimpleNamespace(
+            ping=lambda target: seen.append((timeout_s, target)) or {'mount_state': 'mounted'}
+        )
+
+    monkeypatch.setattr(sys.modules[__name__], '_client', _fake_client)
+
+    _wait_for_app_ready(app, timeout=0.2)
+
+    assert seen == [(_ready_ping_timeout_s(app), 'ccbd')]
+
+
+def test_ccbd_socket_wait_for_app_ready_uses_named_pipe_probe_timeout(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-ready-helper-named-pipe'
+    _prepare_project(project_root, _single_agent_config_text('codex', 'codex'))
+    monkeypatch.setenv('CCB_EXPERIMENTAL_WINDOWS_NATIVE', '1')
+    monkeypatch.setenv('CCB_IPC_KIND', 'named_pipe')
+    app = CcbdApp(project_root)
+    app.startup_report_store.save(
+        CcbdStartupReport(
+            project_id=app.project_id,
+            generated_at='2026-04-21T00:00:00Z',
+            trigger='daemon_boot',
+            status='ok',
+            requested_agents=(),
+            desired_agents=('codex',),
+            restore_requested=False,
+            auto_permission=False,
+            daemon_generation=1,
+            daemon_started=True,
+            config_signature='sig',
+            inspection={},
+            restore_summary={},
+            actions_taken=('mount_backend', 'listen_socket', 'restore_running_jobs'),
+            cleanup_summaries=(),
+            agent_results=(),
+            failure_reason=None,
+        )
+    )
+    seen: list[tuple[float | None, str]] = []
+
+    def _fake_client(current_app: CcbdApp, *, timeout_s: float | None = None):
+        assert current_app is app
+        return SimpleNamespace(
+            ping=lambda target: seen.append((timeout_s, target)) or {'mount_state': 'mounted'}
+        )
+
+    monkeypatch.setattr(sys.modules[__name__], '_client', _fake_client)
+
+    _wait_for_app_ready(app, timeout=0.2)
+
+    assert seen == [(1.0, 'ccbd')]
 
 
 def _wait_for_job_status(client: CcbdClient, job_id: str, expected: str, *, timeout: float = 3.0) -> dict:
-    deadline = time.time() + timeout
+    deadline = _monotonic_now_ignoring_keyboard_interrupt() + timeout
     last = None
-    while time.time() < deadline:
+    while _monotonic_now_ignoring_keyboard_interrupt() < deadline:
         last = client.get(job_id)
         if last['status'] == expected:
             return last
-        time.sleep(0.05)
+        _sleep_ignoring_keyboard_interrupt(0.05)
     raise AssertionError(f'expected job {job_id} status={expected!r}; last={last!r}')
 
 
@@ -128,10 +349,10 @@ def test_ccbd_socket_roundtrip_and_shutdown(tmp_path: Path) -> None:
     )
 
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
-    client = CcbdClient(app.paths.ccbd_socket_path)
+    client = _client(app)
     ping = client.ping('codex')
     assert ping['agent_name'] == 'codex'
     assert ping['provider'] == 'codex'
@@ -197,7 +418,7 @@ def test_ccbd_socket_roundtrip_and_shutdown(tmp_path: Path) -> None:
 
     shutdown = client.shutdown()
     assert shutdown['state'] == 'unmounted'
-    thread.join(timeout=2)
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
     assert not thread.is_alive()
     assert app.mount_manager.load_state().mount_state.value == 'unmounted'
 
@@ -214,10 +435,10 @@ def test_ccbd_stop_all_does_not_run_post_shutdown_heartbeat(tmp_path: Path) -> N
     app.project_namespace.destroy = lambda **kwargs: SimpleNamespace(destroyed=True, namespace_epoch=1)  # type: ignore[method-assign]
 
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
-    client = CcbdClient(app.paths.ccbd_socket_path)
+    client = _client(app)
     started = client.start(agent_names=('demo',), restore=False, auto_permission=False)
     assert started['started'] == ['demo']
     assert app.start_policy_store.load() is not None
@@ -225,7 +446,7 @@ def test_ccbd_stop_all_does_not_run_post_shutdown_heartbeat(tmp_path: Path) -> N
     stopped = client.stop_all(force=False)
     assert stopped['state'] == 'unmounted'
 
-    thread.join(timeout=2)
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
     assert not thread.is_alive()
 
     runtime = AgentRuntimeStore(app.paths).load('demo')
@@ -237,6 +458,90 @@ def test_ccbd_stop_all_does_not_run_post_shutdown_heartbeat(tmp_path: Path) -> N
     assert runtime.session_ref is None
     assert ctx.project_id == runtime.project_id
     assert app.start_policy_store.load() is None
+
+
+def test_ccbd_shutdown_report_preserves_runtime_binding_metadata(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-shutdown-report-bindings'
+    ctx = _prepare_project(project_root, _single_agent_config_text('codex', 'codex'))
+    app = CcbdApp(project_root)
+    app.registry.upsert(
+        _bound_runtime(
+            'codex',
+            project_id=ctx.project_id,
+            workspace_path=str(app.paths.workspace_path('codex')),
+            pid=777,
+        )
+    )
+
+    thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
+
+    client = _client(app)
+    client.shutdown()
+
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
+    assert not thread.is_alive()
+
+    report = app.shutdown_report_store.load()
+    assert report is not None
+    assert report.trigger == 'shutdown'
+    assert len(report.runtime_snapshots) == 1
+    assert report.runtime_snapshots[0].runtime_ref == 'psmux:%777'
+    assert report.runtime_snapshots[0].session_id == 'codex-session-id'
+    assert report.runtime_snapshots[0].runtime_root == 'C:/runtime/codex'
+    assert report.runtime_snapshots[0].runtime_pid == 1777
+    assert report.runtime_snapshots[0].job_id == 'job-codex'
+    assert report.runtime_snapshots[0].job_owner_pid == 2777
+
+
+def test_ccbd_stop_all_writes_runtime_snapshots_when_prior_report_missing(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-stop-all-report-bindings'
+    ctx = _prepare_project(project_root, _single_agent_config_text('demo', 'codex'))
+    app = CcbdApp(project_root)
+    app.registry.upsert(
+        _bound_runtime(
+            'demo',
+            project_id=ctx.project_id,
+            workspace_path=str(app.paths.workspace_path('demo')),
+            pid=701,
+        )
+    )
+    monkeypatch.setattr(
+        app.runtime_supervisor,
+        'stop_all',
+        lambda *, force: StopAllSummary(
+            project_id=app.project_id,
+            state='unmounted',
+            socket_path=str(app.paths.ccbd_socket_path),
+            forced=force,
+            stopped_agents=('demo',),
+            cleanup_summaries=(),
+        ),
+    )
+
+    thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
+
+    client = _client(app)
+    stopped = client.stop_all(force=False)
+
+    assert stopped['state'] == 'unmounted'
+
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
+    assert not thread.is_alive()
+
+    report = app.shutdown_report_store.load()
+    assert report is not None
+    assert report.trigger == 'stop_all'
+    assert len(report.runtime_snapshots) == 1
+    assert report.runtime_snapshots[0].runtime_ref == 'psmux:%701'
+    assert report.runtime_snapshots[0].session_id == 'demo-session-id'
+    assert report.runtime_snapshots[0].runtime_root == 'C:/runtime/demo'
+    assert report.runtime_snapshots[0].runtime_pid == 1701
+    assert report.runtime_snapshots[0].job_id == 'job-demo'
+    assert report.runtime_snapshots[0].job_owner_pid == 2701
 
 
 def test_ping_namespace_summary(tmp_path: Path) -> None:
@@ -267,21 +572,24 @@ def test_ping_namespace_summary(tmp_path: Path) -> None:
     app.persist_start_policy(auto_permission=True)
 
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
-    client = CcbdClient(app.paths.ccbd_socket_path)
+    client = _client(app)
     ping = client.ping('ccbd')
 
     assert ping['namespace_epoch'] == 4
+    assert ping['namespace_backend_ref'] == str(app.paths.ccbd_tmux_socket_path)
+    assert ping['namespace_session_name'] == app.paths.ccbd_tmux_session_name
     assert ping['namespace_tmux_socket_path'] == str(app.paths.ccbd_tmux_socket_path)
     assert ping['namespace_tmux_session_name'] == app.paths.ccbd_tmux_session_name
+    assert ping['namespace_last_event_backend_ref'] == str(app.paths.ccbd_tmux_socket_path)
     assert ping['namespace_last_event_kind'] == 'namespace_created'
     assert ping['start_policy_auto_permission'] is True
     assert ping['start_policy_recovery_restore'] is True
 
     client.shutdown()
-    thread.join(timeout=2)
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
     assert not thread.is_alive()
 
 
@@ -303,10 +611,10 @@ def test_start_persists_policy(tmp_path: Path, monkeypatch) -> None:
     )
 
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
-    client = CcbdClient(app.paths.ccbd_socket_path)
+    client = _client(app)
     started = client.start(agent_names=('demo',), restore=False, auto_permission=True)
 
     assert started['started'] == ['demo']
@@ -317,7 +625,7 @@ def test_start_persists_policy(tmp_path: Path, monkeypatch) -> None:
     assert policy.source == 'start_command'
 
     client.shutdown()
-    thread.join(timeout=2)
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
     assert not thread.is_alive()
 
 def test_ccbd_attach_and_restore_roundtrip(tmp_path: Path) -> None:
@@ -336,10 +644,10 @@ def test_ccbd_attach_and_restore_roundtrip(tmp_path: Path) -> None:
     )
 
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
-    client = CcbdClient(app.paths.ccbd_socket_path)
+    client = _client(app)
     attached = client.attach(
         agent_name='codex',
         workspace_path=str(app.paths.workspace_path('codex')),
@@ -370,7 +678,7 @@ def test_ccbd_attach_and_restore_roundtrip(tmp_path: Path) -> None:
     assert runtime.binding_source.value == 'external-attach'
 
     client.shutdown()
-    thread.join(timeout=2)
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
     assert not thread.is_alive()
 
 
@@ -399,10 +707,10 @@ def test_ccbd_queue_reports_registered_agent_mailboxes(tmp_path: Path) -> None:
     )
 
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
-    client = CcbdClient(app.paths.ccbd_socket_path)
+    client = _client(app)
     submit = client.submit(
         MessageEnvelope(
             project_id=ctx.project_id,
@@ -431,7 +739,7 @@ def test_ccbd_queue_reports_registered_agent_mailboxes(tmp_path: Path) -> None:
     assert reply_queue['agent']['queued_events'][0]['event_type'] == 'task_reply'
 
     client.shutdown()
-    thread.join(timeout=2)
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
     assert not thread.is_alive()
 
 
@@ -460,10 +768,10 @@ def test_ccbd_trace_returns_attempt_reply_and_mailbox_events(tmp_path: Path) -> 
     )
 
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
-    client = CcbdClient(app.paths.ccbd_socket_path)
+    client = _client(app)
     submit = client.submit(
         MessageEnvelope(
             project_id=ctx.project_id,
@@ -496,7 +804,7 @@ def test_ccbd_trace_returns_attempt_reply_and_mailbox_events(tmp_path: Path) -> 
     assert {item['event_type'] for item in payload['events']} == {'task_request', 'task_reply'}
 
     client.shutdown()
-    thread.join(timeout=2)
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
     assert not thread.is_alive()
 
 
@@ -525,10 +833,10 @@ def test_ccbd_inbox_and_ack_roundtrip_reply_delivery(tmp_path: Path) -> None:
     )
 
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
-    client = CcbdClient(app.paths.ccbd_socket_path)
+    client = _client(app)
     submit = client.submit(
         MessageEnvelope(
             project_id=ctx.project_id,
@@ -554,7 +862,7 @@ def test_ccbd_inbox_and_ack_roundtrip_reply_delivery(tmp_path: Path) -> None:
         client.ack('claude')
 
     client.shutdown()
-    thread.join(timeout=2)
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
     assert not thread.is_alive()
 
 
@@ -575,10 +883,10 @@ def test_ccbd_cmd_sender_routes_reply_into_cmd_mailbox(tmp_path: Path) -> None:
     )
 
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
-    client = CcbdClient(app.paths.ccbd_socket_path)
+    client = _client(app)
     submit = client.submit(
         MessageEnvelope(
             project_id=ctx.project_id,
@@ -613,7 +921,7 @@ def test_ccbd_cmd_sender_routes_reply_into_cmd_mailbox(tmp_path: Path) -> None:
     assert ack['acknowledged_inbound_event_id']
 
     client.shutdown()
-    thread.join(timeout=2)
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
     assert not thread.is_alive()
 
 
@@ -631,10 +939,10 @@ def test_ccbd_resubmit_creates_new_message_record_with_origin(tmp_path: Path) ->
     )
 
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
-    client = CcbdClient(app.paths.ccbd_socket_path)
+    client = _client(app)
     submit = client.submit(
         MessageEnvelope(
             project_id=ctx.project_id,
@@ -665,7 +973,7 @@ def test_ccbd_resubmit_creates_new_message_record_with_origin(tmp_path: Path) ->
     assert new_message.origin_message_id == original_message.message_id
 
     client.shutdown()
-    thread.join(timeout=2)
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
     assert not thread.is_alive()
 
 
@@ -683,10 +991,10 @@ def test_ccbd_retry_creates_new_attempt_under_existing_message(tmp_path: Path) -
     )
 
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
-    client = CcbdClient(app.paths.ccbd_socket_path)
+    client = _client(app)
     submit = client.submit(
         MessageEnvelope(
             project_id=ctx.project_id,
@@ -728,7 +1036,7 @@ def test_ccbd_retry_creates_new_attempt_under_existing_message(tmp_path: Path) -
     assert codex_events[-1].status is InboundEventStatus.QUEUED
 
     client.shutdown()
-    thread.join(timeout=2)
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
     assert not thread.is_alive()
 
 
@@ -738,22 +1046,21 @@ def test_ccbd_socket_ignores_client_disconnect_during_response(tmp_path: Path) -
     app = CcbdApp(project_root)
 
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.connect(str(app.paths.ccbd_socket_path))
+    sock = _open_transport(app)
     sock.sendall((json.dumps({'api_version': 2, 'op': 'ping', 'request': {'target': 'ccbd'}}) + '\n').encode('utf-8'))
     sock.close()
 
-    time.sleep(0.1)
+    _sleep_ignoring_keyboard_interrupt(0.1)
 
-    client = CcbdClient(app.paths.ccbd_socket_path)
+    client = _client(app)
     ping = client.ping('ccbd')
     assert ping['mount_state'] == 'mounted'
 
     client.shutdown()
-    thread.join(timeout=2)
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
     assert not thread.is_alive()
 
 
@@ -773,10 +1080,10 @@ def test_ccbd_attach_without_provider_binding_does_not_synthesize_refs(tmp_path:
     )
 
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
-    client = CcbdClient(app.paths.ccbd_socket_path)
+    client = _client(app)
     attached = client.attach(
         agent_name='codex',
         workspace_path=str(app.paths.workspace_path('codex')),
@@ -794,7 +1101,7 @@ def test_ccbd_attach_without_provider_binding_does_not_synthesize_refs(tmp_path:
     assert runtime.session_ref is None
 
     client.shutdown()
-    thread.join(timeout=2)
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
     assert not thread.is_alive()
 
 
@@ -804,10 +1111,10 @@ def test_ccbd_attach_empty_binding_fields_clear_previous_refs(tmp_path: Path) ->
     app = CcbdApp(project_root)
 
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
-    client = CcbdClient(app.paths.ccbd_socket_path)
+    client = _client(app)
     client.attach(
         agent_name='codex',
         workspace_path=str(app.paths.workspace_path('codex')),
@@ -836,7 +1143,7 @@ def test_ccbd_attach_empty_binding_fields_clear_previous_refs(tmp_path: Path) ->
     assert runtime.health == 'degraded'
 
     client.shutdown()
-    thread.join(timeout=2)
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
     assert not thread.is_alive()
 
 
@@ -926,10 +1233,10 @@ def test_ccbd_socket_codex_protocol_turn_completes_via_tracker(monkeypatch, tmp_
     _freeze_next_job_id(app, monkeypatch, fixed_req_id)
     app.paths.workspace_path('demo').mkdir(parents=True, exist_ok=True)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
-    client = CcbdClient(app.paths.ccbd_socket_path)
+    client = _client(app)
     attached = client.attach(
         agent_name='demo',
         workspace_path=str(app.paths.workspace_path('demo')),
@@ -971,7 +1278,7 @@ def test_ccbd_socket_codex_protocol_turn_completes_via_tracker(monkeypatch, tmp_
 
     shutdown = client.shutdown()
     assert shutdown['state'] == 'unmounted'
-    thread.join(timeout=2)
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
     assert not thread.is_alive()
 
 
@@ -1045,10 +1352,10 @@ def test_ccbd_socket_codex_protocol_turn_handles_interrupted_abort(monkeypatch, 
     _freeze_next_job_id(app, monkeypatch, fixed_req_id)
     app.paths.workspace_path('demo').mkdir(parents=True, exist_ok=True)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
-    client = CcbdClient(app.paths.ccbd_socket_path)
+    client = _client(app)
     client.attach(
         agent_name='demo',
         workspace_path=str(app.paths.workspace_path('demo')),
@@ -1087,7 +1394,7 @@ def test_ccbd_socket_codex_protocol_turn_handles_interrupted_abort(monkeypatch, 
 
     shutdown = client.shutdown()
     assert shutdown['state'] == 'unmounted'
-    thread.join(timeout=2)
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
     assert not thread.is_alive()
 
 
@@ -1144,10 +1451,10 @@ def test_ccbd_socket_claude_session_boundary_completes_via_tracker(monkeypatch, 
     _freeze_next_job_id(app, monkeypatch, fixed_req_id)
     app.paths.workspace_path('demo').mkdir(parents=True, exist_ok=True)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
-    client = CcbdClient(app.paths.ccbd_socket_path)
+    client = _client(app)
     attached = client.attach(
         agent_name='demo',
         workspace_path=str(app.paths.workspace_path('demo')),
@@ -1188,7 +1495,7 @@ def test_ccbd_socket_claude_session_boundary_completes_via_tracker(monkeypatch, 
 
     shutdown = client.shutdown()
     assert shutdown['state'] == 'unmounted'
-    thread.join(timeout=2)
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
     assert not thread.is_alive()
 
 
@@ -1245,10 +1552,10 @@ def test_ccbd_socket_claude_turn_duration_completion_without_done_marker(monkeyp
     _freeze_next_job_id(app, monkeypatch, fixed_req_id)
     app.paths.workspace_path('demo').mkdir(parents=True, exist_ok=True)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
-    client = CcbdClient(app.paths.ccbd_socket_path)
+    client = _client(app)
     client.attach(
         agent_name='demo',
         workspace_path=str(app.paths.workspace_path('demo')),
@@ -1280,7 +1587,7 @@ def test_ccbd_socket_claude_turn_duration_completion_without_done_marker(monkeyp
 
     shutdown = client.shutdown()
     assert shutdown['state'] == 'unmounted'
-    thread.join(timeout=2)
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
     assert not thread.is_alive()
 
 
@@ -1341,10 +1648,10 @@ def test_ccbd_socket_gemini_session_snapshot_completes_via_tracker(monkeypatch, 
     _freeze_next_job_id(app, monkeypatch, fixed_req_id)
     app.paths.workspace_path('demo').mkdir(parents=True, exist_ok=True)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
-    client = CcbdClient(app.paths.ccbd_socket_path)
+    client = _client(app)
     attached = client.attach(
         agent_name='demo',
         workspace_path=str(app.paths.workspace_path('demo')),
@@ -1384,7 +1691,7 @@ def test_ccbd_socket_gemini_session_snapshot_completes_via_tracker(monkeypatch, 
 
     shutdown = client.shutdown()
     assert shutdown['state'] == 'unmounted'
-    thread.join(timeout=2)
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
     assert not thread.is_alive()
 
 
@@ -1447,10 +1754,10 @@ def test_ccbd_socket_gemini_long_silence_and_session_rotate_do_not_finish_early(
     _freeze_next_job_id(app, monkeypatch, fixed_req_id)
     app.paths.workspace_path('demo').mkdir(parents=True, exist_ok=True)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
-    client = CcbdClient(app.paths.ccbd_socket_path)
+    client = _client(app)
     client.attach(
         agent_name='demo',
         workspace_path=str(app.paths.workspace_path('demo')),
@@ -1473,7 +1780,7 @@ def test_ccbd_socket_gemini_long_silence_and_session_rotate_do_not_finish_early(
     )
     job_id = submit['job_id']
 
-    time.sleep(0.15)
+    _sleep_ignoring_keyboard_interrupt(0.15)
     running = client.get(job_id)
     assert running['status'] == 'running'
     assert running['completion_reason'] is None
@@ -1492,7 +1799,7 @@ def test_ccbd_socket_gemini_long_silence_and_session_rotate_do_not_finish_early(
 
     shutdown = client.shutdown()
     assert shutdown['state'] == 'unmounted'
-    thread.join(timeout=2)
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
     assert not thread.is_alive()
 
 
@@ -1566,10 +1873,10 @@ def test_ccbd_socket_gemini_tool_call_progress_does_not_finish_on_first_round(mo
     _freeze_next_job_id(app, monkeypatch, fixed_req_id)
     app.paths.workspace_path('demo').mkdir(parents=True, exist_ok=True)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
-    client = CcbdClient(app.paths.ccbd_socket_path)
+    client = _client(app)
     client.attach(
         agent_name='demo',
         workspace_path=str(app.paths.workspace_path('demo')),
@@ -1592,7 +1899,7 @@ def test_ccbd_socket_gemini_tool_call_progress_does_not_finish_on_first_round(mo
     )
     job_id = submit['job_id']
 
-    time.sleep(0.15)
+    _sleep_ignoring_keyboard_interrupt(0.15)
     running = client.get(job_id)
     assert running['status'] == 'running'
     assert running['completion_reason'] is None
@@ -1604,7 +1911,7 @@ def test_ccbd_socket_gemini_tool_call_progress_does_not_finish_on_first_round(mo
 
     shutdown = client.shutdown()
     assert shutdown['state'] == 'unmounted'
-    thread.join(timeout=2)
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
     assert not thread.is_alive()
 
 
@@ -1675,10 +1982,10 @@ def test_ccbd_socket_gemini_rotate_clears_stale_reply_preview(monkeypatch, tmp_p
     _freeze_next_job_id(app, monkeypatch, fixed_req_id)
     app.paths.workspace_path('demo').mkdir(parents=True, exist_ok=True)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
-    client = CcbdClient(app.paths.ccbd_socket_path)
+    client = _client(app)
     client.attach(
         agent_name='demo',
         workspace_path=str(app.paths.workspace_path('demo')),
@@ -1701,7 +2008,7 @@ def test_ccbd_socket_gemini_rotate_clears_stale_reply_preview(monkeypatch, tmp_p
     )
     job_id = submit['job_id']
 
-    time.sleep(0.25)
+    _sleep_ignoring_keyboard_interrupt(0.25)
     running = client.get(job_id)
     assert running['status'] == 'running'
     assert running['reply'] == ''
@@ -1714,7 +2021,7 @@ def test_ccbd_socket_gemini_rotate_clears_stale_reply_preview(monkeypatch, tmp_p
 
     shutdown = client.shutdown()
     assert shutdown['state'] == 'unmounted'
-    thread.join(timeout=2)
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
     assert not thread.is_alive()
 
 
@@ -1769,10 +2076,10 @@ def test_ccbd_socket_opencode_completed_reply_uses_session_boundary_tracker(monk
     _freeze_next_job_id(app, monkeypatch, fixed_req_id)
     app.paths.workspace_path('demo').mkdir(parents=True, exist_ok=True)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
-    client = CcbdClient(app.paths.ccbd_socket_path)
+    client = _client(app)
     client.attach(
         agent_name='demo',
         workspace_path=str(app.paths.workspace_path('demo')),
@@ -1804,7 +2111,7 @@ def test_ccbd_socket_opencode_completed_reply_uses_session_boundary_tracker(monk
 
     shutdown = client.shutdown()
     assert shutdown['state'] == 'unmounted'
-    thread.join(timeout=2)
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
     assert not thread.is_alive()
 
 
@@ -1850,10 +2157,10 @@ def test_ccbd_socket_opencode_pane_dead_becomes_failed_degraded(monkeypatch, tmp
     _freeze_next_job_id(app, monkeypatch, fixed_req_id)
     app.paths.workspace_path('demo').mkdir(parents=True, exist_ok=True)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
-    client = CcbdClient(app.paths.ccbd_socket_path)
+    client = _client(app)
     client.attach(
         agent_name='demo',
         workspace_path=str(app.paths.workspace_path('demo')),
@@ -1883,7 +2190,7 @@ def test_ccbd_socket_opencode_pane_dead_becomes_failed_degraded(monkeypatch, tmp
 
     shutdown = client.shutdown()
     assert shutdown['state'] == 'unmounted'
-    thread.join(timeout=2)
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
     assert not thread.is_alive()
 
 
@@ -1943,10 +2250,10 @@ def test_ccbd_socket_droid_legacy_completion_via_tracker(monkeypatch, tmp_path: 
     _freeze_next_job_id(app, monkeypatch, fixed_req_id)
     app.paths.workspace_path('demo').mkdir(parents=True, exist_ok=True)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
-    client = CcbdClient(app.paths.ccbd_socket_path)
+    client = _client(app)
     client.attach(
         agent_name='demo',
         workspace_path=str(app.paths.workspace_path('demo')),
@@ -1978,7 +2285,7 @@ def test_ccbd_socket_droid_legacy_completion_via_tracker(monkeypatch, tmp_path: 
 
     shutdown = client.shutdown()
     assert shutdown['state'] == 'unmounted'
-    thread.join(timeout=2)
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
     assert not thread.is_alive()
 
 
@@ -2030,10 +2337,10 @@ def test_ccbd_socket_droid_pane_dead_becomes_failed_degraded(monkeypatch, tmp_pa
     _freeze_next_job_id(app, monkeypatch, fixed_req_id)
     app.paths.workspace_path('demo').mkdir(parents=True, exist_ok=True)
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
-    thread.start()
-    _wait_for(app.paths.ccbd_socket_path)
+    _start_thread_ignoring_keyboard_interrupt(thread)
+    _wait_for_app_ready(app)
 
-    client = CcbdClient(app.paths.ccbd_socket_path)
+    client = _client(app)
     client.attach(
         agent_name='demo',
         workspace_path=str(app.paths.workspace_path('demo')),
@@ -2063,5 +2370,5 @@ def test_ccbd_socket_droid_pane_dead_becomes_failed_degraded(monkeypatch, tmp_pa
 
     shutdown = client.shutdown()
     assert shutdown['state'] == 'unmounted'
-    thread.join(timeout=2)
+    _join_thread_ignoring_keyboard_interrupt(thread, timeout=2)
     assert not thread.is_alive()

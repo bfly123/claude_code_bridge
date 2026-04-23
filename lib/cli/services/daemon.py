@@ -39,6 +39,7 @@ from .daemon_runtime import shutdown_daemon as _shutdown_daemon_runtime
 
 from .daemon_runtime.facade import SHUTDOWN_TIMEOUT_S as _DEF_SHUTDOWN_TIMEOUT_S
 from .daemon_runtime.facade import START_TIMEOUT_S as _DEF_START_TIMEOUT_S
+from .daemon_runtime.facade import KEEPER_READY_TIMEOUT_S as _DEF_KEEPER_READY_TIMEOUT_S
 
 
 def inspect_daemon(context: CliContext):
@@ -92,6 +93,9 @@ def ping_local_state(context: CliContext) -> LocalPingSummary:
         heartbeat_fresh=inspection.heartbeat_fresh,
         takeover_allowed=inspection.takeover_allowed,
         reason=inspection.reason,
+        ipc_kind=getattr(lease, 'ipc_kind', None) if lease else None,
+        backend_family=getattr(lease, 'backend_family', None) if lease else None,
+        backend_impl=getattr(lease, 'backend_impl', None) if lease else None,
     )
 
 
@@ -115,7 +119,10 @@ def shutdown_daemon(context: CliContext, *, force: bool) -> KillSummary:
         force=force,
         record_shutdown_intent_fn=record_shutdown_intent,
         inspect_daemon_fn=inspect_daemon,
-        client_factory=lambda current: CcbdClient(current.paths.ccbd_socket_path),
+        client_factory=lambda current: CcbdClient(
+            current.paths.ccbd_ipc_ref,
+            ipc_kind=current.paths.ccbd_ipc_kind,
+        ),
         lease_pid_fn=_lease_pid,
         keeper_pid_fn=_keeper_pid,
         wait_for_pid_exit_fn=_wait_for_pid_exit,
@@ -136,7 +143,10 @@ def _connect_compatible_daemon(
         context,
         inspection,
         restart_on_mismatch=restart_on_mismatch,
-        client_factory=CcbdClient,
+        client_factory=lambda endpoint_ref, **kwargs: CcbdClient(
+            endpoint_ref,
+            **kwargs,
+        ),
         daemon_matches_project_config_fn=_daemon_matches_project_config,
         shutdown_incompatible_daemon_fn=_shutdown_incompatible_daemon,
     )
@@ -167,7 +177,7 @@ def _ensure_keeper_started(context: CliContext) -> bool:
         mount_manager_factory=MountManager,
         ownership_guard_factory=OwnershipGuard,
         process_exists_fn=is_pid_alive,
-        ready_timeout_s=2.0,
+        ready_timeout_s=_DEF_KEEPER_READY_TIMEOUT_S,
     )
 
 

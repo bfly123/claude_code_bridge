@@ -15,7 +15,7 @@ from ..project_namespace_state import next_namespace_epoch
 def force_recreate_namespace(controller, context):
     if not context.session_is_alive:
         return context
-    kill_server(context.backend)
+    kill_server(context.backend, session_name=context.desired_session_name)
     return context.with_updates(
         backend=rebuild_namespace_backend(
             controller,
@@ -48,7 +48,7 @@ def recreate_for_layout_change(controller, context):
     )
     if reason is None:
         return context
-    kill_server(context.backend)
+    kill_server(context.backend, session_name=context.desired_session_name)
     return context.with_updates(
         backend=rebuild_namespace_backend(
             controller,
@@ -102,6 +102,8 @@ def persist_refreshed_namespace(controller, context) -> ProjectNamespace:
         workspace_epoch=max(1, int(current.workspace_epoch)),
         ui_attachable=True,
         last_started_at=current.last_started_at,
+        backend_family=getattr(context.backend, 'backend_family', None),
+        backend_impl=getattr(context.backend, 'backend_impl', None),
     )
     controller._state_store.save(state)
     return namespace_from_state(state)
@@ -136,6 +138,8 @@ def build_created_namespace(controller, context) -> ProjectNamespace:
         workspace_epoch=1,
         ui_attachable=True,
         last_started_at=occurred_at,
+        backend_family=getattr(context.backend, 'backend_family', None),
+        backend_impl=getattr(context.backend, 'backend_impl', None),
     )
     controller._state_store.save(state)
     controller._event_store.append(
@@ -163,6 +167,8 @@ def build_created_namespace(controller, context) -> ProjectNamespace:
         workspace_window_id=state.workspace_window_id,
         workspace_epoch=state.workspace_epoch,
         ui_attachable=state.ui_attachable,
+        backend_family=getattr(state, 'backend_family', None),
+        backend_impl=getattr(state, 'backend_impl', None),
         created_this_call=True,
     )
 

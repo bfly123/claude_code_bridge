@@ -4,6 +4,9 @@ import errno
 import os
 from pathlib import Path
 
+if not hasattr(os, 'WNOHANG'):
+    os.WNOHANG = 1
+
 
 def try_acquire_keeper_lock(path: Path):
     target = Path(path)
@@ -24,8 +27,6 @@ def try_acquire_keeper_lock(path: Path):
 
 
 def reap_child_processes(*, waitpid_fn=os.waitpid, os_module=os) -> tuple[int, ...]:
-    if os_module.name == 'nt' or not hasattr(os_module, 'WNOHANG'):
-        return ()
     reaped: list[int] = []
     while True:
         try:

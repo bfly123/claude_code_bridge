@@ -5,7 +5,7 @@ from dataclasses import replace
 from agents.models import AgentState
 from provider_core.session_binding_evidence import session_ref
 
-from .common import drop_explicit_runtime_fields, runtime_fields_from_facts
+from .common import drop_explicit_runtime_fields, runtime_fields_from_facts, runtime_fields_from_session
 
 
 def rebind_runtime(
@@ -30,7 +30,7 @@ def rebind_runtime(
         bound_session_ref=bound_session_ref,
         force_session_ref_update=force_session_ref_update,
     )
-    updated_fields = _updated_runtime_fields(runtime=runtime, facts=facts)
+    updated_fields = _updated_runtime_fields(runtime=runtime, facts=facts, session=session, binding=binding)
     updated = replace(
         runtime,
         state=_next_state(runtime),
@@ -84,9 +84,21 @@ def _next_pid(*, runtime, facts) -> int | None:
     return runtime.pid
 
 
-def _updated_runtime_fields(*, runtime, facts) -> dict[str, object]:
+def _updated_runtime_fields(*, runtime, facts, session, binding) -> dict[str, object]:
     if facts is None:
-        return {}
+        return drop_explicit_runtime_fields(
+            runtime_fields_from_session(runtime, session, binding),
+            explicit_fields=(
+                'active_pane_id',
+                'health',
+                'last_seen_at',
+                'pane_id',
+                'pane_state',
+                'pid',
+                'session_ref',
+                'state',
+            ),
+        )
     return drop_explicit_runtime_fields(
         runtime_fields_from_facts(runtime, facts),
         explicit_fields=(

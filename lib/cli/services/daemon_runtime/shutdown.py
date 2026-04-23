@@ -59,6 +59,8 @@ def _wait_for_keeper_shutdown(
 def _unlink_socket_if_forced(context, *, force: bool) -> None:
     if not force:
         return
+    if context.paths.ccbd_ipc_kind != 'unix_socket':
+        return
     try:
         context.paths.ccbd_socket_path.unlink()
     except FileNotFoundError:
@@ -115,7 +117,7 @@ def shutdown_daemon(
     return KillSummary(
         project_id=context.project.project_id,
         state=lease.mount_state.value if lease is not None else 'unmounted',
-        socket_path=str(context.paths.ccbd_socket_path),
+        socket_path=str(context.paths.ccbd_ipc_ref),
         forced=force,
     )
 

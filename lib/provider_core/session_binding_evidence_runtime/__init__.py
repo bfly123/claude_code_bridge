@@ -4,6 +4,8 @@ from .binding import AgentBinding, binding_status
 from .fields import (
     session_file,
     session_id,
+    session_job_id,
+    session_job_owner_pid,
     session_pane_title_marker,
     session_ref,
     session_runtime_pid,
@@ -24,6 +26,8 @@ __all__ = [
     'resolve_agent_binding',
     'session_file',
     'session_id',
+    'session_job_id',
+    'session_job_owner_pid',
     'session_pane_title_marker',
     'session_ref',
     'session_runtime_pid',

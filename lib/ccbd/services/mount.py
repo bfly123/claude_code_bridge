@@ -36,17 +36,21 @@ class MountManager:
         project_id: str,
         pid: int,
         socket_path: str | Path,
+        ipc_kind: str | None = None,
         generation: int,
         started_at: str | None = None,
         config_signature: str | None = None,
         keeper_pid: int | None = None,
         daemon_instance_id: str | None = None,
+        backend_family: str | None = None,
+        backend_impl: str | None = None,
     ) -> CcbdLease:
         timestamp = started_at or self._clock()
         lease = CcbdLease(
             project_id=project_id,
             ccbd_pid=pid,
             socket_path=str(socket_path),
+            ipc_kind=str(ipc_kind or '').strip() or None,
             owner_uid=self._uid_getter(),
             boot_id=self._boot_id_getter(),
             started_at=timestamp,
@@ -56,6 +60,8 @@ class MountManager:
             config_signature=(str(config_signature).strip() or None) if config_signature is not None else None,
             keeper_pid=int(keeper_pid) if keeper_pid else None,
             daemon_instance_id=(str(daemon_instance_id).strip() or None) if daemon_instance_id is not None else None,
+            backend_family=(str(backend_family).strip() or None) if backend_family is not None else None,
+            backend_impl=(str(backend_impl).strip() or None) if backend_impl is not None else None,
         )
         self._store.save(self._layout.ccbd_lease_path, lease, serializer=lambda value: value.to_record())
         return lease
@@ -88,6 +94,7 @@ def _lease_from_record(record: dict) -> CcbdLease:
         project_id=record['project_id'],
         ccbd_pid=int(record['ccbd_pid']),
         socket_path=record['socket_path'],
+        ipc_kind=str(record.get('ipc_kind') or '').strip() or None,
         owner_uid=int(record['owner_uid']),
         boot_id=record['boot_id'],
         started_at=record['started_at'],
@@ -97,6 +104,8 @@ def _lease_from_record(record: dict) -> CcbdLease:
         config_signature=str(record.get('config_signature') or '').strip() or None,
         keeper_pid=int(record['keeper_pid']) if record.get('keeper_pid') else None,
         daemon_instance_id=str(record.get('daemon_instance_id') or '').strip() or None,
+        backend_family=str(record.get('backend_family') or '').strip() or None,
+        backend_impl=str(record.get('backend_impl') or '').strip() or None,
         api_version=int(record.get('api_version', 2)),
     )
 

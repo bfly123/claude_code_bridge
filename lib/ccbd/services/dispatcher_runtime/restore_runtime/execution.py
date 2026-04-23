@@ -12,7 +12,8 @@ from ..reply_delivery_runtime.decisions import reply_delivery_failed_decision
 from ..runtime_state import sync_runtime
 
 
-def _restore_entry(current, restored) -> CcbdRestoreEntry:
+def _restore_entry(current, restored, *, runtime_context=None) -> CcbdRestoreEntry:
+    runtime_context = getattr(restored, 'runtime_context', None) or runtime_context
     return CcbdRestoreEntry(
         job_id=current.job_id,
         agent_name=current.agent_name,
@@ -21,6 +22,15 @@ def _restore_entry(current, restored) -> CcbdRestoreEntry:
         reason=restored.reason,
         resume_capable=restored.resume_capable,
         pending_items_count=restored.pending_items_count,
+        runtime_ref=getattr(runtime_context, 'runtime_ref', None),
+        session_ref=getattr(runtime_context, 'session_ref', None),
+        session_file=getattr(runtime_context, 'session_file', None),
+        session_id=getattr(runtime_context, 'session_id', None),
+        terminal_backend=getattr(runtime_context, 'terminal_backend', None),
+        runtime_root=getattr(runtime_context, 'runtime_root', None),
+        runtime_pid=getattr(runtime_context, 'runtime_pid', None),
+        runtime_job_id=getattr(runtime_context, 'job_id', None),
+        job_owner_pid=getattr(runtime_context, 'job_owner_pid', None),
     )
 
 
@@ -76,6 +86,8 @@ def _restore_current_job(dispatcher, *, target_kind: TargetKind, job_id: str):
     current = get_job(dispatcher, job_id)
     if current is None or current.status is not dispatcher._running_status:
         return None, None
+    runtime = dispatcher._registry.get(current.agent_name) if target_kind is TargetKind.AGENT else None
+    runtime_context = build_job_runtime_context(current, runtime)
     if is_reply_delivery_job(current):
         repaired = dispatcher.complete(
             current.job_id,
@@ -97,12 +109,19 @@ def _restore_current_job(dispatcher, *, target_kind: TargetKind, job_id: str):
             reason='reply_delivery_does_not_resume',
             resume_capable=False,
             pending_items_count=0,
+            runtime_ref=getattr(runtime_context, 'runtime_ref', None),
+            session_ref=getattr(runtime_context, 'session_ref', None),
+            session_file=getattr(runtime_context, 'session_file', None),
+            session_id=getattr(runtime_context, 'session_id', None),
+            terminal_backend=getattr(runtime_context, 'terminal_backend', None),
+            runtime_root=getattr(runtime_context, 'runtime_root', None),
+            runtime_pid=getattr(runtime_context, 'runtime_pid', None),
+            runtime_job_id=getattr(runtime_context, 'job_id', None),
+            job_owner_pid=getattr(runtime_context, 'job_owner_pid', None),
         )
         return repaired, entry
-    runtime = dispatcher._registry.get(current.agent_name) if target_kind is TargetKind.AGENT else None
-    runtime_context = build_job_runtime_context(current, runtime)
     restored = dispatcher._execution_service.restore(current, runtime_context=runtime_context)
-    entry = _restore_entry(current, restored)
+    entry = _restore_entry(current, restored, runtime_context=runtime_context)
     if restored.status == 'terminal_pending' and restored.decision is not None:
         return _complete_terminal_pending(dispatcher, current, restored), entry
     if restored.restored:

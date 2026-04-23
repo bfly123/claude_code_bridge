@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 from typing import Callable
 
@@ -41,7 +42,12 @@ def prepare_active_start(
         )
 
     work_dir = Path(context.workspace_path).expanduser()
-    session = load_session_fn(work_dir, agent_name=_session_selector_name(job))
+    session = load_runtime_session(
+        load_session_fn=load_session_fn,
+        work_dir=work_dir,
+        agent_name=_session_selector_name(job),
+        context=context,
+    )
     if session is None:
         return error_submission(
             job,
@@ -82,4 +88,36 @@ def prepare_active_start(
     )
 
 
-__all__ = ["prepare_active_start"]
+def load_runtime_session(
+    *,
+    load_session_fn,
+    work_dir: Path,
+    agent_name: str,
+    context: ProviderRuntimeContext | None,
+):
+    kwargs: dict[str, object] = {'agent_name': agent_name}
+    optional_hints = {
+        'session_file': getattr(context, 'session_file', None) if context is not None else None,
+        'session_id': getattr(context, 'session_id', None) if context is not None else None,
+        'session_ref': getattr(context, 'session_ref', None) if context is not None else None,
+    }
+    try:
+        signature = inspect.signature(load_session_fn)
+    except (TypeError, ValueError):
+        signature = None
+    if signature is None:
+        return load_session_fn(work_dir, **kwargs)
+    parameters = signature.parameters
+    accepts_kwargs = any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
+    for key, value in optional_hints.items():
+        if value is None:
+            continue
+        if accepts_kwargs or key in parameters:
+            kwargs[key] = value
+    return load_session_fn(work_dir, **kwargs)
+
+
+__all__ = ["load_runtime_session", "prepare_active_start"]

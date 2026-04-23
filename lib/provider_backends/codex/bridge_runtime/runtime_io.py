@@ -14,6 +14,8 @@ from .runtime_state import BridgeRuntimeState
 def read_request(state: BridgeRuntimeState) -> dict[str, Any] | None:
     if not state.paths.input_fifo.exists():
         return None
+    if _uses_file_queue(state.paths.input_fifo):
+        return _read_request_file_queue(state.paths.input_fifo)
     try:
         with state.paths.input_fifo.open('r', encoding='utf-8') as fifo:
             line = fifo.readline()
@@ -83,6 +85,32 @@ def timestamp_now() -> str:
 
 def generate_marker() -> str:
     return f"{provider_marker_prefix('codex')}-{int(time.time())}-{os.getpid()}"
+
+
+def _uses_file_queue(path) -> bool:
+    return not hasattr(os, 'mkfifo') or bool(getattr(path, 'is_file', lambda: False)())
+
+
+def _read_request_file_queue(path) -> dict[str, Any] | None:
+    try:
+        payload = path.read_text(encoding='utf-8')
+    except OSError:
+        return None
+    lines = payload.splitlines()
+    if not lines:
+        return None
+    first = lines[0].strip()
+    remainder = '\n'.join(lines[1:])
+    try:
+        path.write_text((remainder + '\n') if remainder else '', encoding='utf-8')
+    except OSError:
+        pass
+    if not first:
+        return None
+    try:
+        return json.loads(first)
+    except json.JSONDecodeError:
+        return None
 
 
 __all__ = [

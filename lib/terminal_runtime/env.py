@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import os
-import platform
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 import re
+
+
+_TRUE_VALUES = {'1', 'true', 'yes', 'on'}
 
 
 def env_float(name: str, default: float) -> float:
@@ -37,7 +40,12 @@ def sanitize_filename(value: str) -> str:
 
 
 def is_windows() -> bool:
-    return platform.system() == "Windows"
+    return os.name == "nt" or sys.platform == "win32"
+
+
+def experimental_windows_native_enabled() -> bool:
+    raw = str(os.environ.get('CCB_EXPERIMENTAL_WINDOWS_NATIVE') or '').strip().lower()
+    return raw in _TRUE_VALUES
 
 
 def subprocess_kwargs() -> dict:
@@ -45,6 +53,32 @@ def subprocess_kwargs() -> dict:
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
         return {"creationflags": flags}
     return {}
+
+def patch_subprocess_no_window() -> None:
+    if os.name != "nt":
+        return
+    if getattr(subprocess, '_ccb_no_window_patched', False):
+        return
+    create_no_window = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
+    original_run = subprocess.run
+    original_popen = subprocess.Popen
+
+    def _inject(kwargs: dict) -> None:
+        flags = kwargs.get('creationflags')
+        kwargs['creationflags'] = create_no_window if flags is None else (int(flags) | int(create_no_window))
+
+    def _run(*args, **kwargs):
+        _inject(kwargs)
+        return original_run(*args, **kwargs)
+
+    class _CcbPopen(original_popen):
+        def __init__(self, *args, **kwargs):
+            _inject(kwargs)
+            super().__init__(*args, **kwargs)
+
+    subprocess.run = _run
+    subprocess.Popen = _CcbPopen
+    setattr(subprocess, '_ccb_no_window_patched', True)
 
 
 def is_wsl() -> bool:

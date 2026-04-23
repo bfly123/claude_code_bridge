@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from agents.models import AgentState, RuntimeMode
+from ccbd.services.project_namespace_state import ProjectNamespaceStateStore
 from ccbd.services.runtime_recovery_policy import normalized_runtime_health, should_attempt_background_recovery
 from ccbd.system import parse_utc_timestamp
 from ccbd.supervision.backoff import backoff_delay_seconds as backoff_delay_seconds_impl
@@ -99,7 +100,7 @@ def should_reflow_project_namespace(ctx: RuntimeSupervisionContext, runtime, *, 
     socket_path = str(getattr(runtime, 'tmux_socket_path', None) or '').strip()
     if not socket_path:
         return False
-    return same_socket_path_impl(socket_path, str(ctx.layout.ccbd_tmux_socket_path))
+    return same_socket_path_impl(socket_path, project_namespace_backend_ref(ctx))
 
 
 def should_reflow_project_mount(ctx: RuntimeSupervisionContext, agent_name: str) -> bool:
@@ -151,7 +152,18 @@ def runtime_belongs_to_project_socket(ctx: RuntimeSupervisionContext, runtime) -
     socket_path = str(getattr(runtime, 'tmux_socket_path', None) or '').strip()
     if not socket_path:
         return False
-    return same_socket_path_impl(socket_path, str(ctx.layout.ccbd_tmux_socket_path))
+    return same_socket_path_impl(socket_path, project_namespace_backend_ref(ctx))
+
+
+def project_namespace_backend_ref(ctx: RuntimeSupervisionContext) -> str:
+    try:
+        state = ProjectNamespaceStateStore(ctx.layout).load()
+    except Exception:
+        state = None
+    backend_ref = str(getattr(state, 'tmux_socket_path', None) or '').strip()
+    if backend_ref:
+        return backend_ref
+    return str(getattr(ctx.layout, 'ccbd_tmux_socket_path', '') or '').strip()
 
 
 def recovered_pane_replaced(runtime, recovered) -> bool:

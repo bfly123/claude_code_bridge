@@ -93,7 +93,7 @@ def _render_kill_without_anchor(command, *, cwd: Path | None, out: TextIO) -> in
     summary = KillSummary(
         project_id=compute_project_id(project_root),
         state='unmounted',
-        socket_path=str(PathLayout(project_root).ccbd_socket_path),
+        socket_path=str(PathLayout(project_root).ccbd_ipc_ref),
         forced=bool(getattr(command, 'force', False)),
     )
     write_lines(out, render_kill(summary))

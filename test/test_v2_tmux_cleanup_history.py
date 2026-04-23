@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from agents.models import AgentRuntime, AgentState, RuntimeBindingSource
+from agents.store import AgentRuntimeStore
+from ccbd.ipc_state_store import CcbdIpcStateStore
 from ccbd.lifecycle_report_store import CcbdShutdownReportStore, CcbdStartupReportStore
-from ccbd.models import CcbdShutdownReport, CcbdStartupReport
+from ccbd.restore_report_store import CcbdRestoreReportStore
+from ccbd.models import CcbdRestoreEntry, CcbdRestoreReport, CcbdRuntimeSnapshot, CcbdShutdownReport, CcbdStartupAgentResult, CcbdStartupReport
 from ccbd.services.project_namespace_state import ProjectNamespaceEvent, ProjectNamespaceEventStore, ProjectNamespaceState, ProjectNamespaceStateStore
 from cli.context import CliContextBuilder
 from cli.models import ParsedDoctorCommand
@@ -184,6 +188,31 @@ def test_doctor_summary_includes_namespace_state_and_latest_event(tmp_path: Path
     assert payload['ccbd']['namespace_last_event_at'] == '2026-04-03T00:05:00Z'
 
 
+def test_doctor_summary_includes_ipc_state_fields(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-doctor-ipc'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    context = CliContextBuilder().build(ParsedDoctorCommand(project=None), cwd=project_root, bootstrap_if_missing=False)
+
+    CcbdIpcStateStore(context.paths).save(
+        ipc_kind='named_pipe',
+        ipc_ref=r'\\.\pipe\ccb-proj-1-ccbd',
+        backend_family='tmux',
+        backend_impl='psmux',
+        state='mounted',
+        updated_at='2026-04-03T00:05:00Z',
+    )
+
+    payload = doctor_summary(context)
+
+    assert payload['ccbd']['ipc_kind'] == 'named_pipe'
+    assert payload['ccbd']['ipc_ref'] == r'\\.\pipe\ccb-proj-1-ccbd'
+    assert payload['ccbd']['ipc_state'] == 'mounted'
+    assert payload['ccbd']['ipc_updated_at'] == '2026-04-03T00:05:00Z'
+    assert payload['ccbd']['backend_impl'] == 'psmux'
+
+
 def test_doctor_summary_includes_startup_and_shutdown_report_fields(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-doctor-reports'
     (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
@@ -208,7 +237,24 @@ def test_doctor_summary_includes_startup_and_shutdown_report_fields(tmp_path: Pa
             restore_summary={},
             actions_taken=('launch_runtime:demo',),
             cleanup_summaries=(),
-            agent_results=(),
+            agent_results=(
+                CcbdStartupAgentResult(
+                    agent_name='demo',
+                    provider='codex',
+                    action='launched',
+                    health='healthy',
+                    workspace_path=str(project_root / '.ccb' / 'workspaces' / 'demo'),
+                    runtime_ref='psmux:%7',
+                    session_ref='session-demo',
+                    session_file=r'C:\tmp\demo.session.json',
+                    session_id='session-demo',
+                    terminal_backend='psmux',
+                    runtime_pid=4321,
+                    runtime_root=r'C:\tmp\runtime-demo',
+                    job_id='job-object-1',
+                    job_owner_pid=654,
+                ),
+            ),
             failure_reason=None,
         )
     )
@@ -225,7 +271,24 @@ def test_doctor_summary_includes_startup_and_shutdown_report_fields(tmp_path: Pa
             inspection_after={},
             actions_taken=('request_shutdown_intent',),
             cleanup_summaries=(),
-            runtime_snapshots=(),
+            runtime_snapshots=(
+                CcbdRuntimeSnapshot(
+                    agent_name='demo',
+                    provider='codex',
+                    state='stopped',
+                    health='stopped',
+                    workspace_path=str(project_root / '.ccb' / 'workspaces' / 'demo'),
+                    runtime_ref='psmux:%7',
+                    session_ref='session-demo',
+                    session_file=r'C:\tmp\demo.session.json',
+                    session_id='session-demo',
+                    terminal_backend='psmux',
+                    runtime_pid=4321,
+                    runtime_root=r'C:\tmp\runtime-demo',
+                    job_id='job-object-1',
+                    job_owner_pid=654,
+                ),
+            ),
             failure_reason=None,
         )
     )
@@ -235,6 +298,111 @@ def test_doctor_summary_includes_startup_and_shutdown_report_fields(tmp_path: Pa
     assert payload['ccbd']['startup_last_trigger'] == 'start_command'
     assert payload['ccbd']['startup_last_status'] == 'ok'
     assert payload['ccbd']['startup_last_daemon_started'] is True
+    assert payload['ccbd']['startup_last_agent_results_text'] == (
+        r'demo:launched/healthy terminal=psmux runtime=psmux:%7 session=session-demo '
+        r'runtime_root=C:\tmp\runtime-demo '
+        'pid=4321 job=job-object-1 owner=654'
+    )
     assert payload['ccbd']['shutdown_last_trigger'] == 'kill'
     assert payload['ccbd']['shutdown_last_status'] == 'ok'
     assert payload['ccbd']['shutdown_last_reason'] == 'kill'
+    assert payload['ccbd']['shutdown_last_runtime_states_text'] == (
+        r'demo:stopped/stopped terminal=psmux runtime=psmux:%7 session=session-demo '
+        r'runtime_root=C:\tmp\runtime-demo '
+        'pid=4321 job=job-object-1 owner=654'
+    )
+
+
+def test_doctor_summary_includes_agent_runtime_binding_metadata(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-doctor-agent-binding'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    context = CliContextBuilder().build(ParsedDoctorCommand(project=None), cwd=project_root, bootstrap_if_missing=False)
+
+    AgentRuntimeStore(context.paths).save(
+        AgentRuntime(
+            agent_name='demo',
+            state=AgentState.IDLE,
+            pid=111,
+            started_at='2026-04-03T00:00:00Z',
+            last_seen_at='2026-04-03T00:00:01Z',
+            runtime_ref='psmux:%7',
+            session_ref='session-demo',
+            workspace_path=str(context.paths.workspace_path('demo')),
+            project_id=context.project.project_id,
+            backend_type='pane-backed',
+            queue_depth=0,
+            socket_path=None,
+            health='healthy',
+            provider='codex',
+            runtime_root='/tmp/runtime-root',
+            runtime_pid=4321,
+            job_id='job-object-1',
+            job_owner_pid=654,
+            terminal_backend='psmux',
+            pane_id='%7',
+            active_pane_id='%7',
+            pane_title_marker='CCB-demo',
+            pane_state='alive',
+            tmux_socket_name='psmux-demo',
+            tmux_socket_path=r'\\.\pipe\psmux-demo',
+            session_file=r'C:\tmp\demo.session.json',
+            session_id='session-demo',
+            binding_source=RuntimeBindingSource.PROVIDER_SESSION,
+        )
+    )
+
+    payload = doctor_summary(context)
+    agent = payload['agents'][0]
+
+    assert agent['session_file'] == r'C:\tmp\demo.session.json'
+    assert agent['session_id'] == 'session-demo'
+    assert agent['runtime_pid'] == 4321
+    assert agent['runtime_root'] == '/tmp/runtime-root'
+
+
+def test_doctor_summary_includes_restore_report_runtime_binding_metadata(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-doctor-restore-binding'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    context = CliContextBuilder().build(ParsedDoctorCommand(project=None), cwd=project_root, bootstrap_if_missing=False)
+
+    CcbdRestoreReportStore(context.paths).save(
+        CcbdRestoreReport(
+            project_id=context.project.project_id,
+            generated_at='2026-04-03T00:20:00Z',
+            running_job_count=1,
+            restored_execution_count=1,
+            replay_pending_count=0,
+            terminal_pending_count=0,
+            abandoned_execution_count=0,
+            already_active_count=0,
+            entries=(
+                CcbdRestoreEntry(
+                    job_id='delivery-job-1',
+                    agent_name='demo',
+                    provider='codex',
+                    status='restored',
+                    reason='provider_resumed',
+                    resume_capable=True,
+                    runtime_ref='psmux:%7',
+                    session_id='session-demo',
+                    terminal_backend='psmux',
+                    runtime_root=r'C:\tmp\runtime-demo',
+                    runtime_pid=4321,
+                    runtime_job_id='job-object-1',
+                    job_owner_pid=654,
+                ),
+            ),
+        )
+    )
+
+    payload = doctor_summary(context)
+
+    assert payload['ccbd']['last_restore_running_job_count'] == 1
+    assert payload['ccbd']['last_restore_results_text'] == (
+        r'demo/codex:restored(provider_resumed) terminal=psmux runtime=psmux:%7 '
+        r'session=session-demo runtime_root=C:\tmp\runtime-demo pid=4321 job=job-object-1 owner=654'
+    )

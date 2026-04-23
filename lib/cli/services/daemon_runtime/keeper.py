@@ -66,12 +66,13 @@ def wait_for_keeper_ready(
     timeout_s: float,
     process_exists_fn=is_pid_alive,
 ) -> bool:
-    deadline = time.time() + max(0.0, float(timeout_s))
+    tolerate_interrupts = _should_tolerate_keyboard_interrupt(context)
+    deadline = _deadline_after(timeout_s, tolerate_interrupts=tolerate_interrupts)
     store = KeeperStateStore(context.paths)
-    while time.time() < deadline:
+    while not _deadline_expired(deadline, tolerate_interrupts=tolerate_interrupts):
         if keeper_state_is_running(store.load(), process_exists_fn=process_exists_fn):
             return True
-        time.sleep(0.05)
+        _sleep(0.05, tolerate_interrupts=tolerate_interrupts)
     return keeper_state_is_running(store.load(), process_exists_fn=process_exists_fn)
 
 
@@ -81,13 +82,14 @@ def wait_for_keeper_exit(
     timeout_s: float,
     process_exists_fn=is_pid_alive,
 ) -> bool:
-    deadline = time.time() + max(0.0, float(timeout_s))
+    tolerate_interrupts = _should_tolerate_keyboard_interrupt(context)
+    deadline = _deadline_after(timeout_s, tolerate_interrupts=tolerate_interrupts)
     store = KeeperStateStore(context.paths)
-    while time.time() < deadline:
+    while not _deadline_expired(deadline, tolerate_interrupts=tolerate_interrupts):
         state = store.load()
         if not keeper_state_is_running(state, process_exists_fn=process_exists_fn):
             return True
-        time.sleep(0.05)
+        _sleep(0.05, tolerate_interrupts=tolerate_interrupts)
     state = store.load()
     return not keeper_state_is_running(state, process_exists_fn=process_exists_fn)
 
@@ -114,18 +116,63 @@ def spawn_keeper_process(context) -> None:
     context.paths.ccbd_dir.mkdir(parents=True, exist_ok=True)
     stdout_log = open(context.paths.ccbd_dir / 'keeper.stdout.log', 'ab')
     stderr_log = open(context.paths.ccbd_dir / 'keeper.stderr.log', 'ab')
+    popen_kwargs = {
+        'cwd': str(context.project.project_root),
+        'env': env,
+        'stdout': stdout_log,
+        'stderr': stderr_log,
+    }
+    if os.name == 'nt':
+        popen_kwargs['creationflags'] = (
+            subprocess.CREATE_NEW_PROCESS_GROUP
+            | subprocess.DETACHED_PROCESS
+            | subprocess.CREATE_NO_WINDOW
+        )
+    else:
+        popen_kwargs['start_new_session'] = True
     subprocess.Popen(
         [sys.executable, str(script), '--project', str(context.project.project_root)],
-        cwd=str(context.project.project_root),
-        env=env,
-        stdout=stdout_log,
-        stderr=stderr_log,
-        start_new_session=True,
+        **popen_kwargs,
     )
 
 
 def _lib_root() -> Path:
     return Path(__file__).resolve().parents[3]
+
+
+def _should_tolerate_keyboard_interrupt(context) -> bool:
+    return getattr(context.paths, 'ccbd_ipc_kind', None) == 'named_pipe'
+
+
+def _deadline_after(duration_s: float, *, tolerate_interrupts: bool) -> float:
+    return _monotonic_now(tolerate_interrupts=tolerate_interrupts) + max(0.0, float(duration_s))
+
+
+def _deadline_expired(deadline: float, *, tolerate_interrupts: bool) -> bool:
+    return _monotonic_now(tolerate_interrupts=tolerate_interrupts) >= deadline
+
+
+def _monotonic_now(*, tolerate_interrupts: bool) -> float:
+    while True:
+        try:
+            return time.monotonic()
+        except KeyboardInterrupt:
+            if not tolerate_interrupts:
+                raise
+
+
+def _sleep(duration_s: float, *, tolerate_interrupts: bool) -> None:
+    deadline = _deadline_after(duration_s, tolerate_interrupts=tolerate_interrupts)
+    while True:
+        remaining = deadline - _monotonic_now(tolerate_interrupts=tolerate_interrupts)
+        if remaining <= 0:
+            return
+        try:
+            time.sleep(remaining)
+            return
+        except KeyboardInterrupt:
+            if not tolerate_interrupts:
+                raise
 
 
 __all__ = [

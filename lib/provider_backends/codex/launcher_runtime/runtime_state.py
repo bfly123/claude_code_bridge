@@ -19,7 +19,11 @@ def prepare_runtime(runtime_dir: Path) -> dict[str, object]:
 def ensure_fifo(path: Path, mode: int) -> None:
     if path.exists():
         return
-    os.mkfifo(path, mode)
+    if hasattr(os, 'mkfifo'):
+        os.mkfifo(path, mode)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('', encoding='utf-8')
 
 
 __all__ = ['prepare_runtime']

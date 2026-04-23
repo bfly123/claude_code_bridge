@@ -54,6 +54,9 @@ class CcbdLease:
     config_signature: str | None = None
     keeper_pid: int | None = None
     daemon_instance_id: str | None = None
+    ipc_kind: str | None = None
+    backend_family: str | None = None
+    backend_impl: str | None = None
     api_version: int = API_VERSION
 
     def __post_init__(self) -> None:
@@ -66,9 +69,12 @@ class CcbdLease:
         _require_non_empty_text(self.started_at, field_name='started_at')
         _require_non_empty_text(self.last_heartbeat_at, field_name='last_heartbeat_at')
         _require_positive_int(self.generation, field_name='generation')
+        _require_optional_non_empty_text(self.ipc_kind, field_name='ipc_kind')
         _require_optional_non_empty_text(self.config_signature, field_name='config_signature')
         _require_optional_positive_int(self.keeper_pid, field_name='keeper_pid')
         _require_optional_non_empty_text(self.daemon_instance_id, field_name='daemon_instance_id')
+        _require_optional_non_empty_text(self.backend_family, field_name='backend_family')
+        _require_optional_non_empty_text(self.backend_impl, field_name='backend_impl')
 
     def with_heartbeat(self, timestamp: str) -> CcbdLease:
         return replace(self, last_heartbeat_at=timestamp)
@@ -84,6 +90,7 @@ class CcbdLease:
             'project_id': self.project_id,
             'ccbd_pid': self.ccbd_pid,
             'socket_path': self.socket_path,
+            'ipc_kind': self.ipc_kind,
             'owner_uid': self.owner_uid,
             'boot_id': self.boot_id,
             'started_at': self.started_at,
@@ -93,6 +100,8 @@ class CcbdLease:
             'config_signature': self.config_signature,
             'keeper_pid': self.keeper_pid,
             'daemon_instance_id': self.daemon_instance_id,
+            'backend_family': self.backend_family,
+            'backend_impl': self.backend_impl,
         }
 
 

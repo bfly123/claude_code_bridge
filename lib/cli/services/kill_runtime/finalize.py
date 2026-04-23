@@ -19,12 +19,18 @@ def finalize_kill(
     clock_fn,
 ):
     set_tmux_ui_active_fn(False)
-    cleanup_summaries = cleanup_project_tmux_orphans_by_socket_fn(
-        project_id=context.project.project_id,
-        active_panes_by_socket={socket_name: () for socket_name in preparation.tmux_sockets},
+    cleanup_summaries = (
+        cleanup_project_tmux_orphans_by_socket_fn(
+            project_id=context.project.project_id,
+            active_panes_by_socket={socket_name: () for socket_name in preparation.tmux_sockets},
+        )
+        if preparation.tmux_sockets
+        else ()
     )
     terminate_runtime_pids_fn(
         project_root=context.project.project_root,
+        priority_pids=preparation.priority_pids,
+        pid_metadata=preparation.pid_metadata,
         pid_candidates=preparation.pid_candidates,
     )
     if cleanup_summaries:

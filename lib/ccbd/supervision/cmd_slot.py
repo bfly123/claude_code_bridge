@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 
 from agents.models import AgentState
 from agents.models import build_project_layout_plan
@@ -13,6 +14,7 @@ from terminal_runtime.tmux_identity import apply_ccb_pane_identity
 from .loop_context import RuntimeSupervisionContext
 
 _PLACEHOLDER_CMD = 'while :; do sleep 3600; done'
+_PLACEHOLDER_CMD_WINDOWS = 'ping -t 127.0.0.1 >nul'
 
 
 @dataclass(frozen=True)
@@ -31,6 +33,8 @@ def reconcile_cmd_slot(ctx: RuntimeSupervisionContext) -> str | None:
     backend = _build_namespace_backend(namespace_controller, namespace)
     if backend is None:
         return request_cmd_workspace_reflow(ctx)
+    if str(getattr(backend, 'backend_impl', '') or '').strip().lower() == 'psmux':
+        return 'healthy-psmux'
     root_pane_id = _load_root_pane_id(namespace_controller, namespace)
     record = _inspect_root_record(backend, root_pane_id)
     if cmd_slot_matches_namespace(ctx, namespace, record):
@@ -155,9 +159,7 @@ def split_before_anchor_pane(
                 str(plan.percent),
                 '-c',
                 project_root,
-                'sh',
-                '-lc',
-                _PLACEHOLDER_CMD,
+                *_placeholder_spawn_args(backend),
             ],
             capture=True,
             check=True,
@@ -176,14 +178,27 @@ def cmd_slot_matches_namespace(
     if record is None:
         return False
     workspace_window_id = str(getattr(namespace, 'workspace_window_id', None) or '').strip() or None
+    if str(getattr(namespace, 'backend_impl', '') or '').strip().lower() == 'psmux':
+        workspace_window_id = None
     return record.matches(
-        tmux_session_name=str(getattr(namespace, 'tmux_session_name', None) or '').strip(),
+        tmux_session_name=_namespace_session_name(namespace),
         project_id=ctx.project_id,
         role='cmd',
         slot_key='cmd',
         managed_by='ccbd',
         window_id=workspace_window_id,
     )
+
+
+def _placeholder_spawn_args(backend) -> list[str]:
+    backend_impl = str(getattr(backend, 'backend_impl', '') or '').strip().lower()
+    if os.name == 'nt' and backend_impl == 'psmux':
+        return [_windows_cmd_exe(), '/d', '/s', '/c', _PLACEHOLDER_CMD_WINDOWS]
+    return ['sh', '-lc', _PLACEHOLDER_CMD]
+
+
+def _windows_cmd_exe() -> str:
+    return os.environ.get('COMSPEC', os.path.join(os.environ.get('SystemRoot', r'C:\WINDOWS'), 'System32', 'cmd.exe'))
 
 
 def other_project_agent_busy(ctx: RuntimeSupervisionContext) -> bool:
@@ -207,7 +222,7 @@ def _build_namespace_backend(namespace_controller: ProjectNamespaceController, n
     try:
         return build_backend(
             namespace_controller._backend_factory,
-            socket_path=str(getattr(namespace, 'tmux_socket_path', None) or '').strip(),
+            socket_path=_namespace_backend_ref(namespace),
         )
     except Exception:
         return None
@@ -230,6 +245,14 @@ def _load_root_pane_id(namespace_controller: ProjectNamespaceController, namespa
         return None
     pane_text = str(pane_id or '').strip()
     return pane_text if pane_text.startswith('%') else None
+
+
+def _namespace_backend_ref(namespace) -> str:
+    return str(getattr(namespace, 'backend_ref', None) or getattr(namespace, 'tmux_socket_path', None) or '').strip()
+
+
+def _namespace_session_name(namespace) -> str:
+    return str(getattr(namespace, 'session_name', None) or getattr(namespace, 'tmux_session_name', None) or '').strip()
 
 
 __all__ = ['reconcile_cmd_slot']

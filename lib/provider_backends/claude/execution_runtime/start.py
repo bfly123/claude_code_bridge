@@ -15,22 +15,47 @@ from ..protocol import wrap_claude_prompt, wrap_claude_turn_prompt
 from provider_hooks.artifacts import completion_dir_from_session_data
 
 
-def load_session(load_project_session_fn, work_dir: Path, *, agent_name: str):
+def load_session(
+    load_project_session_fn,
+    work_dir: Path,
+    *,
+    agent_name: str,
+    session_file: str | None = None,
+    session_id: str | None = None,
+    session_ref: str | None = None,
+):
+    del session_id
     instance = named_agent_instance(agent_name, primary_agent="claude")
     if instance is not None:
         session = load_project_session_fn(work_dir, instance)
         if session is not None:
             return session
+    else:
+        session = load_project_session_fn(work_dir)
+        if session is not None:
+            return session
+    preferred = preferred_session_path('', session_ref, session_file)
+    if preferred is None:
         return None
-    return load_project_session_fn(work_dir)
+    from ..session_runtime.loading import _load_session_from_file
+
+    return _load_session_from_file(preferred, fallback_work_dir=work_dir)
 
 
 def provider_preferred_session_path(*, session, context: ProviderRuntimeContext) -> Path | None:
-    return preferred_session_path(str(getattr(session, "claude_session_path", "") or ""), context.session_ref)
+    return preferred_session_path(
+        str(getattr(session, "claude_session_path", "") or ""),
+        context.session_ref,
+        context.session_file,
+    )
 
 
 def configure_resume_reader(reader, state: dict[str, object], context: ProviderRuntimeContext) -> None:
-    preferred_session = preferred_session_path(str(state.get("session_path") or ""), context.session_ref)
+    preferred_session = preferred_session_path(
+        str(state.get("session_path") or ""),
+        context.session_ref,
+        context.session_file,
+    )
     if preferred_session is not None:
         reader.set_preferred_session(preferred_session)
 
@@ -129,6 +154,7 @@ def start_active_submission(
     if preferred_session is not None:
         reader.set_preferred_session(preferred_session)
     state = reader.capture_state()
+    session_path = state_session_path(state) or (str(preferred_session) if preferred_session is not None else '')
     request_anchor = request_anchor_fn(job.job_id)
     completion_dir = completion_dir_for_session(prepared.session)
     no_wrap = no_wrap_requested(job)
@@ -163,7 +189,7 @@ def start_active_submission(
             "anchor_seen": no_wrap,
             "reply_buffer": "",
             "raw_buffer": "",
-            "session_path": state_session_path(state),
+            "session_path": session_path,
             "completion_dir": completion_dir,
             "no_wrap": no_wrap,
             "prompt_text": prompt,
