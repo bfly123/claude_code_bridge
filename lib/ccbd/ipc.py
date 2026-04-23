@@ -110,12 +110,24 @@ def _connect_pipe(endpoint_ref: str, *, timeout_s: float):
 
 
 def _wait_for_pipe(endpoint_ref: str, *, timeout_s: float) -> None:
-    try:
-        _wait_for_pipe_once(endpoint_ref, timeout_s=timeout_s)
-    except BaseException as exc:
-        if isinstance(exc, TimeoutError):
-            raise
-        raise TimeoutError('timed out waiting for named pipe availability') from exc
+    deadline = time.monotonic() + max(0.0, float(timeout_s))
+    last_error: BaseException | None = None
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            if last_error is None:
+                raise TimeoutError('timed out waiting for named pipe availability')
+            if isinstance(last_error, TimeoutError):
+                raise last_error
+            raise TimeoutError('timed out waiting for named pipe availability') from last_error
+        try:
+            _wait_for_pipe_once(endpoint_ref, timeout_s=min(0.2, remaining))
+            return
+        except BaseException as exc:
+            last_error = exc
+        sleep_s = min(0.05, max(0.0, deadline - time.monotonic()))
+        if sleep_s > 0:
+            time.sleep(sleep_s)
 
 
 def _wait_for_pipe_once(endpoint_ref: str, *, timeout_s: float) -> None:
@@ -399,7 +411,7 @@ class _NamedPipeServerTransport:
         self._accept_error = None
         self._accept_thread = threading.Thread(target=self._accept_loop, daemon=True)
         self._accept_thread.start()
-        if not self._ready_event.wait(timeout=1.0):
+        if not self._ready_event.wait(timeout=_named_pipe_listener_ready_timeout_s()):
             raise TimeoutError(f'timed out starting named pipe listener: {self.endpoint_ref}')
         if self._accept_error is not None:
             error = self._accept_error
@@ -487,6 +499,10 @@ class _NamedPipeServerTransport:
             except Exception:
                 pass
         self.listen()
+
+
+def _named_pipe_listener_ready_timeout_s() -> float:
+    return 5.0
 
 
 class _CompatUnixSocketServerTransport:
