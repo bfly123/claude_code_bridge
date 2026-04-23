@@ -16,7 +16,9 @@ class CcbdProcessError(RuntimeError):
 
 
 def _ready_probe_timeout_s(ipc_kind: str | None) -> float:
-    return 1.0 if str(ipc_kind or '').strip().lower() == 'named_pipe' else 0.2
+    if str(ipc_kind or '').strip().lower() != 'named_pipe':
+        return 0.2
+    return 10.0 if os.name == 'nt' else 1.0
 
 
 def spawn_ccbd_process(

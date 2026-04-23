@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from agents.config_identity import project_config_identity_payload
@@ -13,7 +14,9 @@ from .support import reap_child_processes, try_acquire_keeper_lock
 
 
 def _probe_timeout_s(ipc_kind: str | None) -> float:
-    return 1.0 if str(ipc_kind or '').strip().lower() == 'named_pipe' else 0.2
+    if str(ipc_kind or '').strip().lower() != 'named_pipe':
+        return 0.2
+    return 30.0 if os.name == 'nt' else 1.0
 
 
 def run_forever(app, *, poll_interval: float = 0.5, start_timeout_s: float = 20.0) -> int:
