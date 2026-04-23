@@ -472,6 +472,7 @@ def test_ensure_agent_runtime_launches_named_gemini_session(monkeypatch, tmp_pat
 
 
 def test_ensure_agent_runtime_launches_named_claude_session(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv('CLAUDE_START_CMD', raising=False)
     project_root = tmp_path / 'repo-claude'
     (project_root / '.ccb').mkdir(parents=True)
     ctx = _context(project_root, ParsedStartCommand(project=None, agent_names=('reviewer',), restore=True, auto_permission=True))
@@ -1192,6 +1193,7 @@ def test_codex_launcher_build_start_cmd_reads_resume_cmd_from_agent_scoped_sessi
 
 
 def test_claude_launcher_build_start_cmd_uses_overlay_and_drops_dead_local_user_proxy(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv('CLAUDE_START_CMD', raising=False)
     runtime_dir = tmp_path / 'runtime'
     runtime_dir.mkdir(parents=True, exist_ok=True)
     home_dir = tmp_path / 'home'
@@ -1317,6 +1319,7 @@ def test_claude_launcher_build_start_cmd_uses_isolated_profile_api_env(monkeypat
 
 
 def test_claude_launcher_build_start_cmd_uses_agent_settings_overlay_when_present(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv('CLAUDE_START_CMD', raising=False)
     runtime_dir = tmp_path / 'runtime'
     profile_root = tmp_path / 'profile'
     runtime_dir.mkdir(parents=True, exist_ok=True)
