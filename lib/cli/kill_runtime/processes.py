@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import os
 import signal
 import subprocess
@@ -29,6 +30,8 @@ def kill_pid(pid: int, *, force: bool = False) -> bool:
 def is_pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
+    if os.name == "nt":
+        return _windows_pid_exists(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -38,6 +41,22 @@ def is_pid_alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def _windows_pid_exists(pid: int) -> bool:
+    try:
+        result = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {int(pid)}", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except Exception:
+        return False
+    if result.returncode != 0:
+        return False
+    rows = [row for row in csv.reader((result.stdout or "").splitlines()) if row]
+    return any(len(row) > 1 and row[1].strip().strip('\"') == str(int(pid)) for row in rows)
 
 
 def terminate_pid_tree(
