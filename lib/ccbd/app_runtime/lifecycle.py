@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from ccbd.models import CcbdStartupReport, MountState
+from ccbd.models import CcbdStartupReport, LeaseHealth, LeaseInspection, MountState
 
 
 def start(app, *, defer_post_listen: bool = False):
@@ -104,7 +104,8 @@ def _complete_startup(app) -> None:
 
 def heartbeat(app):
     app.health_monitor.check_all()
-    app.runtime_supervision.reconcile_once()
+    if _should_run_runtime_supervision(app):
+        app.runtime_supervision.reconcile_once()
     app.dispatcher.reconcile_runtime_views()
     app.dispatcher.tick()
     app.dispatcher.poll_completions()
@@ -171,7 +172,7 @@ def record_startup_report(
     failure_reason: str | None = None,
 ) -> None:
     try:
-        inspection = app.ownership_guard.inspect()
+        inspection = _startup_report_inspection(app)
         report = CcbdStartupReport(
             project_id=app.project_id,
             generated_at=app.clock(),
@@ -196,6 +197,32 @@ def record_startup_report(
         return
 
 
+
+def _startup_report_inspection(app) -> LeaseInspection:
+    lease = getattr(app, 'lease', None)
+    if lease is None or lease.ccbd_pid != app.pid:
+        return app.ownership_guard.inspect()
+    if lease.mount_state is MountState.MOUNTED:
+        return LeaseInspection(
+            lease=lease,
+            health=LeaseHealth.HEALTHY,
+            pid_alive=True,
+            socket_connectable=True,
+            heartbeat_fresh=True,
+            takeover_allowed=False,
+            reason='healthy',
+        )
+    return LeaseInspection(
+        lease=lease,
+        health=LeaseHealth.UNMOUNTED,
+        pid_alive=True,
+        socket_connectable=False,
+        heartbeat_fresh=True,
+        takeover_allowed=True,
+        reason='lease_unmounted',
+    )
+
+
 def effective_poll_interval(poll_interval: float) -> float:
     try:
         requested = float(poll_interval)
@@ -208,6 +235,21 @@ def effective_poll_interval(poll_interval: float) -> float:
     requested = max(0.0, requested)
     minimum = max(0.0, minimum)
     return max(requested, minimum)
+
+
+def _should_run_runtime_supervision(app) -> bool:
+    known_agents = tuple(getattr(app.registry, 'list_known_agents', lambda: ())())
+    dispatcher_state = getattr(getattr(app, 'dispatcher', None), '_state', None)
+    for agent_name in known_agents:
+        if app.registry.get(agent_name) is not None:
+            return True
+        if dispatcher_state is not None:
+            try:
+                if dispatcher_state.has_outstanding(agent_name):
+                    return True
+            except Exception:
+                continue
+    return False
 
 
 def _cleanup_ipc_endpoint(app) -> None:
