@@ -163,8 +163,6 @@ class _PipeConnectionAdapter:
 
     def recv(self, size: int) -> bytes:
         if not self._buffer:
-            if self._timeout_s is not None and not _connection_has_data(self._connection, self._timeout_s):
-                raise TimeoutError('timed out waiting for named pipe data')
             try:
                 self._buffer = _run_connection_operation(
                     self._connection,
@@ -275,18 +273,6 @@ def _build_named_pipe_listener(endpoint_ref: str):
     if os.name == 'nt' and _winapi is not None and PipeConnection is not None:
         return _SingleInstanceNamedPipeListener(endpoint_ref)
     return PipeListener(address=endpoint_ref, family='AF_PIPE')
-
-
-def _connection_has_data(connection, timeout_s: float) -> bool:
-    return bool(
-        _run_connection_operation(
-            connection,
-            timeout_s=timeout_s,
-            operation=lambda: connection.poll(timeout_s),
-            timeout_message='timed out waiting for named pipe data',
-            close_on_timeout=True,
-        )
-    )
 
 
 def _run_connection_operation(
