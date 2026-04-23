@@ -5,13 +5,17 @@ from pathlib import Path
 from typing import Any, Callable, TypeVar
 
 from storage.atomic import atomic_write_text
+from storage.locks import file_lock
 
 T = TypeVar('T')
 
 
 class JsonStore:
     def load(self, path: Path, loader: Callable[[dict[str, Any]], T] | None = None) -> T | dict[str, Any]:
-        payload = json.loads(Path(path).read_text(encoding='utf-8'))
+        target = Path(path)
+        lock_path = target.with_name(f'.{target.name}.lock')
+        with file_lock(lock_path):
+            payload = json.loads(target.read_text(encoding='utf-8'))
         if not isinstance(payload, dict):
             raise ValueError(f'{path}: expected JSON object')
         if loader is None:
