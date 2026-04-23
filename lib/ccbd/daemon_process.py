@@ -39,7 +39,11 @@ def spawn_ccbd_process(
         'stderr': stderr_log,
     }
     if os.name == 'nt':
-        popen_kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+        popen_kwargs['creationflags'] = (
+            subprocess.CREATE_NEW_PROCESS_GROUP
+            | subprocess.DETACHED_PROCESS
+            | subprocess.CREATE_NO_WINDOW
+        )
     else:
         popen_kwargs['start_new_session'] = True
     process = subprocess.Popen(
