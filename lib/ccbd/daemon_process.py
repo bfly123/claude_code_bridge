@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -92,9 +93,29 @@ def _ready_fallback_allowed(ipc_kind: str | None) -> bool:
 def _ccbd_env(*, keeper_pid: int | None) -> dict[str, str]:
     env = dict(os.environ)
     env['PYTHONUNBUFFERED'] = '1'
+    env['PATH'] = os.environ.get('PATH', '')
     lib_root = str(Path(__file__).resolve().parents[1])
     current_pythonpath = env.get('PYTHONPATH')
     env['PYTHONPATH'] = lib_root if not current_pythonpath else lib_root + os.pathsep + current_pythonpath
+    if os.name == 'nt':
+        native_enabled = str(env.get('CCB_EXPERIMENTAL_WINDOWS_NATIVE') or '').strip().lower() in {
+            '1', 'true', 'yes', 'on'
+        }
+        if native_enabled:
+            resolved_psmux = str(env.get('CCB_PSMUX_BIN') or '').strip()
+            if not resolved_psmux:
+                resolved_psmux = shutil.which('psmux') or ''
+            if resolved_psmux:
+                env['CCB_PSMUX_BIN'] = resolved_psmux
+            else:
+                raise RuntimeError('psmux not found in PATH; set CCB_PSMUX_BIN')
+        if not str(env.get('CCB_WINDOWS_SHELL_BIN') or '').strip():
+            resolved_shell = (
+                shutil.which('pwsh')
+                or shutil.which('powershell')
+                or str(Path(r'C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe'))
+            )
+            env['CCB_WINDOWS_SHELL_BIN'] = resolved_shell
     if keeper_pid is not None and keeper_pid > 0:
         env['CCB_KEEPER_PID'] = str(int(keeper_pid))
     return env

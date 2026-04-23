@@ -13,14 +13,17 @@ _PLACEHOLDER_CMD_WINDOWS = 'while ($true) { Start-Sleep -Seconds 3600 }'
 def _placeholder_spawn_args(backend) -> list[str]:
     backend_impl = str(getattr(backend, 'backend_impl', '') or '').strip().lower()
     if os.name == 'nt' and backend_impl == 'psmux':
-        shell, shell_flag = default_shell(is_wsl_fn=is_wsl, is_windows_fn=is_windows)
+        shell_flag = '-Command'
+        resolved_shell = str(os.environ.get('CCB_WINDOWS_SHELL_BIN') or '').strip()
         placeholder = _PLACEHOLDER_CMD_WINDOWS
+        if resolved_shell:
+            return [resolved_shell, '-NoLogo', shell_flag, placeholder]
+        shell, shell_flag = default_shell(is_wsl_fn=is_wsl, is_windows_fn=is_windows)
         if shell == 'pwsh':
-            return ['pwsh', '-NoLogo', shell_flag, placeholder]
+            return [shutil.which('pwsh') or 'pwsh', '-NoLogo', shell_flag, placeholder]
         if shell == 'powershell':
-            return ['powershell', '-NoLogo', shell_flag, placeholder]
-        resolved = shutil.which('powershell') or 'powershell'
-        return [resolved, '-NoLogo', '-Command', placeholder]
+            return [shutil.which('powershell') or 'powershell', '-NoLogo', shell_flag, placeholder]
+        return [shutil.which('powershell') or 'powershell', '-NoLogo', '-Command', placeholder]
     return ['sh', '-lc', _PLACEHOLDER_CMD]
 
 
