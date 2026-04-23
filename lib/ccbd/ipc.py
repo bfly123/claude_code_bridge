@@ -203,51 +203,44 @@ class _PipeConnectionAdapter:
         self.close()
 
 
+@dataclass
+class _PendingPipeInstance:
+    handle: int
+    overlapped: object | None
+
+
 class _SingleInstanceNamedPipeListener:
     def __init__(self, endpoint_ref: str) -> None:
         if _winapi is None or PipeConnection is None:
             raise RuntimeError('single-instance named pipe listener is unavailable')
         self._endpoint_ref = str(endpoint_ref)
         self._first = True
-        self._pending_handle = None
+        self._pending_instance: _PendingPipeInstance | None = None
 
     def accept(self):
-        handle = self._new_handle()
+        current = self._pending_instance or self._start_pending_instance()
+        self._pending_instance = None
         try:
             self._prime_pending_handle()
         except BaseException:
-            _winapi.CloseHandle(handle)
+            _winapi.CloseHandle(current.handle)
             raise
         try:
-            overlapped = _winapi.ConnectNamedPipe(handle, overlapped=True)
-        except OSError as exc:
-            if exc.winerror not in {_winapi.ERROR_NO_DATA, _winapi.ERROR_PIPE_CONNECTED}:
-                _winapi.CloseHandle(handle)
-                raise
-        else:
-            try:
-                _winapi.WaitForMultipleObjects([overlapped.event], False, _winapi.INFINITE)
-            except BaseException:
-                overlapped.cancel()
-                _winapi.CloseHandle(handle)
-                raise
-            finally:
-                _, err = overlapped.GetOverlappedResult(True)
-                assert err == 0
-        return PipeConnection(handle)
+            self._finish_pending_instance(current)
+        except BaseException:
+            _winapi.CloseHandle(current.handle)
+            raise
+        return PipeConnection(current.handle)
 
     def close(self) -> None:
-        handle, self._pending_handle = self._pending_handle, None
-        if handle is not None:
+        instance, self._pending_instance = self._pending_instance, None
+        if instance is not None:
             try:
-                _winapi.CloseHandle(handle)
+                _winapi.CloseHandle(instance.handle)
             except Exception:
                 pass
 
     def _new_handle(self):
-        if self._pending_handle is not None:
-            handle, self._pending_handle = self._pending_handle, None
-            return handle
         flags = _winapi.PIPE_ACCESS_DUPLEX | _winapi.FILE_FLAG_OVERLAPPED
         if self._first:
             flags |= _winapi.FILE_FLAG_FIRST_PIPE_INSTANCE
@@ -256,7 +249,7 @@ class _SingleInstanceNamedPipeListener:
             self._endpoint_ref,
             flags,
             _winapi.PIPE_TYPE_MESSAGE | _winapi.PIPE_READMODE_MESSAGE | _winapi.PIPE_WAIT,
-            1,
+            getattr(_winapi, 'PIPE_UNLIMITED_INSTANCES', 255),
             65536,
             65536,
             _winapi.NMPWAIT_WAIT_FOREVER,
@@ -264,9 +257,32 @@ class _SingleInstanceNamedPipeListener:
         )
 
     def _prime_pending_handle(self) -> None:
-        if self._pending_handle is not None:
+        if self._pending_instance is not None:
             return
-        self._pending_handle = self._new_handle()
+        self._pending_instance = self._start_pending_instance()
+
+    def _start_pending_instance(self) -> _PendingPipeInstance:
+        handle = self._new_handle()
+        try:
+            overlapped = _winapi.ConnectNamedPipe(handle, overlapped=True)
+        except OSError as exc:
+            if exc.winerror in {_winapi.ERROR_NO_DATA, _winapi.ERROR_PIPE_CONNECTED}:
+                return _PendingPipeInstance(handle=handle, overlapped=None)
+            _winapi.CloseHandle(handle)
+            raise
+        return _PendingPipeInstance(handle=handle, overlapped=overlapped)
+
+    def _finish_pending_instance(self, instance: _PendingPipeInstance) -> None:
+        if instance.overlapped is None:
+            return
+        try:
+            _winapi.WaitForMultipleObjects([instance.overlapped.event], False, _winapi.INFINITE)
+        except BaseException:
+            instance.overlapped.cancel()
+            raise
+        finally:
+            _, err = instance.overlapped.GetOverlappedResult(True)
+            assert err == 0
 
 
 def _build_named_pipe_listener(endpoint_ref: str):
