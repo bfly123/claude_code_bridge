@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import errno
 import ctypes
 import hashlib
 from pathlib import Path
@@ -175,6 +176,10 @@ class _PipeConnectionAdapter:
                 return b''
             except OSError as exc:
                 if isinstance(exc, TimeoutError):
+                    raise
+                if self._timeout_s is None:
+                    if _connection_closed_error(exc):
+                        return b''
                     raise
                 return b''
         chunk = self._buffer[:size]

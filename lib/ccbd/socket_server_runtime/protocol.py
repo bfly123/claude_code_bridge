@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 
 from ccbd.api_models import RpcRequest, RpcResponse
 
@@ -8,7 +9,11 @@ from ccbd.api_models import RpcRequest, RpcResponse
 def handle_connection(server, conn) -> str | None:
     raw = b''
     while b'\n' not in raw:
-        chunk = conn.recv(65536)
+        try:
+            chunk = conn.recv(65536)
+        except OSError as exc:
+            print(f'[ccbd] named pipe recv failed: {exc}', file=sys.stderr)
+            return None
         if not chunk:
             break
         raw += chunk
