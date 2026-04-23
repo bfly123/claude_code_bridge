@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import time
 from dataclasses import dataclass
 from typing import Callable
+
+_TMUX_RESPAWN_RETRY_TIMEOUT_S = 1.0
+_TMUX_RESPAWN_RETRY_INTERVAL_S = 0.05
 
 
 @dataclass
@@ -39,7 +44,7 @@ class TmuxRespawnService:
             start_dir=start_dir,
             full_command=full,
         )
-        self.tmux_run_fn(tmux_args, check=True)
+        _run_respawn_command(self, tmux_args)
         if remain_on_exit:
             _set_remain_on_exit(self, pane_id)
 
@@ -85,3 +90,40 @@ def _tmux_default_shell(service: TmuxRespawnService) -> str:
 
 def _set_remain_on_exit(service: TmuxRespawnService, pane_id: str) -> None:
     service.tmux_run_fn(['set-option', '-p', '-t', pane_id, 'remain-on-exit', 'on'], check=False)
+
+
+def _run_respawn_command(service: TmuxRespawnService, tmux_args: list[str]) -> None:
+    deadline = time.monotonic() + _TMUX_RESPAWN_RETRY_TIMEOUT_S
+    last_error: RuntimeError | None = None
+    while True:
+        try:
+            _run_respawn_once(service, tmux_args)
+            return
+        except RuntimeError as exc:
+            if not _is_retryable_respawn_error(exc):
+                raise
+            last_error = exc
+        if time.monotonic() >= deadline:
+            if last_error is not None:
+                raise last_error
+            raise RuntimeError('respawn pane failed')
+        time.sleep(_TMUX_RESPAWN_RETRY_INTERVAL_S)
+
+
+def _run_respawn_once(service: TmuxRespawnService, tmux_args: list[str]) -> None:
+    cp = service.tmux_run_fn(tmux_args, check=False, capture=True)
+    if int(getattr(cp, 'returncode', 1) or 0) == 0:
+        return
+    raise RuntimeError(_respawn_failure_text(cp, tmux_args))
+
+
+def _respawn_failure_text(cp: subprocess.CompletedProcess | object, tmux_args: list[str]) -> str:
+    stderr = str(getattr(cp, 'stderr', '') or '').strip()
+    stdout = str(getattr(cp, 'stdout', '') or '').strip()
+    detail = stderr or stdout or f'tmux command failed: {" ".join(tmux_args)}'
+    return f'respawn pane failed: {detail}'
+
+
+def _is_retryable_respawn_error(exc: RuntimeError) -> bool:
+    text = str(exc).strip().lower()
+    return 'fork failed' in text
