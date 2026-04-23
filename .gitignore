@@ -31,3 +31,5 @@ openspec
 tmp_*
 .tmp_*
 .testlogs/
+
+.gemini/
