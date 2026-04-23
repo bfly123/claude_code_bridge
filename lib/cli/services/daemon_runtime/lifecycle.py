@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 
 from ccbd.models import LeaseHealth
@@ -23,6 +24,7 @@ def ensure_daemon_started(
 ) -> DaemonHandle:
     clear_shutdown_intent_fn(context)
     state = DaemonStartState(keeper_started=bool(ensure_keeper_started_fn(context)))
+    tolerate_interrupts = _should_tolerate_keyboard_interrupt(context)
     deadline = time.time() + start_timeout_s
 
     while time.time() < deadline:
@@ -38,7 +40,7 @@ def ensure_daemon_started(
         )
         if handle is not None:
             return handle
-        time.sleep(0.05)
+        _sleep(0.05, tolerate_interrupts=tolerate_interrupts)
 
     return finalize_daemon_start(
         context,
@@ -79,6 +81,24 @@ def connect_mounted_daemon(
             return handle
         raise CcbdServiceError(incompatible_daemon_error_fn())
     raise CcbdServiceError(f'ccbd is unavailable: {inspection.reason}')
+
+
+def _should_tolerate_keyboard_interrupt(context) -> bool:
+    return os.name == 'nt' or getattr(context.paths, 'ccbd_ipc_kind', None) == 'named_pipe'
+
+
+def _sleep(duration_s: float, *, tolerate_interrupts: bool) -> None:
+    deadline = time.time() + max(0.0, float(duration_s))
+    while True:
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            return
+        try:
+            time.sleep(remaining)
+            return
+        except KeyboardInterrupt:
+            if not tolerate_interrupts:
+                raise
 
 
 __all__ = ['connect_mounted_daemon', 'ensure_daemon_started']
