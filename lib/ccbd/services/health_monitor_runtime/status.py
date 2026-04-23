@@ -6,7 +6,7 @@ from agents.models import AgentState, RuntimeBindingSource, normalize_runtime_bi
 
 
 def daemon_health(monitor):
-    return monitor._ownership_guard.inspect()
+    return monitor._ownership_guard.inspect(skip_socket_probe=True)
 
 
 def check_all(monitor) -> dict[str, str]:

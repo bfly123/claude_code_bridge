@@ -40,12 +40,12 @@ class OwnershipGuard:
         with file_lock(lock_path):
             yield
 
-    def inspect(self, lease: CcbdLease | None = None) -> LeaseInspection:
+    def inspect(self, lease: CcbdLease | None = None, *, skip_socket_probe: bool = False) -> LeaseInspection:
         current = lease if lease is not None else self._mount_manager.load_state()
         if current is None:
             return self._missing_inspection()
 
-        pid_alive, heartbeat_fresh, socket_connectable = self._lease_signals(current)
+        pid_alive, heartbeat_fresh, socket_connectable = self._lease_signals(current, skip_socket_probe=skip_socket_probe)
         if current.mount_state is MountState.UNMOUNTED:
             return self._inspection(
                 current,
@@ -122,15 +122,17 @@ class OwnershipGuard:
             reason='lease_missing',
         )
 
-    def _lease_signals(self, lease: CcbdLease) -> tuple[bool, bool, bool]:
+    def _lease_signals(self, lease: CcbdLease, *, skip_socket_probe: bool = False) -> tuple[bool, bool, bool]:
         pid_alive = self._pid_exists(lease.ccbd_pid)
         heartbeat_fresh = self._heartbeat_is_fresh(lease)
-        socket_connectable = self._mounted_socket_connectable(lease)
+        socket_connectable = self._mounted_socket_connectable(lease, skip_socket_probe=skip_socket_probe)
         return pid_alive, heartbeat_fresh, socket_connectable
 
-    def _mounted_socket_connectable(self, lease: CcbdLease) -> bool:
+    def _mounted_socket_connectable(self, lease: CcbdLease, *, skip_socket_probe: bool = False) -> bool:
         if lease.mount_state is not MountState.MOUNTED:
             return False
+        if skip_socket_probe:
+            return True
         if lease.ccbd_pid == self._current_pid:
             return True
         ipc_kind = getattr(lease, 'ipc_kind', None)
