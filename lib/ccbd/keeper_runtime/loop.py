@@ -116,12 +116,26 @@ def reconcile_connectable_daemon(app, *, state: KeeperState, inspection, now: st
 
 
 def restart_state_from_inspection(app, *, state: KeeperState, inspection, occurred_at: str) -> KeeperState | None:
+    if fresh_named_pipe_daemon_busy(inspection):
+        return None
     stale = stale_restart_state(app, state=state, inspection=inspection, occurred_at=occurred_at)
     if stale is not None:
         return stale
     if inspection.health in {LeaseHealth.MISSING, LeaseHealth.UNMOUNTED, LeaseHealth.STALE}:
         return state.with_restart_attempt(occurred_at=occurred_at)
     return None
+
+
+def fresh_named_pipe_daemon_busy(inspection) -> bool:
+    lease = inspection.lease
+    return (
+        os.name == 'nt'
+        and lease is not None
+        and str(getattr(lease, 'ipc_kind', '') or '').strip().lower() == 'named_pipe'
+        and inspection.pid_alive
+        and inspection.heartbeat_fresh
+        and not inspection.socket_connectable
+    )
 
 
 def stale_restart_state(app, *, state: KeeperState, inspection, occurred_at: str) -> KeeperState | None:

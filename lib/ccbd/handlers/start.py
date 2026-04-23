@@ -8,6 +8,7 @@ def build_start_handler(app):
             for item in (payload.get('agent_names') or ())
             if str(item).strip()
         )
+        app.lease = app.mount_manager.refresh_heartbeat()
         summary = app.runtime_supervisor.start(
             agent_names=requested,
             restore=bool(payload.get('restore')),
