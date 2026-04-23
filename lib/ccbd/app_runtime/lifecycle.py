@@ -70,16 +70,12 @@ def start(app):
 
 
 def heartbeat(app):
-    app.health_monitor.check_all()
-    app.runtime_supervision.reconcile_once()
-    app.dispatcher.reconcile_runtime_views()
-    app.dispatcher.tick()
-    app.dispatcher.poll_completions()
-    app.job_heartbeat.tick(app.dispatcher)
+    failures = _heartbeat_failures(app)
     app.lease = app.mount_manager.refresh_heartbeat(
         expected_pid=app.pid,
         expected_daemon_instance_id=app.daemon_instance_id,
     )
+    _record_heartbeat_failures(app, failures=failures)
     return app.lease
 
 
@@ -378,6 +374,40 @@ def _mark_lifecycle_failed(app, *, failure_reason: str) -> None:
             last_failure_reason=failure_reason,
         )
     )
+
+
+def _heartbeat_failures(app) -> tuple[str, ...]:
+    failures: list[str] = []
+    for step_name, action in (
+        ('health_monitor', app.health_monitor.check_all),
+        ('runtime_supervision', app.runtime_supervision.reconcile_once),
+        ('dispatcher_runtime_views', app.dispatcher.reconcile_runtime_views),
+        ('dispatcher_tick', app.dispatcher.tick),
+        ('dispatcher_poll_completions', app.dispatcher.poll_completions),
+        ('job_heartbeat', lambda: app.job_heartbeat.tick(app.dispatcher)),
+    ):
+        try:
+            action()
+        except Exception as exc:
+            failures.append(f'heartbeat:{step_name}: {type(exc).__name__}: {exc}')
+    return tuple(failures)
+
+
+def _record_heartbeat_failures(app, *, failures: tuple[str, ...]) -> None:
+    lifecycle = app.lifecycle_store.load()
+    if lifecycle is None:
+        return
+    if lifecycle.phase not in {'starting', 'mounted'}:
+        return
+    next_reason = ' | '.join(failures) if failures else None
+    if lifecycle.last_failure_reason == next_reason:
+        return
+    try:
+        app.lifecycle_store.save(
+            lifecycle.with_updates(last_failure_reason=next_reason)
+        )
+    except Exception:
+        return
 
 
 __all__ = [

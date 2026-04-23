@@ -87,6 +87,28 @@ def _wait_for_any_status(cwd: Path, target: str, expected: tuple[str, ...], *, t
     raise AssertionError(f'expected any status {expected!r}; last stdout={last.stdout!r} stderr={last.stderr!r}')
 
 
+def _wait_for_ccbd_execution_summary(
+    cwd: Path,
+    *,
+    active_execution_count: int,
+    recoverable_execution_count: int,
+    timeout: float = 3.0,
+) -> subprocess.CompletedProcess[str]:
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        last = _run_ccb(['ping', 'ccbd'], cwd=cwd)
+        if last.returncode == 0:
+            stdout = last.stdout
+            if (
+                f'active_execution_count: {active_execution_count}' in stdout
+                and f'recoverable_execution_count: {recoverable_execution_count}' in stdout
+            ):
+                return last
+        time.sleep(0.05)
+    raise AssertionError(f'expected execution summary; last stdout={last.stdout!r} stderr={last.stderr!r}')
+
+
 def _run_phase2_local(args: list[str], *, cwd: Path) -> tuple[int, str, str]:
     stdout = StringIO()
     stderr = StringIO()
@@ -1034,7 +1056,7 @@ def test_ccb_long_running_job_keeps_heartbeat_and_doctor_healthy(tmp_path: Path)
     assert start.returncode == 0, start.stderr
 
     ask = _run_ccb(
-        ['ask', '--task-id', 'fake;latency_ms=1800', 'demo', 'from', 'user', 'heartbeat probe'],
+        ['ask', '--task-id', 'fake;latency_ms=4000', 'demo', 'from', 'user', 'heartbeat probe'],
         cwd=project_root,
     )
     assert ask.returncode == 0, ask.stderr
@@ -1060,7 +1082,12 @@ def test_ccb_long_running_job_keeps_heartbeat_and_doctor_healthy(tmp_path: Path)
     assert 'ccbd_pending_items_count:' in doctor_1.stdout
     assert 'ccbd_terminal_pending_count:' in doctor_1.stdout
 
-    ping = _run_ccb(['ping', 'ccbd'], cwd=project_root)
+    ping = _wait_for_ccbd_execution_summary(
+        project_root,
+        active_execution_count=1,
+        recoverable_execution_count=1,
+        timeout=2.0,
+    )
     assert ping.returncode == 0, ping.stderr
     assert 'active_execution_count: 1' in ping.stdout
     assert 'recoverable_execution_count: 1' in ping.stdout

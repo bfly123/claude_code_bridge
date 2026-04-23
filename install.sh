@@ -105,11 +105,12 @@ msg() {
   fi
 }
 
-# Check for root/sudo - refuse to run as root
-if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
-  msg root_error >&2
-  exit 1
-fi
+require_non_root_execution() {
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    msg root_error >&2
+    exit 1
+  fi
+}
 
 SCRIPTS_TO_LINK=(
   bin/ask
@@ -2105,6 +2106,8 @@ main() {
     usage
     exit 1
   fi
+
+  require_non_root_execution
 
   case "$1" in
     install)

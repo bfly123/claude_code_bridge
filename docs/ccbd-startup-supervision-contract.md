@@ -295,6 +295,9 @@ Project namespace compatibility:
 - when the stored visible layout signature differs from the desired visible layout signature for the current foreground start, startup must recreate the project namespace rather than incrementally splitting an old pane tree
 - when startup creates a fresh project namespace session, the root pane must begin as a silent placeholder process rather than an interactive shell
 - for a fresh namespace, the `cmd` pane bootstrap happens only after layout finalization and must replace that silent placeholder in place
+- project-namespace bootstrap must treat tmux server warmup and tmux server-policy persistence as separate steps:
+  - `prepare_server` warms the server boundary only
+  - server-global options that require a live session, such as `destroy-unattached off`, must be applied only after the authoritative project session exists
 - startup must not rely on "real shell first, respawn later" behavior for the `cmd` pane, because that leaves stale prompt residue and can surface zsh no-newline `%` markers
 - `cmd`-anchored projects must treat exact project-namespace pane membership as the reuse gate for pane-backed bindings
 - provider-specific live runtime identity proof may further narrow that reuse gate
@@ -366,6 +369,7 @@ Important rule:
 - if local replacement cannot restore `cmd`, `cmd` slot recovery must escalate through that same session-preserving `pane_recovery:*` reflow path, with `pane_recovery:cmd` as the canonical reason
 - if pane recovery is done by project-namespace reflow, pane position must return to the canonical layout derived from `.ccb/ccb.config`, not whichever slot tmux happens to assign during local recovery
 - workspace reflow must preserve the tmux server and tmux session; only the workspace window may be replaced
+- transient tmux/server-readiness failures during heartbeat-driven supervision must degrade or retry background maintenance, but must not by themselves crash or unmount the current authoritative `ccbd`
 - recovery must always use restore semantics even if the original foreground `ccb` invocation did not pass `-r`
 - recovery must inherit `auto_permission` from the persisted project start policy rather than falling back to hardcoded defaults
 

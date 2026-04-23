@@ -554,7 +554,7 @@ def test_project_namespace_controller_uses_silent_server_commands(tmp_path: Path
     controller.ensure()
     controller.destroy(reason='kill')
 
-    new_session_calls = [args for args, capture in backend.tmux_calls if args[:2] == ['new-session', '-d'] and capture is False]
+    new_session_calls = [args for args, _capture in backend.tmux_calls if args[:2] == ['new-session', '-d']]
     assert len(new_session_calls) == 1
     assert new_session_calls[0][-3:] == ['sh', '-lc', 'while :; do sleep 3600; done']
     assert (['start-server'], True) in backend.tmux_calls

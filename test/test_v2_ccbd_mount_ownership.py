@@ -1198,6 +1198,39 @@ def test_ccbd_heartbeat_uses_persisted_start_policy_for_recovery_mount(tmp_path:
     assert running.status.value == 'running'
 
 
+def test_ccbd_heartbeat_keeps_backend_mounted_on_background_supervision_failure(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-heartbeat-step-failure'
+    project_root.mkdir()
+    config_path = project_root / '.ccb' / 'ccb.config'
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text('codex:codex\n', encoding='utf-8')
+    ctx = bootstrap_project(project_root)
+    app = CcbdApp(project_root)
+
+    app.start()
+
+    monkeypatch.setattr(app.health_monitor, 'check_all', lambda: {})
+    monkeypatch.setattr(app.runtime_supervision, 'reconcile_once', lambda: (_ for _ in ()).throw(RuntimeError('tmux boom')))
+    monkeypatch.setattr(app.dispatcher, 'reconcile_runtime_views', lambda: None)
+    monkeypatch.setattr(app.dispatcher, 'tick', lambda: ())
+    monkeypatch.setattr(app.dispatcher, 'poll_completions', lambda: ())
+    monkeypatch.setattr(app.job_heartbeat, 'tick', lambda dispatcher: ())
+
+    app.heartbeat()
+
+    inspection = app.ownership_guard.inspect()
+    assert inspection.health is LeaseHealth.HEALTHY
+    lifecycle = app.lifecycle_store.load()
+    assert lifecycle is not None
+    assert lifecycle.phase == 'mounted'
+    assert lifecycle.last_failure_reason == 'heartbeat:runtime_supervision: RuntimeError: tmux boom'
+
+    app.request_shutdown()
+    lease = app.mount_manager.load_state()
+    assert lease is not None
+    assert lease.mount_state is MountState.UNMOUNTED
+
+
 def test_ccbd_request_shutdown_does_not_unmount_replaced_lease_holder(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-request-shutdown-replaced'
     project_root.mkdir()

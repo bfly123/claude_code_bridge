@@ -7,7 +7,7 @@ from typing import Callable
 
 
 _PLACEHOLDER_CMD = 'while :; do sleep 3600; done'
-_TMUX_OBJECT_READY_TIMEOUT_S = 1.5
+_TMUX_OBJECT_READY_TIMEOUT_S = 3.0
 _TMUX_OBJECT_READY_POLL_INTERVAL_S = 0.05
 
 
@@ -26,8 +26,19 @@ def build_backend(backend_factory, *, socket_path: str):
 
 
 def prepare_server(backend) -> None:
-    backend._tmux_run(['start-server'], check=False, capture=True)  # type: ignore[attr-defined]
-    backend._tmux_run(['set-option', '-g', 'destroy-unattached', 'off'], check=False, capture=True)  # type: ignore[attr-defined]
+    _tmux_run_ready(
+        backend,
+        ['start-server'],
+        failure_message='failed to prepare tmux server',
+    )
+
+
+def ensure_server_policy(backend) -> None:
+    _tmux_run_ready(
+        backend,
+        ['set-option', '-g', 'destroy-unattached', 'off'],
+        failure_message='failed to persist tmux destroy-unattached policy',
+    )
 
 
 def create_session(backend, *, session_name: str, project_root, window_name: str | None = None) -> None:
@@ -52,7 +63,11 @@ def create_session(backend, *, session_name: str, project_root, window_name: str
             _PLACEHOLDER_CMD,
         ]
     )
-    backend._tmux_run(args, check=True)  # type: ignore[attr-defined]
+    _tmux_run_ready(
+        backend,
+        args,
+        failure_message=f'failed to create tmux session {session_name!r}',
+    )
 
 
 def session_window_target(session_name: str, window_name: str | None = None) -> str:
@@ -66,10 +81,10 @@ def session_window_target(session_name: str, window_name: str | None = None) -> 
 
 
 def list_windows(backend, session_name: str) -> tuple[TmuxWindowRecord, ...]:
-    result = backend._tmux_run(  # type: ignore[attr-defined]
+    result = _tmux_run_ready(
+        backend,
         ['list-windows', '-t', session_name, '-F', '#{window_id}\t#{window_name}\t#{window_active}'],
-        capture=True,
-        check=True,
+        failure_message=f'failed to list tmux windows for session {session_name!r}',
     )
     windows: list[TmuxWindowRecord] = []
     for line in (result.stdout or '').splitlines():
@@ -101,7 +116,8 @@ def find_window(backend, *, session_name: str, window_name: str) -> TmuxWindowRe
 
 
 def create_window(backend, *, session_name: str, window_name: str, project_root, select: bool = False) -> TmuxWindowRecord:
-    backend._tmux_run(
+    _tmux_run_ready(
+        backend,
         [
             'new-window',
             '-d',
@@ -115,8 +131,8 @@ def create_window(backend, *, session_name: str, window_name: str, project_root,
             '-lc',
             _PLACEHOLDER_CMD,
         ],
-        check=True,
-    )  # type: ignore[attr-defined]
+        failure_message=f'failed to create tmux window {window_name!r} for session {session_name!r}',
+    )
     record = wait_for_window(backend, session_name=session_name, window_name=window_name)
     if record is None:
         raise RuntimeError(f'failed to resolve tmux window {window_name!r} for session {session_name!r}')
@@ -147,7 +163,11 @@ def ensure_window(backend, *, session_name: str, window_name: str, project_root,
 
 
 def rename_window(backend, *, target: str, new_name: str) -> None:
-    backend._tmux_run(['rename-window', '-t', target, new_name], check=True)  # type: ignore[attr-defined]
+    _tmux_run_ready(
+        backend,
+        ['rename-window', '-t', target, new_name],
+        failure_message=f'failed to rename tmux window target {target!r} to {new_name!r}',
+    )
     session_name, _sep, _old_name = target.partition(':')
     resolved_session_name = session_name.strip()
     if resolved_session_name and wait_for_window(backend, session_name=resolved_session_name, window_name=new_name) is None:
@@ -155,7 +175,11 @@ def rename_window(backend, *, target: str, new_name: str) -> None:
 
 
 def kill_window(backend, *, target: str) -> None:
-    backend._tmux_run(['kill-window', '-t', target], check=True)  # type: ignore[attr-defined]
+    _tmux_run_ready(
+        backend,
+        ['kill-window', '-t', target],
+        failure_message=f'failed to kill tmux window target {target!r}',
+    )
 
 
 def session_alive(backend, session_name: str) -> bool:
@@ -195,7 +219,12 @@ def wait_for_window(backend, *, session_name: str, window_name: str) -> TmuxWind
 
 def select_window(backend, *, target: str) -> None:
     _wait_until_ready(
-        lambda: backend._tmux_run(['select-window', '-t', target], check=True),  # type: ignore[attr-defined]
+        lambda: _tmux_run_ready(
+            backend,
+            ['select-window', '-t', target],
+            failure_message=f'failed to select tmux window target {target!r}',
+            timeout_s=0.0,
+        ),
         failure_message=f'failed to select tmux window target {target!r}',
     )
 
@@ -210,16 +239,45 @@ def wait_for_root_pane(backend, *, target_window: str) -> str:
 
 
 def _root_pane_once(backend, *, target_window: str) -> str | None:
-    try:
-        result = backend._tmux_run(  # type: ignore[attr-defined]
-            ['list-panes', '-t', target_window, '-F', '#{pane_id}'],
-            capture=True,
-            check=True,
-        )
-    except Exception:
+    result = _tmux_run_once(
+        backend,
+        ['list-panes', '-t', target_window, '-F', '#{pane_id}'],
+    )
+    if result is None:
         return None
     pane_id = ((result.stdout or '').splitlines() or [''])[0].strip()
     return pane_id or None
+
+
+def _tmux_run_ready(
+    backend,
+    args: list[str],
+    *,
+    failure_message: str,
+    timeout_s: float | None = None,
+):
+    return _wait_until_ready(
+        lambda: _tmux_run_checked(backend, args),
+        failure_message=failure_message,
+        timeout_s=timeout_s,
+    )
+
+
+def _tmux_run_once(backend, args: list[str]):
+    try:
+        return _tmux_run_checked(backend, args)
+    except Exception:
+        return None
+
+
+def _tmux_run_checked(backend, args: list[str]):
+    result = backend._tmux_run(args, check=False, capture=True)  # type: ignore[attr-defined]
+    if int(getattr(result, 'returncode', 1) or 0) == 0:
+        return result
+    stdout = str(getattr(result, 'stdout', '') or '').strip()
+    stderr = str(getattr(result, 'stderr', '') or '').strip()
+    detail = stderr or stdout or f'tmux command failed: {" ".join(args)}'
+    raise RuntimeError(detail)
 
 
 def _wait_until(probe: Callable[[], object | None], *, timeout_s: float | None = None):
@@ -273,6 +331,7 @@ __all__ = [
     'build_backend',
     'create_session',
     'create_window',
+    'ensure_server_policy',
     'ensure_window',
     'find_window',
     'kill_window',

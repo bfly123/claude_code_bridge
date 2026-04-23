@@ -3,7 +3,14 @@ from __future__ import annotations
 from cli.services.tmux_ui import apply_project_tmux_ui
 from terminal_runtime.tmux_identity import apply_ccb_pane_identity
 
-from .backend import create_session, ensure_window, prepare_server, session_window_target, window_root_pane
+from .backend import (
+    create_session,
+    ensure_server_policy,
+    ensure_window,
+    prepare_server,
+    session_window_target,
+    window_root_pane,
+)
 
 
 def prepare_namespace_root_pane(
@@ -20,6 +27,7 @@ def prepare_namespace_root_pane(
             project_root=controller._layout.project_root,
             window_name=context.desired_control_window_name,
         )
+    ensure_server_policy(context.backend)
     ensure_window(
         context.backend,
         session_name=context.desired_session_name,

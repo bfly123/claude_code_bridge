@@ -192,6 +192,21 @@ WSL 兼容性必须收敛到统一的 runtime/system 边界，而不是散落在
 - `doctor`、`ping('ccbd')`、startup report 必须暴露实际 socket 路径
 - 前台 attach、kill、keeper ping 必须全部消费同一 `PathLayout` 决策结果
 
+### 5.6 tmux namespace readiness
+
+WSL 下除了 socket 放置，还存在 tmux server/socket 短暂就绪抖动。
+
+规则：
+
+- project namespace backend 必须把 tmux server/socket readiness 吸收到同一个 namespace backend 边界处理
+- `prepare_server`、`create_session`、`create_window`、`rename_window`、`select-window`、`list-panes/list-windows` 这类 namespace control-plane 操作，必须使用统一的 ready-retry 语义
+- tmux server warmup 与 server policy 持久化必须分阶段处理：
+  - `prepare_server` 只负责 warm up server 边界
+  - `destroy-unattached off` 这类 server-global policy 只能在 authoritative project session 已存在后写入
+  - 不得把 pre-session `set-option` 失败误判成 namespace 不可启动；真实 tmux 可能在 `start-server` 后仍返回 `no server running`
+- 背景 heartbeat 内的 namespace/supervision 失败只能记为最近一次后台维护失败，不得直接把已 mounted 的 `ccbd` authority 打成 unmounted
+- 这类容错属于 tmux namespace runtime 边界，不得散落到 CLI、provider adapter、或测试调用点
+
 ## 6. Diagnostics 方案
 
 兼容性回退不能隐藏在实现里，诊断面应新增以下字段：
@@ -258,7 +273,15 @@ CLI 管理路径不应直接从工作树执行 `install.sh`，而应：
 - `ccb update`
 - 其他由 Python 启动 Unix installer 的路径
 
-### 7.4 staging 边界
+### 7.4 source-safe helper 边界
+
+`install.sh` 还必须满足 source-safe：
+
+- 纯 helper/metadata 函数可通过 `source install.sh` 调用
+- `root/sudo` 拒绝、install/uninstall 主流程、副作用入口，只能留在脚本主入口
+- 因此测试、installer metadata、upgrade guard 等只读 helper 场景，不应因为调用方 UID 而在 source 阶段直接退出
+
+### 7.5 staging 边界
 
 staging 只是执行介质隔离，不改变安装语义：
 
@@ -308,6 +331,18 @@ staging 只是执行介质隔离，不改变安装语义：
 
 - staging + LF normalization
 - 不把兼容逻辑散进 shell 业务实现
+
+### 8.4 tmux namespace / supervision 层
+
+主要改动模块：
+
+- `lib/ccbd/services/project_namespace_runtime/backend.py`
+- `lib/ccbd/app_runtime/lifecycle.py`
+
+职责：
+
+- project namespace backend 统一处理 tmux server/socket ready-retry
+- heartbeat 背景维护失败只写最近失败原因，不得直接导致已 mounted daemon authority 退出
 
 ## 9. 测试矩阵
 
@@ -378,4 +413,3 @@ staging 只是执行介质隔离，不改变安装语义：
 - 不顺带修复 macOS 时序类失败
 
 macOS 问题应单独分析，不得为追求“跨平台统一”而把 WSL 根因混入同一个补丁里。
-
