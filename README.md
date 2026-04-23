@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Every_Model_Controllable-CF1322?style=for-the-badge" alt="Every Model Controllable">
 </p>
 
-[![Version](https://img.shields.io/badge/version-6.0.7-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-6.0.9-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 **English** | [Chinese](README_zh.md)
@@ -92,6 +92,17 @@ This layout means:
 Historical note: older release notes below may mention `askd`, legacy flags, or removed commands. Those references are kept only as changelog history and do not redefine the current CLI surface.
 
 <details open>
+<summary><b>v6.0.9</b> - Cross-Platform Lifecycle & Watch Stability</summary>
+
+- **WSL Compatibility Fixed**: project runtime now avoids binding Unix sockets onto unsupported WSL mounted-drive filesystems and hardens installer staging plus tmux namespace readiness
+- **macOS Lifecycle Hardening**: startup, restore, and project identity paths were tightened so macOS follows the same lifecycle authority model as Linux without intermittent startup drift
+- **Respawn Retry Boundary**: transient tmux respawn fork, server-exit, and readiness failures are retried inside runtime supervision instead of leaking outward as false lifecycle failures
+- **Watch Reconnect Recovery**: `watch` and ask wait can recover terminal results from persisted state after short daemon interruptions, while reconnect loops still honor timeout deadlines
+- **Cross-Platform CI Coverage**: GitHub Actions now exercises macOS install smoke and WSL compatibility paths alongside the existing Linux matrix
+
+</details>
+
+<details>
 <summary><b>v6.0.7</b> - Lifecycle Authority & Shutdown Stability</summary>
 
 - **Keeper-Owned Lifecycle Authority**: keeper now owns lifecycle progression through authoritative `lifecycle.json`, generation fencing, and namespace epoch tracking

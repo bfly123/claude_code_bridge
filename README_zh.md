@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/模型皆可控-CF1322?style=for-the-badge" alt="模型皆可控">
 </p>
 
-[![Version](https://img.shields.io/badge/version-6.0.7-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-6.0.9-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 [English](README.md) | **中文**
@@ -98,6 +98,17 @@ cmd; writer:codex, reviewer:claude; qa:gemini(worktree)
 历史说明：下面较旧的发布记录里仍可能出现 `askd`、旧 flag 或已移除命令。这些内容仅作为 changelog 历史保留，不代表当前 CLI 入口。
 
 <details open>
+<summary><b>v6.0.9</b> - 跨平台生命周期与 watch 稳定性增强</summary>
+
+- **WSL 兼容性修复**：项目 runtime 现在会避开不支持 Unix socket 的 WSL 挂载盘路径，同时加固 installer staging 与 tmux namespace readiness
+- **macOS 生命周期加固**：启动、恢复与项目身份识别路径已收紧，macOS 现在按与 Linux 一致的 lifecycle authority 模型收口，不再间歇性漂移
+- **Respawn 重试边界收口**：tmux respawn 期间的瞬时 fork、server exit、readiness 失败现在在 runtime supervision 边界内重试，不再向上冒泡成伪生命周期故障
+- **Watch 重连恢复**：`watch` 与 ask wait 在 daemon 短暂失联后可以从持久化状态恢复终态结果，同时继续严格遵守超时截止时间
+- **跨平台 CI 覆盖扩展**：GitHub Actions 现在同时覆盖 macOS install smoke、WSL 兼容路径与既有 Linux 测试矩阵
+
+</details>
+
+<details>
 <summary><b>v6.0.7</b> - 生命周期 authority 与停机稳定性增强</summary>
 
 - **Keeper 持有生命周期 authority**：keeper 现在通过权威 `lifecycle.json`、generation fence 和 namespace epoch 跟踪来推进项目生命周期

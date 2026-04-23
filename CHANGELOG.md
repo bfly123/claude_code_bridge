@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## v6.0.9 (2026-04-23)
+
+### Cross-Platform Lifecycle & Watch Stability
+
+- **WSL Runtime Compatibility**: Unix socket placement and installer staging now avoid unsupported WSL mounted-drive paths, and tmux namespace readiness is retried more cleanly during startup
+- **macOS Lifecycle Hardening**: lifecycle restore, startup timing, and project identity handling were tightened so macOS runs converge on the same authority model as Linux instead of flaking during startup or recovery
+- **Respawn Resilience**: transient tmux fork, server-exit, and readiness failures are now retried at the runtime boundary instead of surfacing as spurious lifecycle breakage
+- **Watch Reconnect Recovery**: `watch` and ask-wait flows can recover terminal results from persisted state after brief daemon loss while still honoring reconnect deadlines instead of hanging indefinitely
+- **Cross-Platform Validation Expanded**: GitHub Actions now covers macOS install smoke and WSL compatibility paths together with the existing Linux test matrix
+
 ## v6.0.7 (2026-04-22)
 
 ### Lifecycle Authority & Shutdown Stability
