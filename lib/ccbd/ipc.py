@@ -206,7 +206,7 @@ class _SingleInstanceNamedPipeListener:
         try:
             overlapped = _winapi.ConnectNamedPipe(handle, overlapped=True)
         except OSError as exc:
-            if exc.winerror != _winapi.ERROR_NO_DATA:
+            if exc.winerror not in {_winapi.ERROR_NO_DATA, _winapi.ERROR_PIPE_CONNECTED}:
                 _winapi.CloseHandle(handle)
                 raise
         else:
