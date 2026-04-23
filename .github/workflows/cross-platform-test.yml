@@ -68,7 +68,7 @@ jobs:
           python -c "
           import sys
           sys.path.insert(0, 'lib')
-          from project_id import normalize_work_dir
+          from project.identity import normalize_work_dir
 
           # Test basic normalization
           result = normalize_work_dir('/a/b/../c')
