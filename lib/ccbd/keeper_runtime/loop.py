@@ -124,20 +124,11 @@ def reconcile_connectable_daemon(app, *, state: KeeperState, inspection, lifecyc
         return None
     try:
         if daemon_matches_project_config(app):
-            lease = inspection.lease
             app._lifecycle_store.save(
                 lifecycle.with_phase(
                     'mounted',
                     occurred_at=now,
-                    desired_state='running',
-                    generation=int(getattr(lease, 'generation', 0) or lifecycle.generation),
-                    keeper_pid=app.pid,
-                    owner_pid=int(getattr(lease, 'ccbd_pid', 0) or 0) or None,
-                    owner_daemon_instance_id=str(getattr(lease, 'daemon_instance_id', '') or '').strip() or None,
-                    config_signature=str(getattr(lease, 'config_signature', '') or '').strip() or lifecycle.config_signature,
-                    socket_path=str(getattr(lease, 'socket_path', '') or app.paths.ccbd_socket_path),
-                    socket_inode=current_socket_inode(getattr(lease, 'socket_path', app.paths.ccbd_socket_path)),
-                    namespace_epoch=_current_namespace_epoch(app, fallback=lifecycle.namespace_epoch),
+                    **_mounted_lifecycle_kwargs(app, lifecycle=lifecycle, inspection=inspection),
                     last_failure_reason=None,
                     shutdown_intent=None,
                 )
@@ -154,15 +145,15 @@ def reconcile_connectable_daemon(app, *, state: KeeperState, inspection, lifecyc
         )
         return state.with_restart_attempt(occurred_at=now)
     except Exception as exc:
-        app._lifecycle_store.save(
-            lifecycle.with_phase(
-                'failed',
-                occurred_at=now,
-                desired_state='running',
-                last_failure_reason=f'config_check_failed:{exc}',
-            )
+        failure_reason = f'config_check_failed:{exc}'
+        _record_connectable_observation_failure(
+            app,
+            lifecycle=lifecycle,
+            inspection=inspection,
+            now=now,
+            failure_reason=failure_reason,
         )
-        return state.with_failure(occurred_at=now, reason=f'config_check_failed:{exc}')
+        return state.with_failure(occurred_at=now, reason=failure_reason)
 
 
 def restart_state_from_inspection(app, *, state: KeeperState, inspection, occurred_at: str) -> KeeperState | None:
@@ -222,6 +213,68 @@ def _current_namespace_epoch(app, *, fallback: int | None) -> int | None:
     if state is not None:
         return int(state.namespace_epoch)
     return fallback
+
+
+def _mounted_lifecycle_kwargs(app, *, lifecycle, inspection) -> dict[str, object]:
+    lease = inspection.lease
+    return {
+        'desired_state': 'running',
+        'generation': int(getattr(lease, 'generation', 0) or lifecycle.generation),
+        'keeper_pid': app.pid,
+        'owner_pid': int(getattr(lease, 'ccbd_pid', 0) or 0) or None,
+        'owner_daemon_instance_id': str(getattr(lease, 'daemon_instance_id', '') or '').strip() or None,
+        'config_signature': str(getattr(lease, 'config_signature', '') or '').strip() or lifecycle.config_signature,
+        'socket_path': str(getattr(lease, 'socket_path', '') or app.paths.ccbd_socket_path),
+        'socket_inode': current_socket_inode(getattr(lease, 'socket_path', app.paths.ccbd_socket_path)),
+        'namespace_epoch': _current_namespace_epoch(app, fallback=lifecycle.namespace_epoch),
+    }
+
+
+def _record_connectable_observation_failure(
+    app,
+    *,
+    lifecycle,
+    inspection,
+    now: str,
+    failure_reason: str,
+) -> None:
+    if inspection.lease is None or not inspection.socket_connectable:
+        app._lifecycle_store.save(
+            lifecycle.with_phase(
+                'failed',
+                occurred_at=now,
+                desired_state='running',
+                last_failure_reason=failure_reason,
+            )
+        )
+        return
+    mounted_kwargs = _mounted_lifecycle_kwargs(app, lifecycle=lifecycle, inspection=inspection)
+    generation = int(mounted_kwargs['generation'])
+    if lifecycle.phase == 'mounted' and int(lifecycle.generation) == generation:
+        app._lifecycle_store.save(
+            lifecycle.with_updates(
+                desired_state='running',
+                keeper_pid=mounted_kwargs['keeper_pid'],
+                owner_pid=mounted_kwargs['owner_pid'],
+                owner_daemon_instance_id=mounted_kwargs['owner_daemon_instance_id'],
+                config_signature=mounted_kwargs['config_signature'],
+                socket_path=mounted_kwargs['socket_path'],
+                socket_inode=mounted_kwargs['socket_inode'],
+                namespace_epoch=mounted_kwargs['namespace_epoch'],
+                last_failure_reason=failure_reason,
+                shutdown_intent=None,
+            )
+        )
+        return
+    app._lifecycle_store.save(
+        lifecycle.with_phase(
+            'mounted',
+            occurred_at=now,
+            **mounted_kwargs,
+            last_failure_reason=failure_reason,
+            shutdown_intent=None,
+        )
+    )
 
 
 def cleanup_transient_keeper_files(app, *, lock_path: Path) -> None:

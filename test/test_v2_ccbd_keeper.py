@@ -279,6 +279,55 @@ def test_project_keeper_preserves_namespace_epoch_when_confirming_mounted_daemon
     assert lifecycle.namespace_epoch == 6
 
 
+def test_project_keeper_keeps_mounted_phase_when_config_check_times_out(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-mounted-config-check-timeout'
+    ctx = _context(project_root, 'agent1:codex\n')
+    keeper = ProjectKeeper(project_root, pid=891)
+    keeper._ownership_guard = SimpleNamespace(
+        inspect=lambda: _inspection(
+            ctx,
+            health=LeaseHealth.HEALTHY,
+            socket_connectable=True,
+            pid_alive=True,
+            heartbeat_fresh=True,
+            reason='healthy',
+        )
+    )
+    lifecycle_store = CcbdLifecycleStore(keeper.paths)
+    lifecycle_store.save(
+        build_lifecycle(
+            project_id=ctx.project.project_id,
+            occurred_at='2026-04-22T00:00:00Z',
+            desired_state='running',
+            phase='mounted',
+            generation=1,
+            keeper_pid=891,
+            owner_pid=321,
+            socket_path=ctx.paths.ccbd_socket_path,
+        )
+    )
+    monkeypatch.setattr(
+        'ccbd.keeper_runtime.loop.daemon_matches_project_config',
+        lambda app: (_ for _ in ()).throw(TimeoutError('ping timeout')),
+    )
+    state = KeeperState(
+        project_id=ctx.project.project_id,
+        keeper_pid=891,
+        started_at='2026-04-22T00:00:00Z',
+        last_check_at='2026-04-22T00:00:00Z',
+        state='running',
+    )
+
+    next_state = keeper._reconcile_once(state=state, start_timeout_s=0.1)
+    lifecycle = lifecycle_store.load()
+
+    assert next_state.last_failure_reason == 'config_check_failed:ping timeout'
+    assert lifecycle is not None
+    assert lifecycle.phase == 'mounted'
+    assert lifecycle.desired_state == 'running'
+    assert lifecycle.last_failure_reason == 'config_check_failed:ping timeout'
+
+
 def test_project_keeper_stops_when_shutdown_intent_exists(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-stop'
     ctx = _context(project_root, 'agent1:codex\n')
