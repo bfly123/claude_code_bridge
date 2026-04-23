@@ -133,13 +133,13 @@ def _connect_client(
     poll_interval: float,
 ):
     while True:
+        if _deadline_exceeded(deadline, monotonic_fn=monotonic_fn):
+            return None
         try:
             handle = connect_mounted_daemon_fn(context, allow_restart_stale=True)
         except reconnect_error_classes:
             fallback = _persisted_terminal_batch(context, job_id, cursor=cursor)
             if fallback is not None:
-                return None
-            if _deadline_exceeded(deadline, monotonic_fn=monotonic_fn):
                 return None
             sleep_fn(poll_interval)
             continue

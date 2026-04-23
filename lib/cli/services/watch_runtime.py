@@ -139,13 +139,13 @@ def _connect_handle(
 ):
     poll_interval = poll_interval_seconds_fn()
     while True:
+        if deadline is not None and _deadline_exceeded(deadline, time_fn=time_fn):
+            return None
         try:
             handle = connect_mounted_daemon_fn(context, allow_restart_stale=True)
         except reconnect_error_classes:
             fallback = _persisted_terminal_batch(context, target, cursor=cursor)
             if fallback is not None:
-                return None
-            if deadline is not None and _deadline_exceeded(deadline, time_fn=time_fn):
                 return None
             sleep_fn(poll_interval)
             continue
