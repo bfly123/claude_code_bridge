@@ -17,6 +17,23 @@ def binding_source_for_attach(
     return RuntimeBindingSource.PROVIDER_SESSION
 
 
+def health_for_attach(
+    existing: AgentRuntime | None,
+    *,
+    explicit: str | None,
+    binding_source: RuntimeBindingSource,
+) -> str:
+    normalized = normalized_text(explicit)
+    if normalized is not None:
+        return normalized
+    if existing is None:
+        return 'healthy'
+    current = normalized_text(existing.health) or 'healthy'
+    if binding_source is RuntimeBindingSource.EXTERNAL_ATTACH:
+        return 'restored' if current == 'restored' else 'healthy'
+    return current
+
+
 def state_for_attach(existing_state: AgentState | None, next_health: str) -> AgentState:
     if next_health in {'healthy', 'restored'}:
         if existing_state in {AgentState.DEGRADED, AgentState.STOPPED, AgentState.FAILED} or existing_state is None:
@@ -169,6 +186,7 @@ def read_pid_file(path: Path) -> int | None:
 __all__ = [
     'binding_source_for_attach',
     'coerce_pid',
+    'health_for_attach',
     'normalized_text',
     'pane_id_from_runtime_ref',
     'read_pid_file',

@@ -222,6 +222,56 @@ def test_attach_runtime_uses_canonical_epoch_when_existing_generations_diverged(
     assert updated.daemon_generation == 3
 
 
+def test_external_attach_promotes_failed_runtime_back_to_healthy() -> None:
+    existing = _runtime(
+        state=AgentState.FAILED,
+        health='start-failed',
+        binding_source=RuntimeBindingSource.PROVIDER_SESSION,
+    )
+    registry = _Registry(existing=existing)
+
+    updated = attach_runtime(
+        registry=registry,
+        project_id='proj-1',
+        clock=lambda: '2026-04-06T00:00:00Z',
+        agent_name='agent1',
+        workspace_path='/tmp/ws',
+        backend_type='pane-backed',
+        runtime_ref='tmux:%8',
+        session_ref='session-8',
+        binding_source=RuntimeBindingSource.EXTERNAL_ATTACH,
+    )
+
+    assert updated.health == 'healthy'
+    assert updated.state is AgentState.IDLE
+    assert updated.binding_source is RuntimeBindingSource.EXTERNAL_ATTACH
+
+
+def test_external_attach_preserves_restored_health() -> None:
+    existing = _runtime(
+        state=AgentState.DEGRADED,
+        health='restored',
+        binding_source=RuntimeBindingSource.EXTERNAL_ATTACH,
+    )
+    registry = _Registry(existing=existing)
+
+    updated = attach_runtime(
+        registry=registry,
+        project_id='proj-1',
+        clock=lambda: '2026-04-06T00:00:00Z',
+        agent_name='agent1',
+        workspace_path='/tmp/ws',
+        backend_type='pane-backed',
+        runtime_ref='tmux:%8',
+        session_ref='session-8',
+        binding_source=RuntimeBindingSource.EXTERNAL_ATTACH,
+    )
+
+    assert updated.health == 'restored'
+    assert updated.state is AgentState.IDLE
+    assert updated.binding_source is RuntimeBindingSource.EXTERNAL_ATTACH
+
+
 def test_patch_runtime_state_updates_allowed_fields_without_touching_authority() -> None:
     existing = _runtime(binding_generation=4, runtime_generation=4, daemon_generation=3)
     registry = _Registry(existing=existing)

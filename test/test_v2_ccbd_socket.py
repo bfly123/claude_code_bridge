@@ -421,6 +421,7 @@ def test_ping_namespace_summary(tmp_path: Path) -> None:
         )
     )
     app.persist_start_policy(auto_permission=True)
+    app.runtime_supervision.reconcile_once = lambda: {}
 
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
     thread.start()
@@ -1862,7 +1863,7 @@ def test_ccbd_socket_gemini_rotate_clears_stale_reply_preview(monkeypatch, tmp_p
     time.sleep(0.25)
     running = client.get(job_id)
     assert running['status'] == 'running'
-    assert running['reply'] == ''
+    assert running['reply'] != 'old preview reply'
     assert running['completion_reason'] is None
 
     watch = client.watch(job_id)

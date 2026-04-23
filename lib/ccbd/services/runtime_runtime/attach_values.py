@@ -5,6 +5,7 @@ from agents.runtime_binding import merge_runtime_binding, runtime_binding_from_r
 
 from ..runtime_attach import (
     binding_source_for_attach,
+    health_for_attach,
     normalized_text,
     pane_id_from_runtime_ref,
     resolve_session_fields,
@@ -60,7 +61,12 @@ def resolve_attach_runtime_values(
         session_id_explicit=session_id is not None,
     )
     runtime_ref_value = merged_binding.runtime_ref
-    next_health = health or (existing.health if existing is not None else 'healthy')
+    binding_source_value = binding_source_for_attach(existing, explicit=binding_source)
+    next_health = health_for_attach(
+        existing,
+        explicit=health,
+        binding_source=binding_source_value,
+    )
     next_state = state_for_attach(existing.state if existing is not None else None, next_health)
     pane_id_value = preferred_pane_id(existing, pane_id=pane_id, runtime_ref_value=runtime_ref_value)
     runtime_root_value = preferred_text(existing, 'runtime_root', runtime_root)
@@ -114,7 +120,7 @@ def resolve_attach_runtime_values(
         daemon_generation=daemon_generation_value,
         authority_epoch_changed=authority_epoch_changed,
         managed_by=preferred_text(existing, 'managed_by', managed_by, default='ccbd') or 'ccbd',
-        binding_source=binding_source_for_attach(existing, explicit=binding_source),
+        binding_source=binding_source_value,
     )
 
 

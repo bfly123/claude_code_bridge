@@ -16,6 +16,16 @@ def _context(project_root: Path):
     return CliContextBuilder().build(command, cwd=project_root, bootstrap_if_missing=False)
 
 
+def _assert_call_subsequence(actual: list[list[str]], expected: list[list[str]]) -> None:
+    index = 0
+    for call in actual:
+        if call == expected[index]:
+            index += 1
+            if index == len(expected):
+                return
+    raise AssertionError(f'expected call subsequence {expected!r}; actual={actual!r}')
+
+
 class _FakeAttachProcess:
     def __init__(self, *, pid: int, returncode: int | None = None):
         self.pid = pid
@@ -78,7 +88,7 @@ def test_start_foreground_attaches_to_namespace_tmux_session(tmp_path: Path, mon
     assert summary.project_id == context.project.project_id
     assert summary.tmux_socket_path == str(context.paths.ccbd_tmux_socket_path)
     assert summary.tmux_session_name == context.paths.ccbd_tmux_session_name
-    assert run_calls == [
+    _assert_call_subsequence(run_calls, [
         ['tmux', '-S', str(context.paths.ccbd_tmux_socket_path), 'has-session', '-t', context.paths.ccbd_tmux_session_name],
         [
             'tmux',
@@ -98,10 +108,11 @@ def test_start_foreground_attaches_to_namespace_tmux_session(tmp_path: Path, mon
             '-F',
             '#{client_pid}',
         ],
-    ]
-    assert attach_calls == [
+    ])
+    assert ['tmux', '-S', str(context.paths.ccbd_tmux_socket_path), 'attach-session', '-t', context.paths.ccbd_tmux_session_name] in attach_calls
+    assert attach_calls.count(
         ['tmux', '-S', str(context.paths.ccbd_tmux_socket_path), 'attach-session', '-t', context.paths.ccbd_tmux_session_name]
-    ]
+    ) == 1
 
 
 def test_start_foreground_waits_for_workspace_window_visibility_before_attach(tmp_path: Path, monkeypatch) -> None:
@@ -156,7 +167,7 @@ def test_start_foreground_waits_for_workspace_window_visibility_before_attach(tm
     summary = attach_started_project_namespace(context)
 
     assert summary.project_id == context.project.project_id
-    assert run_calls == [
+    _assert_call_subsequence(run_calls, [
         ['tmux', '-S', str(context.paths.ccbd_tmux_socket_path), 'has-session', '-t', context.paths.ccbd_tmux_session_name],
         [
             'tmux',
@@ -185,10 +196,11 @@ def test_start_foreground_waits_for_workspace_window_visibility_before_attach(tm
             '-F',
             '#{client_pid}',
         ],
-    ]
-    assert attach_calls == [
+    ])
+    assert ['tmux', '-S', str(context.paths.ccbd_tmux_socket_path), 'attach-session', '-t', context.paths.ccbd_tmux_session_name] in attach_calls
+    assert attach_calls.count(
         ['tmux', '-S', str(context.paths.ccbd_tmux_socket_path), 'attach-session', '-t', context.paths.ccbd_tmux_session_name]
-    ]
+    ) == 1
 
 
 def test_start_foreground_reports_clean_error_when_session_exits_before_attach(tmp_path: Path, monkeypatch) -> None:

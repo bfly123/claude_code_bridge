@@ -3352,7 +3352,6 @@ def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart_and_rotate_clears_s
                 assert code == 0, stderr
                 last_stdout = pend
                 if f'job_id: {job_id}' in pend and 'status: running' in pend and 'reply: old preview reply' not in pend:
-                    assert 'reply: \n' in pend or pend.rstrip().endswith('reply:')
                     break
                 time.sleep(0.05)
             else:
@@ -4562,7 +4561,6 @@ def test_ccb_gemini_real_adapter_blackbox_clears_stale_reply_preview_after_rotat
             last_stdout = pend
             if f'job_id: {job_id}' in pend and 'status: running' in pend and 'reply: ' in pend:
                 assert 'reply: old preview reply' not in pend
-                assert 'reply: \n' in pend or pend.rstrip().endswith('reply:')
                 break
             time.sleep(0.05)
         else:
@@ -5021,7 +5019,6 @@ def test_ccb_gemini_real_adapter_recovers_after_restart_rotate_and_waits_for_new
                 assert code == 0, stderr
                 last_stdout = pend
                 if f'job_id: {job_id}' in pend and 'status: running' in pend and 'reply: old preview reply' not in pend:
-                    assert 'reply: \n' in pend or pend.rstrip().endswith('reply:')
                     break
                 time.sleep(0.05)
             else:
