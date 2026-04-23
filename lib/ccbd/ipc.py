@@ -392,7 +392,7 @@ class _NamedPipeServerTransport:
         self._accept_error: BaseException | None = None
 
     def listen(self) -> None:
-        if self._accept_thread is not None:
+        if self._accept_thread is not None and self._accept_thread.is_alive():
             return
         self._stop_event.clear()
         self._ready_event.clear()
@@ -408,7 +408,12 @@ class _NamedPipeServerTransport:
 
     def accept(self, timeout_s: float | None):
         if self._accept_error is not None:
-            raise OSError(str(self._accept_error))
+            error = self._accept_error
+            if os.name == 'nt':
+                self._restart_after_accept_error()
+            else:
+                raise OSError(str(error))
+            raise OSError(str(error))
         try:
             item = self._queue.get(timeout=timeout_s)
         except Empty:
@@ -470,6 +475,18 @@ class _NamedPipeServerTransport:
             wake.close()
         except Exception:
             pass
+
+    def _restart_after_accept_error(self) -> None:
+        listener = self._listener
+        self._listener = None
+        self._accept_error = None
+        self._accept_thread = None
+        if listener is not None:
+            try:
+                listener.close()
+            except Exception:
+                pass
+        self.listen()
 
 
 class _CompatUnixSocketServerTransport:
