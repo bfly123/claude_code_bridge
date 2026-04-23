@@ -17,6 +17,8 @@ def serve_forever(server, *, poll_interval: float = 0.2, on_tick=None) -> None:
         try:
             conn, _ = runtime_socket.accept()
         except socket.timeout:
+            if server._stop_event.is_set() or server._server is not runtime_socket:
+                break
             next_tick_at = run_tick_if_needed(on_tick=on_tick, next_tick_at=next_tick_at, interval=interval)
             continue
         except OSError:

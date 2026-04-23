@@ -235,6 +235,31 @@ def test_ccbd_socket_shutdown_does_not_remove_replaced_socket_path(tmp_path: Pat
         assert not socket_path.exists()
 
 
+def test_socket_server_timeout_after_shutdown_does_not_run_tick(tmp_path: Path) -> None:
+    socket_path = tmp_path / 'ccbd.sock'
+    server = CcbdSocketServer(socket_path)
+    tick_calls: list[str] = []
+
+    class _TimeoutAfterShutdownSocket:
+        def settimeout(self, timeout: float | None) -> None:
+            del timeout
+
+        def accept(self):
+            server._stop_event.set()
+            server._server = None
+            raise socket.timeout('timed out')
+
+    def _fake_listen() -> None:
+        server._stop_event.clear()
+        server._server = _TimeoutAfterShutdownSocket()
+
+    server.listen = _fake_listen  # type: ignore[method-assign]
+
+    server.serve_forever(poll_interval=0.05, on_tick=lambda: tick_calls.append('tick'))
+
+    assert tick_calls == []
+
+
 def test_ccbd_stop_all_does_not_run_post_shutdown_heartbeat(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-stop-all'
     ctx = _prepare_project(project_root, _single_agent_config_text('demo', 'fake'))
