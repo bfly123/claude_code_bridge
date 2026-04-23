@@ -58,3 +58,19 @@ def test_path_layout_shortens_socket_paths_when_project_path_is_too_long(tmp_pat
     assert '.ccb/ccbd' not in str(layout.ccbd_tmux_socket_path)
     assert len(os.fsencode(str(layout.ccbd_socket_path))) <= 100
     assert len(os.fsencode(str(layout.ccbd_tmux_socket_path))) <= 100
+
+
+def test_path_layout_falls_back_for_wsl_mounted_drive_paths(monkeypatch) -> None:
+    monkeypatch.setenv('WSL_INTEROP', '1')
+    monkeypatch.setenv('XDG_RUNTIME_DIR', '/mnt/e/runtime')
+
+    layout = PathLayout(Path('/mnt/c/Users/demo/repo'))
+
+    assert layout.ccbd_socket_placement.root_kind == 'runtime'
+    assert layout.ccbd_socket_placement.fallback_reason == 'unsupported_filesystem'
+    assert layout.ccbd_socket_placement.filesystem_hint == 'wsl_drvfs'
+    assert str(layout.ccbd_socket_path).startswith('/tmp/ccb-runtime/')
+    assert layout.ccbd_tmux_socket_placement.root_kind == 'runtime'
+    assert layout.ccbd_tmux_socket_placement.fallback_reason == 'unsupported_filesystem'
+    assert layout.ccbd_tmux_socket_placement.filesystem_hint == 'wsl_drvfs'
+    assert str(layout.ccbd_tmux_socket_path).startswith('/tmp/ccb-runtime/')

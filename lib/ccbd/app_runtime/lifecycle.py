@@ -6,6 +6,7 @@ from agents.models import AgentState
 from ccbd.models import CcbdShutdownReport, CcbdStartupReport, cleanup_summaries_from_objects
 from ccbd.services.lifecycle import build_lifecycle, current_socket_inode
 from ccbd.stop_flow import build_shutdown_runtime_snapshots
+from storage.path_helpers import socket_placement_payload
 
 
 def start(app):
@@ -247,6 +248,10 @@ def record_startup_report(
             daemon_started=True,
             config_signature=str(app.config_identity.get('config_signature') or '').strip() or None,
             inspection=inspection.to_record(),
+            socket_placement={
+                **socket_placement_payload(app.paths.ccbd_socket_placement),
+                **socket_placement_payload(app.paths.ccbd_tmux_socket_placement, prefix='tmux'),
+            },
             restore_summary=dict(restore_summary or {}),
             actions_taken=actions_taken,
             cleanup_summaries=(),

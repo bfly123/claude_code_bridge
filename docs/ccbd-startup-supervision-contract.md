@@ -512,6 +512,10 @@ Required fields for backend liveness:
 - optional `keeper_pid`
 - optional `daemon_instance_id`
 
+Write rule:
+
+- `lease.json.socket_path` and lifecycle authority `socket_path` must always record the effective active socket path for the current generation; preferred project-local socket paths are diagnostics only and belong in startup/ping/doctor payloads, not authority.
+
 ### 7.2 Startup Report
 
 Path:
@@ -527,6 +531,8 @@ Minimum content:
 - anchor state
 - config state
 - daemon inspection
+- socket placement decision
+  - at minimum preferred/effective socket path, root kind, and fallback reason for both `ccbd` and project tmux socket selection
 - desired agents
 - actions taken
 - final status

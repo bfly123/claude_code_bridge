@@ -8,6 +8,7 @@ from ccbd.services.project_inspection import load_project_daemon_inspection
 from ccbd.socket_client import CcbdClient, CcbdClientError
 from cli.kill_runtime.processes import is_pid_alive, kill_pid, terminate_pid_tree
 from cli.context import CliContext
+from storage.path_helpers import socket_placement_payload
 from .daemon_runtime import (
     CcbdServiceError,
     DaemonHandle,
@@ -106,6 +107,10 @@ def invoke_mounted_daemon(
 
 def ping_local_state(context: CliContext) -> LocalPingSummary:
     _, _, inspection = inspect_daemon(context)
+    socket_placement = context.paths.ccbd_socket_placement
+    tmux_socket_placement = context.paths.ccbd_tmux_socket_placement
+    socket_payload = socket_placement_payload(socket_placement)
+    tmux_socket_payload = socket_placement_payload(tmux_socket_placement, prefix='tmux')
     return LocalPingSummary(
         project_id=context.project.project_id,
         mount_state=inspection.phase,
@@ -113,6 +118,17 @@ def ping_local_state(context: CliContext) -> LocalPingSummary:
         health=inspection.health.value,
         generation=inspection.generation,
         socket_path=inspection.socket_path,
+        preferred_socket_path=socket_payload['preferred_socket_path'],
+        effective_socket_path=socket_payload['effective_socket_path'],
+        socket_root_kind=socket_payload['socket_root_kind'],
+        socket_fallback_reason=socket_payload['socket_fallback_reason'],
+        socket_filesystem_hint=socket_payload['socket_filesystem_hint'],
+        tmux_socket_path=tmux_socket_payload['tmux_effective_socket_path'],
+        tmux_preferred_socket_path=tmux_socket_payload['tmux_preferred_socket_path'],
+        tmux_effective_socket_path=tmux_socket_payload['tmux_effective_socket_path'],
+        tmux_socket_root_kind=tmux_socket_payload['tmux_socket_root_kind'],
+        tmux_socket_fallback_reason=tmux_socket_payload['tmux_socket_fallback_reason'],
+        tmux_socket_filesystem_hint=tmux_socket_payload['tmux_socket_filesystem_hint'],
         last_heartbeat_at=inspection.lease.last_heartbeat_at if inspection.lease else None,
         pid_alive=inspection.pid_alive,
         socket_connectable=inspection.socket_connectable,

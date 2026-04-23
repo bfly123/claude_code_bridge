@@ -82,11 +82,124 @@ def _windows_installer_command(install_dir: Path, action: str) -> tuple[list[str
     return cmd, script
 
 
-def _unix_installer_command(install_dir: Path, action: str) -> tuple[list[str], Path, dict[str, str]]:
-    script = install_dir / "install.sh"
+def _normalize_lf_bytes(content: bytes) -> bytes:
+    return content.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
+def _should_normalize_unix_text(rel_path: Path) -> bool:
+    rel = Path(rel_path)
+    if rel.name in {"install.sh", "ccb"}:
+        return True
+    if rel.suffix.lower() in {".py", ".sh", ".yml", ".yaml"}:
+        return True
+    return len(rel.parts) >= 2 and rel.parts[0] == "bin"
+
+
+def _stage_tree_ignores(_root: str, names: list[str]) -> set[str]:
+    ignored = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".venv"}
+    return {name for name in names if name in ignored}
+
+
+def _detect_git_head(source_dir: Path) -> tuple[str | None, str | None]:
+    git_bin = shutil.which("git")
+    if not git_bin:
+        return None, None
+    probe = subprocess.run(
+        [git_bin, "-C", str(source_dir), "rev-parse", "--is-inside-work-tree"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    if probe.returncode != 0:
+        return None, None
+    commit = subprocess.run(
+        [git_bin, "-C", str(source_dir), "log", "-1", "--format=%h"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    ).stdout.strip() or None
+    commit_date = subprocess.run(
+        [git_bin, "-C", str(source_dir), "log", "-1", "--format=%cs"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    ).stdout.strip() or None
+    return commit, commit_date
+
+
+def _build_unix_installer_env(
+    install_dir: Path,
+    *,
+    source_dir: Path,
+    extra_env: dict[str, str] | None = None,
+) -> dict[str, str]:
     env = os.environ.copy()
     env["CODEX_INSTALL_PREFIX"] = str(install_dir)
-    return ["bash", str(script), action], script, env
+    if extra_env:
+        env.update(extra_env)
+    if not env.get("CCB_SOURCE_KIND") and (source_dir / ".git").exists():
+        env["CCB_SOURCE_KIND"] = "source"
+    if not env.get("CCB_GIT_COMMIT"):
+        git_commit, git_date = _detect_git_head(source_dir)
+        if git_commit:
+            env["CCB_GIT_COMMIT"] = git_commit
+        if git_date and not env.get("CCB_GIT_DATE"):
+            env["CCB_GIT_DATE"] = git_date
+    return env
+
+
+def _stage_unix_installer_tree(source_dir: Path, *, temp_base: Path) -> tuple[Path, Path]:
+    staging_root = Path(tempfile.mkdtemp(prefix="ccb-installer-", dir=str(temp_base))).expanduser()
+    staged_source = staging_root / (source_dir.name or "source")
+    shutil.copytree(
+        source_dir,
+        staged_source,
+        ignore=_stage_tree_ignores,
+        copy_function=shutil.copy2,
+    )
+    for path in staged_source.rglob("*"):
+        if not path.is_file() or path.is_symlink():
+            continue
+        rel_path = path.relative_to(staged_source)
+        if not _should_normalize_unix_text(rel_path):
+            continue
+        original = path.read_bytes()
+        normalized = _normalize_lf_bytes(original)
+        if normalized != original:
+            path.write_bytes(normalized)
+    return staging_root, staged_source
+
+
+def run_staged_unix_installer(
+    action: str,
+    *,
+    source_dir: Path,
+    install_dir: Path,
+    extra_env: dict[str, str] | None = None,
+) -> int:
+    source_dir = Path(source_dir).expanduser()
+    script = source_dir / "install.sh"
+    if not script.exists():
+        return _missing_installer_message("install.sh", source_dir)
+    temp_base = pick_temp_base_dir(install_dir)
+    staging_root, staged_source = _stage_unix_installer_tree(source_dir, temp_base=temp_base)
+    try:
+        bash_bin = shutil.which("bash")
+        if not bash_bin:
+            raise RuntimeError("❌ Unix installer requires 'bash' to be available")
+        env = _build_unix_installer_env(
+            install_dir,
+            source_dir=source_dir,
+            extra_env=extra_env,
+        )
+        staged_script = staged_source / "install.sh"
+        return subprocess.run(
+            [bash_bin, str(staged_script), action],
+            env=env,
+            cwd=staged_source,
+        ).returncode
+    finally:
+        shutil.rmtree(staging_root, ignore_errors=True)
 
 
 def run_installer(action: str, *, script_root: Path) -> int:
@@ -97,10 +210,7 @@ def run_installer(action: str, *, script_root: Path) -> int:
             return _missing_installer_message("install.ps1", install_dir)
         return subprocess.run(cmd).returncode
 
-    cmd, script, env = _unix_installer_command(install_dir, action)
-    if not script.exists():
-        return _missing_installer_message("install.sh", install_dir)
-    return subprocess.run(cmd, env=env).returncode
+    return run_staged_unix_installer(action, source_dir=install_dir, install_dir=install_dir)
 
 
 def _temp_base_candidates(install_dir: Path) -> list[Path]:

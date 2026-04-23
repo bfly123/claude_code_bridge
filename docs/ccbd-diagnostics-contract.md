@@ -61,6 +61,8 @@ The latest startup report must capture the most recent startup-related transacti
 - `actions_taken`
 - `agent_results`
 - `inspection`
+- `socket_placement`
+  - at minimum preferred/effective socket paths plus root kind and fallback reason for both `ccbd` and project tmux socket selection
 - optional `failure_reason`
 
 Rules:
@@ -128,6 +130,7 @@ Rules:
 - `doctor` and bundle export must include these records when present
 - `ping('ccbd')` and `doctor` should surface start-policy summary fields when available
 - `ping('ccbd')` and `doctor` must surface namespace summary fields such as epoch, tmux socket path, session name, and latest lifecycle event when available
+- `ping('ccbd')` and `doctor` must surface current socket placement diagnostics, including preferred/effective socket path, root kind, fallback reason, and filesystem hint when known
 - malformed namespace diagnostics must surface as diagnostics errors, not silently disappear
 
 ### 3.6 Doctor Read Path

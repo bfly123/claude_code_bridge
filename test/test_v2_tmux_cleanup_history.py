@@ -8,6 +8,7 @@ from ccbd.services.project_namespace_state import ProjectNamespaceEvent, Project
 from cli.context import CliContextBuilder
 from cli.models import ParsedDoctorCommand
 from cli.services.doctor import doctor_summary
+from cli.services.daemon_runtime.models import LocalPingSummary
 from cli.services.tmux_cleanup_history import TmuxCleanupEvent, TmuxCleanupHistoryStore
 from cli.services.tmux_project_cleanup import ProjectTmuxCleanupSummary
 from project.resolver import bootstrap_project
@@ -238,3 +239,50 @@ def test_doctor_summary_includes_startup_and_shutdown_report_fields(tmp_path: Pa
     assert payload['ccbd']['shutdown_last_trigger'] == 'kill'
     assert payload['ccbd']['shutdown_last_status'] == 'ok'
     assert payload['ccbd']['shutdown_last_reason'] == 'kill'
+
+
+def test_doctor_summary_includes_socket_placement_fields(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-doctor-socket-placement'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    context = CliContextBuilder().build(ParsedDoctorCommand(project=None), cwd=project_root, bootstrap_if_missing=False)
+
+    monkeypatch.setattr(
+        'cli.services.doctor.ping_local_state',
+        lambda _context: LocalPingSummary(
+            project_id=context.project.project_id,
+            mount_state='unmounted',
+            desired_state='running',
+            health='unmounted',
+            generation=4,
+            socket_path=None,
+            preferred_socket_path='/mnt/e/repo/.ccb/ccbd/ccbd.sock',
+            effective_socket_path='/tmp/ccb-runtime/ccbd-proj.sock',
+            socket_root_kind='runtime',
+            socket_fallback_reason='unsupported_filesystem',
+            socket_filesystem_hint='wsl_drvfs',
+            tmux_socket_path='/tmp/ccb-runtime/tmux-proj.sock',
+            tmux_preferred_socket_path='/mnt/e/repo/.ccb/ccbd/tmux.sock',
+            tmux_effective_socket_path='/tmp/ccb-runtime/tmux-proj.sock',
+            tmux_socket_root_kind='runtime',
+            tmux_socket_fallback_reason='unsupported_filesystem',
+            tmux_socket_filesystem_hint='wsl_drvfs',
+            last_heartbeat_at=None,
+            pid_alive=False,
+            socket_connectable=False,
+            heartbeat_fresh=False,
+            takeover_allowed=True,
+            reason='lease_unmounted',
+            last_failure_reason='listen_socket_failed',
+            shutdown_intent=None,
+        ),
+    )
+
+    payload = doctor_summary(context)
+
+    assert payload['ccbd']['preferred_socket_path'] == '/mnt/e/repo/.ccb/ccbd/ccbd.sock'
+    assert payload['ccbd']['effective_socket_path'] == '/tmp/ccb-runtime/ccbd-proj.sock'
+    assert payload['ccbd']['socket_root_kind'] == 'runtime'
+    assert payload['ccbd']['socket_fallback_reason'] == 'unsupported_filesystem'
+    assert payload['ccbd']['tmux_effective_socket_path'] == '/tmp/ccb-runtime/tmux-proj.sock'

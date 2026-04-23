@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ccbd.models import CcbdShutdownReport, CcbdStartupReport, cleanup_summaries_from_objects
 from ccbd.stop_flow import build_shutdown_runtime_snapshots
+from storage.path_helpers import socket_placement_payload
 
 
 def record_startup_report(
@@ -31,6 +32,10 @@ def record_startup_report(
             daemon_started=None,
             config_signature=str(supervisor._config_identity.get('config_signature') or '').strip() or None,
             inspection=inspection.to_record(),
+            socket_placement={
+                **socket_placement_payload(supervisor._paths.ccbd_socket_placement),
+                **socket_placement_payload(supervisor._paths.ccbd_tmux_socket_placement, prefix='tmux'),
+            },
             restore_summary={},
             actions_taken=tuple(actions_taken),
             cleanup_summaries=cleanup_summaries_from_objects(cleanup_summaries),

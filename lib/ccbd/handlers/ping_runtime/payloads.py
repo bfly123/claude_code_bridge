@@ -3,6 +3,7 @@ from __future__ import annotations
 from agents.models import AgentState
 from agents.config_identity import project_config_identity_payload
 from provider_execution.capabilities import execution_restore_capability
+from storage.path_helpers import socket_placement_payload
 
 
 def build_agent_payload(*, project_id: str, agent_name: str, registry, inspection, execution_registry) -> dict:
@@ -30,6 +31,7 @@ def build_ccbd_payload(
     *,
     project_id: str,
     config,
+    paths,
     inspection,
     execution_summary: dict,
     restore_summary: dict,
@@ -38,13 +40,19 @@ def build_ccbd_payload(
     start_policy_summary: dict,
 ) -> dict:
     identity = project_config_identity_payload(config)
+    socket_path = inspection.socket_path if hasattr(inspection, 'socket_path') else None
+    if socket_path is None and inspection.lease is not None:
+        socket_path = inspection.lease.socket_path
     return {
         'project_id': project_id,
         'mount_state': _inspection_phase(inspection),
         'desired_state': _inspection_desired_state(inspection),
         'health': inspection.health.value,
         'generation': inspection.generation,
-        'socket_path': inspection.socket_path if hasattr(inspection, 'socket_path') else (inspection.lease.socket_path if inspection.lease else None),
+        'socket_path': socket_path,
+        'tmux_socket_path': str(paths.ccbd_tmux_socket_placement.effective_path),
+        **socket_placement_payload(paths.ccbd_socket_placement),
+        **socket_placement_payload(paths.ccbd_tmux_socket_placement, prefix='tmux'),
         'known_agents': list(identity['known_agents']),
         'config_signature': identity['config_signature'],
         **namespace_summary,

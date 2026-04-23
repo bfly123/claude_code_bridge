@@ -5,10 +5,9 @@ from pathlib import Path
 import platform
 import re
 import shutil
-import subprocess
 import tarfile
 
-from ..install import download_tarball, pick_temp_base_dir, safe_extract_tar
+from ..install import download_tarball, pick_temp_base_dir, run_staged_unix_installer, safe_extract_tar
 from ..versioning import REPO_URL, format_version_info, get_available_versions, get_version_info
 from .matching import find_matching_version, latest_version
 
@@ -113,14 +112,18 @@ def _update_via_tarball(tmp_base: Path, *, install_dir: Path, target_version: st
         extracted_dir = tmp_dir / _release_extract_dir_name(extracted_name)
 
         print("🔧 Installing...")
-        env = os.environ.copy()
-        env["CODEX_INSTALL_PREFIX"] = str(install_dir)
-        env["CCB_CLEAN_INSTALL"] = "1"
-        bash_bin = shutil.which("bash")
-        if not bash_bin:
-            print("❌ Update failed: required shell 'bash' is not available")
-            return 1
-        subprocess.run([bash_bin, str(extracted_dir / "install.sh"), "install"], check=True, env=env)
+        returncode = run_staged_unix_installer(
+            "install",
+            source_dir=extracted_dir,
+            install_dir=install_dir,
+            extra_env={
+                "CODEX_INSTALL_PREFIX": str(install_dir),
+                "CCB_CLEAN_INSTALL": "1",
+            },
+        )
+        if returncode != 0:
+            print(f"❌ Update failed: installer exited with code {returncode}")
+            return returncode
 
         new_info = get_version_info(install_dir)
         _print_update_outcome(old_info, new_info)

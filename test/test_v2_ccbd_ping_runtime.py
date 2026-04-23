@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 from agents.models import (
@@ -16,6 +17,7 @@ from agents.models import (
 from ccbd.handlers.ping_runtime.handler import build_ping_handler
 from ccbd.handlers.ping_runtime.payloads import build_ccbd_payload
 from ccbd.models import LeaseHealth
+from storage.path_helpers import SocketPlacement
 
 
 def _config() -> ProjectConfig:
@@ -55,10 +57,30 @@ def _inspection(*, phase: str, desired_state: str, socket_path: str = '/tmp/ccbd
     )
 
 
+def _paths() -> SimpleNamespace:
+    return SimpleNamespace(
+        ccbd_socket_placement=SocketPlacement(
+            preferred_path=Path('/mnt/e/repo/.ccb/ccbd/ccbd.sock'),
+            effective_path=Path('/tmp/ccb-runtime/ccbd-proj.sock'),
+            root_kind='runtime',
+            fallback_reason='unsupported_filesystem',
+            filesystem_hint='wsl_drvfs',
+        ),
+        ccbd_tmux_socket_placement=SocketPlacement(
+            preferred_path=Path('/mnt/e/repo/.ccb/ccbd/tmux.sock'),
+            effective_path=Path('/tmp/ccb-runtime/tmux-proj.sock'),
+            root_kind='runtime',
+            fallback_reason='unsupported_filesystem',
+            filesystem_hint='wsl_drvfs',
+        ),
+    )
+
+
 def test_build_ccbd_payload_prefers_lifecycle_phase_over_lease_mount_state() -> None:
     payload = build_ccbd_payload(
         project_id='proj-1',
         config=_config(),
+        paths=_paths(),
         inspection=_inspection(phase='starting', desired_state='running'),
         execution_summary={},
         restore_summary={},
@@ -70,6 +92,12 @@ def test_build_ccbd_payload_prefers_lifecycle_phase_over_lease_mount_state() -> 
     assert payload['mount_state'] == 'starting'
     assert payload['desired_state'] == 'running'
     assert payload['socket_path'] == '/tmp/ccbd.sock'
+    assert payload['preferred_socket_path'] == '/mnt/e/repo/.ccb/ccbd/ccbd.sock'
+    assert payload['effective_socket_path'] == '/tmp/ccb-runtime/ccbd-proj.sock'
+    assert payload['socket_root_kind'] == 'runtime'
+    assert payload['socket_fallback_reason'] == 'unsupported_filesystem'
+    assert payload['socket_filesystem_hint'] == 'wsl_drvfs'
+    assert payload['tmux_socket_path'] == '/tmp/ccb-runtime/tmux-proj.sock'
     assert payload['diagnostics']['last_failure_reason'] == 'startup_in_progress'
 
 
@@ -78,6 +106,7 @@ def test_ping_handler_all_uses_lifecycle_phase_for_ccbd_state() -> None:
     handler = build_ping_handler(
         project_id='proj-1',
         config=config,
+        paths=_paths(),
         registry=SimpleNamespace(
             list_known_agents=lambda: ('demo',),
             spec_for=lambda name: config.agents[name],
@@ -120,6 +149,7 @@ def test_build_agent_payload_prefers_runtime_mount_state_over_project_phase() ->
     handler = build_ping_handler(
         project_id='proj-1',
         config=config,
+        paths=_paths(),
         registry=SimpleNamespace(
             list_known_agents=lambda: ('demo',),
             spec_for=lambda name: config.agents[name],

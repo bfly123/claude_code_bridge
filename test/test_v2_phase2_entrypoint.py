@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 from ccbd.app import CcbdApp
+from ccbd.socket_client import CcbdClient, CcbdClientError
 from ccbd.services.health import HealthMonitor
 import cli.phase2 as phase2_module
 from cli.phase2 import maybe_handle_phase2
@@ -827,11 +828,19 @@ def _wait_for_phase2_status(cwd: Path, target: str, expected: str, *, timeout: f
 
 def _wait_for_path(path: Path, timeout: float = 2.0) -> None:
     deadline = time.time() + timeout
+    last_error: str | None = None
     while time.time() < deadline:
         if path.exists():
-            return
+            if path.suffix != '.sock':
+                return
+            try:
+                CcbdClient(path, timeout_s=0.2).ping('ccbd')
+                return
+            except CcbdClientError as exc:
+                last_error = str(exc)
         time.sleep(0.02)
-    raise AssertionError(f'timed out waiting for {path}')
+    suffix = f' last_error={last_error!r}' if last_error else ''
+    raise AssertionError(f'timed out waiting for {path}{suffix}')
 
 
 def _assert_phase2_app_shutdown_clean(project_root: Path, app: CcbdApp, thread: threading.Thread) -> None:

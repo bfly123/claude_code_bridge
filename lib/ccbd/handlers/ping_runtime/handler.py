@@ -13,6 +13,7 @@ def build_ping_handler(
     *,
     project_id: str,
     config,
+    paths,
     registry,
     health_monitor,
     execution_state_store=None,
@@ -35,6 +36,7 @@ def build_ping_handler(
             return build_ccbd_payload(
                 project_id=project_id,
                 config=config,
+                paths=paths,
                 inspection=inspection,
                 execution_summary=execution_summary,
                 restore_summary=restore_summary,

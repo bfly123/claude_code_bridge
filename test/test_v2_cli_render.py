@@ -399,6 +399,18 @@ def test_render_ps_and_doctor_keep_expected_line_shapes() -> None:
         },
         'ccbd': {
             'state': 'mounted',
+            'socket_path': '/tmp/ccb-runtime/ccbd-proj.sock',
+            'preferred_socket_path': '/mnt/e/repo/.ccb/ccbd/ccbd.sock',
+            'effective_socket_path': '/tmp/ccb-runtime/ccbd-proj.sock',
+            'socket_root_kind': 'runtime',
+            'socket_fallback_reason': 'unsupported_filesystem',
+            'socket_filesystem_hint': 'wsl_drvfs',
+            'tmux_socket_path': '/tmp/ccb-runtime/tmux-proj.sock',
+            'tmux_preferred_socket_path': '/mnt/e/repo/.ccb/ccbd/tmux.sock',
+            'tmux_effective_socket_path': '/tmp/ccb-runtime/tmux-proj.sock',
+            'tmux_socket_root_kind': 'runtime',
+            'tmux_socket_fallback_reason': 'unsupported_filesystem',
+            'tmux_socket_filesystem_hint': 'wsl_drvfs',
             'health': 'healthy',
             'generation': 1,
             'last_heartbeat_at': '2026-03-18T00:00:00Z',
@@ -479,6 +491,9 @@ def test_render_ps_and_doctor_keep_expected_line_shapes() -> None:
     assert 'requirement_tmux_available: True' in doctor_lines
     assert 'requirement_provider: name=codex executable=codex available=True path=/usr/bin/codex' in doctor_lines
     assert 'ccbd_state: mounted' in doctor_lines
+    assert 'ccbd_effective_socket_path: /tmp/ccb-runtime/ccbd-proj.sock' in doctor_lines
+    assert 'ccbd_socket_fallback_reason: unsupported_filesystem' in doctor_lines
+    assert 'ccbd_tmux_effective_socket_path: /tmp/ccb-runtime/tmux-proj.sock' in doctor_lines
     assert 'ccbd_namespace_tmux_session_name: ccb-repo' in doctor_lines
     assert 'agent: name=codex health=healthy provider=codex completion=protocol_turn' in doctor_lines
     assert (

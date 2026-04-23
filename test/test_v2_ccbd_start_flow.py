@@ -272,6 +272,11 @@ def test_runtime_supervisor_start_persists_startup_report(tmp_path: Path, monkey
     assert report.daemon_generation == 3
     assert report.requested_agents == ('demo',)
     assert report.daemon_started is None
+    assert report.socket_placement is not None
+    assert report.socket_placement['effective_socket_path'] == str(app.paths.ccbd_socket_path)
+    assert report.socket_placement['socket_root_kind'] == app.paths.ccbd_socket_placement.root_kind
+    assert report.socket_placement['tmux_effective_socket_path'] == str(app.paths.ccbd_tmux_socket_path)
+    assert report.socket_placement['tmux_socket_root_kind'] == app.paths.ccbd_tmux_socket_placement.root_kind
     assert report.actions_taken == (
         f'ensure_namespace:epoch=7,session={app.paths.ccbd_tmux_session_name}',
         'launch_runtime:demo',

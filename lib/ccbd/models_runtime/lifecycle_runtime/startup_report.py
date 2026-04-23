@@ -24,6 +24,7 @@ class CcbdStartupReport:
     daemon_started: bool | None = None
     config_signature: str | None = None
     inspection: dict[str, Any] | None = None
+    socket_placement: dict[str, Any] | None = None
     restore_summary: dict[str, Any] | None = None
     actions_taken: tuple[str, ...] = ()
     cleanup_summaries: tuple[CcbdTmuxCleanupSummary, ...] = ()
@@ -55,6 +56,7 @@ class CcbdStartupReport:
             'daemon_started': self.daemon_started,
             'config_signature': self.config_signature,
             'inspection': dict(self.inspection or {}),
+            'socket_placement': dict(self.socket_placement or {}),
             'restore_summary': dict(self.restore_summary or {}),
             'actions_taken': list(self.actions_taken),
             'cleanup_summaries': [item.to_record() for item in self.cleanup_summaries],
@@ -96,6 +98,7 @@ class CcbdStartupReport:
             daemon_started=(bool(record['daemon_started']) if record.get('daemon_started') is not None else None),
             config_signature=clean_text(record.get('config_signature')),
             inspection=dict(record.get('inspection') or {}),
+            socket_placement=dict(record.get('socket_placement') or {}),
             restore_summary=dict(record.get('restore_summary') or {}),
             actions_taken=clean_tuple(record.get('actions_taken')),
             cleanup_summaries=tuple(

@@ -78,6 +78,10 @@ class CcbdMailboxPathMixin:
 
 class CcbdMountPathMixin:
     @property
+    def ccbd_socket_placement(self):
+        return self._project_socket_placement('ccbd')
+
+    @property
     def ccbd_lifecycle_path(self):
         return self.ccbd_dir / 'lifecycle.json'
 
@@ -87,7 +91,7 @@ class CcbdMountPathMixin:
 
     @property
     def ccbd_socket_path(self):
-        return self._project_socket_path('ccbd')
+        return self.ccbd_socket_placement.effective_path
 
     @property
     def ccbd_state_path(self):
@@ -110,8 +114,12 @@ class CcbdMountPathMixin:
         return self.ccbd_dir / 'shutdown-report.json'
 
     @property
+    def ccbd_tmux_socket_placement(self):
+        return self._project_socket_placement('tmux')
+
+    @property
     def ccbd_tmux_socket_path(self):
-        return self._project_socket_path('tmux')
+        return self.ccbd_tmux_socket_placement.effective_path
 
     @property
     def ccbd_tmux_session_name(self) -> str:

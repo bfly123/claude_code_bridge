@@ -5,7 +5,7 @@ from pathlib import Path
 
 from project.ids import compute_project_id, project_slug
 
-from .path_helpers import runtime_socket_root, unix_socket_path_is_safe
+from .path_helpers import SocketPlacement, choose_socket_placement
 from .paths_agents import (
     AgentMailboxPathMixin,
     AgentRuntimePathMixin,
@@ -51,11 +51,14 @@ class PathLayout(
     def project_socket_key(self) -> str:
         return compute_project_id(self.project_root)[:12]
 
+    def _project_socket_placement(self, stem: str) -> SocketPlacement:
+        return choose_socket_placement(
+            preferred_path=self.ccbd_dir / f'{stem}.sock',
+            project_socket_key=self.project_socket_key,
+        )
+
     def _project_socket_path(self, stem: str) -> Path:
-        preferred = self.ccbd_dir / f'{stem}.sock'
-        if unix_socket_path_is_safe(preferred):
-            return preferred
-        return runtime_socket_root() / f'{stem}-{self.project_socket_key}.sock'
+        return self._project_socket_placement(stem).effective_path
 
 
 __all__ = ['PathLayout']

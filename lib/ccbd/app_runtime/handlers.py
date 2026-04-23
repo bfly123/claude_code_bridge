@@ -36,6 +36,7 @@ def register_handlers(app) -> None:
         build_ping_handler(
             project_id=app.project_id,
             config=app.config,
+            paths=app.paths,
             registry=app.registry,
             health_monitor=app.health_monitor,
             execution_state_store=app.execution_service._state_store,

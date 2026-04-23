@@ -25,6 +25,17 @@ class LocalPingSummary:
     health: str
     generation: int | None
     socket_path: str | None
+    preferred_socket_path: str | None
+    effective_socket_path: str | None
+    socket_root_kind: str | None
+    socket_fallback_reason: str | None
+    socket_filesystem_hint: str | None
+    tmux_socket_path: str | None
+    tmux_preferred_socket_path: str | None
+    tmux_effective_socket_path: str | None
+    tmux_socket_root_kind: str | None
+    tmux_socket_fallback_reason: str | None
+    tmux_socket_filesystem_hint: str | None
     last_heartbeat_at: str | None
     pid_alive: bool
     socket_connectable: bool
