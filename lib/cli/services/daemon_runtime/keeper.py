@@ -116,13 +116,19 @@ def spawn_keeper_process(context) -> None:
     context.paths.ccbd_dir.mkdir(parents=True, exist_ok=True)
     stdout_log = open(context.paths.ccbd_dir / 'keeper.stdout.log', 'ab')
     stderr_log = open(context.paths.ccbd_dir / 'keeper.stderr.log', 'ab')
+    popen_kwargs = {
+        'cwd': str(context.project.project_root),
+        'env': env,
+        'stdout': stdout_log,
+        'stderr': stderr_log,
+    }
+    if os.name == 'nt':
+        popen_kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+    else:
+        popen_kwargs['start_new_session'] = True
     subprocess.Popen(
         [sys.executable, str(script), '--project', str(context.project.project_root)],
-        cwd=str(context.project.project_root),
-        env=env,
-        stdout=stdout_log,
-        stderr=stderr_log,
-        start_new_session=True,
+        **popen_kwargs,
     )
 
 
@@ -131,7 +137,7 @@ def _lib_root() -> Path:
 
 
 def _should_tolerate_keyboard_interrupt(context) -> bool:
-    return os.name == 'nt' and getattr(context.paths, 'ccbd_ipc_kind', None) == 'named_pipe'
+    return getattr(context.paths, 'ccbd_ipc_kind', None) == 'named_pipe'
 
 
 def _deadline_after(duration_s: float, *, tolerate_interrupts: bool) -> float:
