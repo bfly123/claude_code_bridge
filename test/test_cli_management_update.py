@@ -119,7 +119,7 @@ def test_update_via_tarball_uses_staged_unix_installer(monkeypatch, tmp_path: Pa
 
     assert code == 0
     assert calls["action"] == "install"
-    assert calls["source_dir"] == tmp_base / "ccb_update" / "ccb-linux-x86_64"
+    assert calls["source_dir"] == tmp_base / "ccb_update" / update_runtime._release_extract_dir_name(update_runtime._release_artifact_name())
     assert calls["install_dir"] == install_dir
     assert calls["extra_env"] == {
         "CODEX_INSTALL_PREFIX": str(install_dir),
