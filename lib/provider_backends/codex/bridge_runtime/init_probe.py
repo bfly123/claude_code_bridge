@@ -99,3 +99,13 @@ class CodexInitProbe:
         last = lines[-1]
         # Strip leading whitespace (pane may have indent), check prefix
         return last.lstrip().startswith("› ")
+
+    def capture_visible_for_diagnostics(self) -> str:
+        """Expose visible capture for InitGate diagnostics.
+
+        Returns empty string on any error (conservative).
+        """
+        try:
+            return self._capture_visible()
+        except Exception:
+            return ""
