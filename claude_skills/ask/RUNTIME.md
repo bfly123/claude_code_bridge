@@ -5,7 +5,9 @@ Use this only for `/ask`.
 Rules:
 
 - Default `/ask` is asynchronous.
-- Submit with canonical `ccb ask`.
+- Submit with `ask`.
+- Sender is inferred from the current CCB workspace.
+- Use `TARGET=all` for broadcast.
 - After successful async submit, end the current turn immediately.
 - If output contains `[CCB_ASYNC_SUBMITTED ...]`, the handoff is complete for this turn.
 - Do not say you are waiting for replies.
@@ -16,15 +18,10 @@ Rules:
 Execution:
 
 ```bash
-command ccb ask "$TARGET" <<'EOF'
+command ask "$TARGET" <<'EOF'
 $MESSAGE
 EOF
 ```
-
-Broadcast:
-
-- Use `TARGET=all`.
-- Broadcast excludes the current sender agent automatically.
 
 Failure handling:
 

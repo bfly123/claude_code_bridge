@@ -148,6 +148,54 @@ def test_materialize_claude_home_config_preserves_runtime_hooks_and_permissions(
     assert payload['permissions']['allow'] == ['Bash(ls)']
 
 
+def test_materialize_claude_home_config_refreshes_inherited_skill_assets(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_claude_dir = source_home / '.claude'
+    (source_claude_dir / 'skills' / 'review').mkdir(parents=True, exist_ok=True)
+    (source_claude_dir / 'commands').mkdir(parents=True, exist_ok=True)
+    (source_claude_dir / 'skills' / 'review' / 'SKILL.md').write_text('skill-v1\n', encoding='utf-8')
+    (source_claude_dir / 'commands' / 'check.md').write_text('command-v1\n', encoding='utf-8')
+    (source_claude_dir / 'CLAUDE.md').write_text('claude-md-v1\n', encoding='utf-8')
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+
+    assert (layout.claude_dir / 'skills' / 'review' / 'SKILL.md').read_text(encoding='utf-8') == 'skill-v1\n'
+    assert (layout.claude_dir / 'commands' / 'check.md').read_text(encoding='utf-8') == 'command-v1\n'
+    assert (layout.claude_dir / 'CLAUDE.md').read_text(encoding='utf-8') == 'claude-md-v1\n'
+
+    (source_claude_dir / 'skills' / 'review' / 'SKILL.md').write_text('skill-v2\n', encoding='utf-8')
+    (source_claude_dir / 'commands' / 'check.md').write_text('command-v2\n', encoding='utf-8')
+    (source_claude_dir / 'CLAUDE.md').write_text('claude-md-v2\n', encoding='utf-8')
+
+    materialize_claude_home_config(target_home, source_home=source_home)
+
+    assert (layout.claude_dir / 'skills' / 'review' / 'SKILL.md').read_text(encoding='utf-8') == 'skill-v2\n'
+    assert (layout.claude_dir / 'commands' / 'check.md').read_text(encoding='utf-8') == 'command-v2\n'
+    assert (layout.claude_dir / 'CLAUDE.md').read_text(encoding='utf-8') == 'claude-md-v2\n'
+
+
+def test_materialize_claude_home_config_respects_inherit_skills_flag(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_claude_dir = source_home / '.claude'
+    (source_claude_dir / 'skills' / 'review').mkdir(parents=True, exist_ok=True)
+    (source_claude_dir / 'commands').mkdir(parents=True, exist_ok=True)
+    (source_claude_dir / 'skills' / 'review' / 'SKILL.md').write_text('skill\n', encoding='utf-8')
+    (source_claude_dir / 'commands' / 'check.md').write_text('command\n', encoding='utf-8')
+    (source_claude_dir / 'CLAUDE.md').write_text('claude-md\n', encoding='utf-8')
+
+    layout = materialize_claude_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_skills=False, inherit_commands=True),
+        source_home=source_home,
+    )
+
+    assert not (layout.claude_dir / 'skills').exists()
+    assert not (layout.claude_dir / 'CLAUDE.md').exists()
+    assert (layout.claude_dir / 'commands' / 'check.md').read_text(encoding='utf-8') == 'command\n'
+
+
 def test_materialize_gemini_profile_keeps_runtime_home_unset_without_explicit_override(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo'
 

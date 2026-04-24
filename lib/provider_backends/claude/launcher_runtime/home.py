@@ -101,10 +101,15 @@ def _prepare_managed_home(source_home: Path, target_layout: ClaudeHomeLayout, *,
 
     _materialize_settings(source_home, target_layout, profile=profile)
     _materialize_trust(source_home, target_layout)
+    _materialize_inherited_assets(source_home, target_layout, profile=profile)
+
+
+def _materialize_inherited_assets(source_home: Path, target_layout: ClaudeHomeLayout, *, profile) -> None:
     if _inherits_commands(profile):
-        _copytree_if_missing(source_home / '.claude' / 'commands', target_layout.claude_dir / 'commands')
+        _sync_tree(source_home / '.claude' / 'commands', target_layout.claude_dir / 'commands')
     if _inherits_skills(profile):
-        _copy_if_missing(source_home / '.claude' / 'CLAUDE.md', target_layout.claude_dir / 'CLAUDE.md')
+        _sync_tree(source_home / '.claude' / 'skills', target_layout.claude_dir / 'skills')
+        _sync_file(source_home / '.claude' / 'CLAUDE.md', target_layout.claude_dir / 'CLAUDE.md')
 
 
 def _materialize_settings(source_home: Path, target_layout: ClaudeHomeLayout, *, profile) -> None:
@@ -223,12 +228,22 @@ def _copy_if_missing(source: Path, target: Path) -> None:
         pass
 
 
-def _copytree_if_missing(source: Path, target: Path) -> None:
-    if target.exists() or not source.is_dir():
+def _sync_file(source: Path, target: Path) -> None:
+    if not source.is_file():
         return
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
-        shutil.copytree(source, target)
+        shutil.copy2(source, target)
+    except Exception:
+        pass
+
+
+def _sync_tree(source: Path, target: Path) -> None:
+    if not source.is_dir():
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.copytree(source, target, dirs_exist_ok=True)
     except Exception:
         pass
 

@@ -59,6 +59,9 @@ Inside that home, the managed Claude state is:
 - `.ccb/agents/<agent>/provider-state/claude/home/.claude/projects/`
 - `.ccb/agents/<agent>/provider-state/claude/home/.claude/session-env/`
 - `.ccb/agents/<agent>/provider-state/claude/home/.claude/settings.json`
+- `.ccb/agents/<agent>/provider-state/claude/home/.claude/skills/` when skill inheritance is enabled
+- `.ccb/agents/<agent>/provider-state/claude/home/.claude/commands/` when command inheritance is enabled
+- `.ccb/agents/<agent>/provider-state/claude/home/.claude/CLAUDE.md` when Claude prompt inheritance is enabled
 - `.ccb/agents/<agent>/provider-state/claude/home/.claude.json`
 
 If the effective Claude home is explicitly overridden by a provider profile, the
@@ -103,6 +106,9 @@ When `ccb` starts a managed Claude agent:
 - managed `settings.json` projection must treat inherited system settings as the
   baseline and preserve managed runtime sections such as `hooks` and compatible
   Claude-written runtime state such as `permissions`
+- when inheritance is enabled, it must refresh inherited Claude `skills/`,
+  `commands/`, and `.claude/CLAUDE.md` projections into the managed home on
+  each managed launch so source-home updates become visible after restart
 - it must install Claude hook/trust state only inside that managed home
 - it must write the effective `claude_home`, `claude_projects_root`, and
   `claude_session_env_root` into the agent session file
