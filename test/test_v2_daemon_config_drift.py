@@ -147,7 +147,7 @@ def test_ensure_daemon_started_restarts_healthy_daemon_on_config_drift(monkeypat
     shutdown_calls: list[str] = []
     keeper_calls: list[Path] = []
     running_intents: list[str] = []
-    client_payloads = iter(
+    probe_payloads = iter(
         [
             {
                 'known_agents': ['codex', 'claude', 'gemini'],
@@ -159,11 +159,17 @@ def test_ensure_daemon_started_restarts_healthy_daemon_on_config_drift(monkeypat
             },
         ]
     )
+    current_payload = {
+        'known_agents': ['codex', 'claude', 'gemini'],
+        'config_signature': 'old-signature',
+    }
 
     class FakeClient:
         def __init__(self, socket_path, *, timeout_s=None) -> None:
-            del socket_path, timeout_s
-            self._payload = next(client_payloads)
+            del socket_path
+            if timeout_s == daemon_service.CONTROL_PLANE_RPC_TIMEOUT_S:
+                current_payload.update(next(probe_payloads))
+            self._payload = dict(current_payload)
 
         def ping(self, target: str = 'ccbd') -> dict:
             assert target == 'ccbd'
@@ -202,10 +208,13 @@ def test_connect_compatible_daemon_does_not_shutdown_on_transient_ping_timeout(
         reason='healthy',
     )
     shutdown_calls: list[str] = []
+    captured: list[float | None] = []
 
     class FakeClient:
         def __init__(self, socket_path, *, timeout_s=None) -> None:
-            del socket_path, timeout_s
+            del socket_path
+            self.timeout_s = timeout_s
+            captured.append(timeout_s)
 
         def ping(self, target: str = 'ccbd') -> dict:
             assert target == 'ccbd'
@@ -225,6 +234,8 @@ def test_connect_compatible_daemon_does_not_shutdown_on_transient_ping_timeout(
 
     assert handle is not None
     assert isinstance(handle.client, FakeClient)
+    assert captured == [daemon_service.CONTROL_PLANE_RPC_TIMEOUT_S, None]
+    assert handle.client.timeout_s is None
     assert shutdown_calls == []
 
 

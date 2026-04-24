@@ -141,12 +141,13 @@ def test_ensure_daemon_started_uses_shared_startup_deadline(monkeypatch) -> None
 
 
 def test_connect_compatible_daemon_uses_short_control_plane_timeout(monkeypatch, tmp_path: Path) -> None:
-    captured: dict[str, float | None] = {}
+    captured: list[float | None] = []
 
     class FakeClient:
         def __init__(self, socket_path, *, timeout_s=None) -> None:
             del socket_path
-            captured['timeout_s'] = timeout_s
+            self.timeout_s = timeout_s
+            captured.append(timeout_s)
 
         def ping(self, target: str = 'ccbd') -> dict[str, object]:
             assert target == 'ccbd'
@@ -165,4 +166,5 @@ def test_connect_compatible_daemon_uses_short_control_plane_timeout(monkeypatch,
     )
 
     assert handle is not None
-    assert captured['timeout_s'] == daemon_service.CONTROL_PLANE_RPC_TIMEOUT_S
+    assert captured == [daemon_service.CONTROL_PLANE_RPC_TIMEOUT_S, None]
+    assert handle.client.timeout_s is None

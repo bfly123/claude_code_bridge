@@ -189,13 +189,18 @@ def _connect_compatible_daemon(
         context,
         inspection,
         restart_on_mismatch=restart_on_mismatch,
-        client_factory=_build_control_plane_client,
+        probe_client_factory=_build_probe_control_plane_client,
+        runtime_client_factory=_build_control_plane_client,
         daemon_matches_project_config_fn=_daemon_matches_project_config,
         shutdown_incompatible_daemon_fn=_shutdown_incompatible_daemon,
     )
 
 
 def _build_control_plane_client(socket_path):
+    return CcbdClient(socket_path)
+
+
+def _build_probe_control_plane_client(socket_path):
     try:
         return CcbdClient(socket_path, timeout_s=CONTROL_PLANE_RPC_TIMEOUT_S)
     except TypeError:
