@@ -64,6 +64,23 @@ def _inspection(
     )
 
 
+def _repeat_last_inspection(inspections):
+    items = tuple(inspections)
+    assert items
+    iterator = iter(items)
+    last = items[-1]
+
+    def _inspect(context):
+        del context
+        try:
+            current = next(iterator)
+        except StopIteration:
+            current = last
+        return None, None, current
+
+    return _inspect
+
+
 def test_keeper_state_store_roundtrip(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-state'
     _write(project_root / '.ccb' / 'ccb.config', 'agent1:codex\n')
@@ -432,7 +449,7 @@ def test_ensure_daemon_started_waits_for_keeper_started_backend(monkeypatch, tmp
                 'config_signature': expected['config_signature'],
             }
 
-    monkeypatch.setattr(daemon_service, 'inspect_daemon', lambda context: (None, None, next(inspections)))
+    monkeypatch.setattr(daemon_service, 'inspect_daemon', _repeat_last_inspection(inspections))
     monkeypatch.setattr(daemon_service, 'CcbdClient', FakeClient)
     monkeypatch.setattr(daemon_service, '_record_running_intent', lambda context: running_intents.append(context.project.project_id))
     monkeypatch.setattr(daemon_service, '_ensure_keeper_started', lambda context: True)

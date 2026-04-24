@@ -8,6 +8,7 @@ import time
 
 from cli.context import CliContext
 from ccbd.socket_client import CcbdClient, CcbdClientError
+from .daemon_runtime.policy import CONTROL_PLANE_RPC_TIMEOUT_S
 
 _ATTACH_ESTABLISH_TIMEOUT_S = 1.5
 _ATTACH_ESTABLISH_POLL_INTERVAL_S = 0.05
@@ -160,9 +161,17 @@ def _tmux_list_client_pids(
 
 def _client_for_started_project(context: CliContext):
     try:
-        return CcbdClient(context.paths.ccbd_socket_path)
+        return _build_control_plane_client(context.paths.ccbd_socket_path)
     except CcbdClientError as exc:
         raise ForegroundAttachError(f'project ccbd is unavailable after successful `ccb` start: {exc}') from exc
+
+
+def _build_control_plane_client(socket_path):
+    try:
+        return CcbdClient(socket_path, timeout_s=CONTROL_PLANE_RPC_TIMEOUT_S)
+    except TypeError:
+        # Some test doubles or compatibility shims expose only the legacy single-arg constructor.
+        return CcbdClient(socket_path)
 
 
 def _attach_env() -> dict[str, str]:

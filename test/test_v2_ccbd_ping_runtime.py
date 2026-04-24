@@ -47,6 +47,10 @@ def _inspection(*, phase: str, desired_state: str, socket_path: str = '/tmp/ccbd
         heartbeat_fresh=False,
         takeover_allowed=True,
         reason='lease_unmounted',
+        startup_id='startup-123' if phase == 'starting' else None,
+        startup_stage='spawn_requested' if phase == 'starting' else None,
+        last_progress_at='2026-04-21T00:00:01Z' if phase == 'starting' else None,
+        startup_deadline_at='2026-04-21T00:00:20Z' if phase == 'starting' else None,
         last_failure_reason='startup_in_progress' if phase == 'starting' else None,
         shutdown_intent=None,
         lease=SimpleNamespace(
@@ -99,6 +103,10 @@ def test_build_ccbd_payload_prefers_lifecycle_phase_over_lease_mount_state() -> 
     assert payload['socket_filesystem_hint'] == 'wsl_drvfs'
     assert payload['tmux_socket_path'] == '/tmp/ccb-runtime/tmux-proj.sock'
     assert payload['diagnostics']['last_failure_reason'] == 'startup_in_progress'
+    assert payload['diagnostics']['startup_id'] == 'startup-123'
+    assert payload['diagnostics']['startup_stage'] == 'spawn_requested'
+    assert payload['diagnostics']['last_progress_at'] == '2026-04-21T00:00:01Z'
+    assert payload['diagnostics']['startup_deadline_at'] == '2026-04-21T00:00:20Z'
 
 
 def test_ping_handler_all_uses_lifecycle_phase_for_ccbd_state() -> None:

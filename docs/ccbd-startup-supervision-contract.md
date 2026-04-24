@@ -231,7 +231,26 @@ Startup must be a single project-scoped transaction:
 11. commit startup actions
 12. emit startup result and persist startup report
 
-`start_status: ok` is valid only when:
+Startup waiter rules:
+
+- lifecycle `phase=mounted` publishes backend control-plane readiness only
+- control-plane readiness means:
+  - the current authoritative generation bound the project socket
+  - the current authoritative generation answers the minimal control-plane readiness probe for that socket
+  - the current authoritative generation published the matching current lease authority
+- commands that only need control-plane RPC, including `ccb ask`, `ping`, `pend`, `watch`, `queue`, and similar daemon callers, must stop waiting at control-plane readiness
+- those non-foreground callers must not wait for project-namespace attachability or full desired-agent recovery before submitting work
+- interactive `ccb` may continue waiting past control-plane readiness for project-namespace/UI readiness and desired-agent recovery
+- CLI callers must not own an independent direct-spawn startup path or a separate local "daemon must be ready in N seconds" authority
+- instead, CLI callers express desired lifecycle state, observe the keeper-owned `startup_id` / generation transaction, and return as soon as that transaction reaches success or failure
+- `startup_transaction_timeout_s` is the maximum budget ceiling for one keeper-owned cold-start transaction:
+  - it is not a fixed sleep
+  - it is not a generic per-RPC timeout
+  - it must return immediately when the relevant transaction reaches success or failure
+  - it must not delay ordinary hot-path calls against an already mounted backend
+  - stalled startup should also be bounded by a shorter progress-stall policy based on lifecycle startup progress
+
+`ccb` foreground `start_status: ok` is valid only when:
 
 - the project backend is healthy and authoritative
 - the project lifecycle phase is `mounted`
@@ -273,6 +292,11 @@ Foreground command split:
     - `ccb` must therefore perform a bounded readiness wait for the authoritative session and workspace window before declaring foreground attach failure
   - in a non-interactive terminal, reports the start transaction without attaching to tmux
   - startup success and foreground attach success are distinct outcomes; foreground attach failure must not rewrite a successful startup report as failed
+- ask-family and other non-foreground daemon commands
+  - reuse the same keeper-owned backend startup transaction
+  - stop waiting at control-plane readiness
+  - must not enter namespace attach waits
+  - must not reinterpret a namespace/UI delay as backend startup failure
 - `ccb -n`
   - is an explicit destructive project reset before start
   - must require interactive confirmation

@@ -27,6 +27,7 @@ def start(app):
         )
         try:
             app.socket_server.listen()
+            _update_startup_progress(app, 'socket_listening')
         except Exception as exc:
             app.lease = release_backend_ownership(app)
             _mark_lifecycle_failed(app, failure_reason=str(exc))
@@ -39,11 +40,13 @@ def start(app):
             )
             raise
     try:
+        _update_startup_progress(app, 'restoring_state')
         app.dispatcher.restore_running_jobs()
         adopted_agents = _adopt_existing_runtime_authority(app)
         restore_report = app.dispatcher.last_restore_report(project_id=app.project_id)
         if restore_report is not None:
             app.restore_report_store.save(restore_report)
+        _update_startup_progress(app, 'publishing_mounted')
         _mark_lifecycle_mounted(app)
         startup_actions = ['mount_backend', 'listen_socket', 'restore_running_jobs']
         if adopted_agents:
@@ -325,6 +328,9 @@ def _mark_lifecycle_mounted(app) -> None:
             socket_path=str(app.paths.ccbd_socket_path),
             socket_inode=current_socket_inode(app.paths.ccbd_socket_path),
             namespace_epoch=getattr(namespace_state, 'namespace_epoch', None),
+            startup_stage='mounted',
+            last_progress_at=app.clock(),
+            startup_deadline_at=None,
             last_failure_reason=None,
             shutdown_intent=None,
         )
@@ -338,6 +344,9 @@ def _mark_lifecycle_stopping(app, *, shutdown_intent: str) -> None:
             'stopping',
             occurred_at=app.clock(),
             desired_state='stopped',
+            startup_stage=None,
+            last_progress_at=app.clock(),
+            startup_deadline_at=None,
             shutdown_intent=shutdown_intent,
             last_failure_reason=None,
         )
@@ -355,6 +364,9 @@ def _mark_lifecycle_unmounted(app) -> None:
             socket_inode=None,
             socket_path=str(app.paths.ccbd_socket_path),
             namespace_epoch=None,
+            startup_stage=None,
+            last_progress_at=app.clock(),
+            startup_deadline_at=None,
             last_failure_reason=None,
         )
     )
@@ -371,9 +383,30 @@ def _mark_lifecycle_failed(app, *, failure_reason: str) -> None:
             socket_inode=None,
             socket_path=str(app.paths.ccbd_socket_path),
             namespace_epoch=None,
+            startup_stage='failed',
+            last_progress_at=app.clock(),
+            startup_deadline_at=None,
             last_failure_reason=failure_reason,
         )
     )
+
+
+def _update_startup_progress(app, stage: str) -> None:
+    try:
+        lifecycle = app.lifecycle_store.load()
+    except Exception:
+        return
+    if lifecycle is None or lifecycle.phase != 'starting':
+        return
+    try:
+        app.lifecycle_store.save(
+            lifecycle.with_updates(
+                startup_stage=str(stage).strip() or None,
+                last_progress_at=app.clock(),
+            )
+        )
+    except Exception:
+        return
 
 
 def _heartbeat_failures(app) -> tuple[str, ...]:

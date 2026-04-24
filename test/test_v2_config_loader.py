@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import agents.config_loader_runtime.io_runtime.documents as config_documents
 from agents.config_loader import (
     ConfigValidationError,
     build_default_project_config,
@@ -276,3 +277,44 @@ def test_load_project_config_reads_project_ccb_config_path(tmp_path: Path) -> No
 
     assert result.source_path == config_path
     assert result.config.layout_spec == 'cmd; agent1:codex'
+
+
+def test_load_project_config_compact_format_does_not_require_toml_reader(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo-compact-no-toml'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(config_path, 'cmd; agent1:codex\n')
+
+    def _unexpected_reader(path: Path):
+        raise AssertionError(f'compact config unexpectedly requested TOML reader for {path}')
+
+    monkeypatch.setattr(config_documents, '_load_toml_reader', _unexpected_reader)
+
+    result = load_project_config(project_root)
+
+    assert result.config.layout_spec == 'cmd; agent1:codex'
+
+
+def test_load_project_config_reports_actionable_error_when_rich_toml_parser_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo-rich-no-toml'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        'version = 2\n'
+        'default_agents = ["agent1"]\n'
+        'layout = "agent1"\n'
+        '\n'
+        '[agents.agent1]\n'
+        'provider = "codex"\n'
+        'target = "."\n',
+    )
+
+    monkeypatch.setattr(config_documents, '_import_optional_toml_reader', lambda: None)
+
+    with pytest.raises(ConfigValidationError, match='rich TOML config requires Python 3.11\\+'):
+        load_project_config(project_root)

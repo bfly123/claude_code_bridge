@@ -35,6 +35,10 @@ def ping_target(context: CliContext, command: ParsedPingCommand) -> dict:
                 'heartbeat_fresh': local.heartbeat_fresh,
                 'takeover_allowed': local.takeover_allowed,
                 'reason': local.reason,
+                'startup_id': local.startup_id,
+                'startup_stage': local.startup_stage,
+                'last_progress_at': local.last_progress_at,
+                'startup_deadline_at': local.startup_deadline_at,
             }
         return {
             'project_id': local.project_id,

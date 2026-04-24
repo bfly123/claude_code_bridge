@@ -42,6 +42,10 @@ class LocalPingSummary:
     heartbeat_fresh: bool
     takeover_allowed: bool
     reason: str
+    startup_id: str | None = None
+    startup_stage: str | None = None
+    last_progress_at: str | None = None
+    startup_deadline_at: str | None = None
     last_failure_reason: str | None = None
     shutdown_intent: str | None = None
 

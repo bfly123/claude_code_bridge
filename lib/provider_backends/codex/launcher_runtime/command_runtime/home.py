@@ -1,18 +1,11 @@
 from __future__ import annotations
 
+import importlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
 import re
 import shutil
-
-try:  # pragma: no branch
-    import tomllib as _toml_reader
-except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback
-    try:
-        import tomli as _toml_reader  # type: ignore[no-redef]
-    except ModuleNotFoundError:  # pragma: no cover - external fallback
-        import toml as _toml_reader  # type: ignore[no-redef]
 
 from ..session_paths import read_session_payload, session_file_for_runtime_dir, state_dir_for_runtime_dir
 
@@ -213,16 +206,33 @@ def _prepare_managed_home(source_home: Path, target_home: Path) -> None:
     _sync_tree(source_home / 'commands', target_home / 'commands')
 
 
+def _import_optional_toml_reader():
+    for module_name in ('tomllib', 'tomli', 'toml'):
+        try:
+            return importlib.import_module(module_name)
+        except ModuleNotFoundError:
+            continue
+    return None
+
+
 def _source_config_valid(config_path: Path) -> bool:
     try:
-        if config_path.is_file():
-            if getattr(_toml_reader, '__name__', '') == 'toml':
-                _toml_reader.loads(config_path.read_text(encoding='utf-8'))
-            elif hasattr(_toml_reader, 'load'):
-                with config_path.open('rb') as handle:
-                    _toml_reader.load(handle)
-            else:  # pragma: no cover
-                _toml_reader.loads(config_path.read_text(encoding='utf-8'))
+        if not config_path.is_file():
+            return True
+        reader = _import_optional_toml_reader()
+        if reader is None:
+            # Old/system Python may lack a TOML parser. Validation here is only a best-effort
+            # safety check; absence of the validator must not block daemon startup or config sync.
+            return True
+        if getattr(reader, '__name__', '') == 'toml':
+            reader.loads(config_path.read_text(encoding='utf-8'))
+        elif hasattr(reader, 'load'):
+            with config_path.open('rb') as handle:
+                reader.load(handle)
+        elif hasattr(reader, 'loads'):  # pragma: no cover - defensive fallback
+            reader.loads(config_path.read_text(encoding='utf-8'))
+        else:  # pragma: no cover - unsupported parser shim
+            return True
         return True
     except Exception:
         return False

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
 import os
 import time
@@ -17,7 +18,8 @@ from ccbd.services.lifecycle import CcbdLifecycleStore, current_socket_inode, li
 from ccbd.services.mount import MountManager
 from ccbd.services.ownership import OwnershipGuard
 from ccbd.socket_client import CcbdClient, CcbdClientError
-from ccbd.system import process_exists, utc_now
+from ccbd.startup_policy import STARTUP_TRANSACTION_TIMEOUT_S
+from ccbd.system import parse_utc_timestamp, process_exists, utc_now
 from cli.kill_runtime.processes import terminate_pid_tree
 from storage.paths import PathLayout
 
@@ -51,7 +53,7 @@ class ProjectKeeper(KeeperAppStateMixin):
             intent_store=ShutdownIntentStore(paths),
         )
 
-    def run_forever(self, *, poll_interval: float = 0.5, start_timeout_s: float = 5.0) -> int:
+    def run_forever(self, *, poll_interval: float = 0.5, start_timeout_s: float = STARTUP_TRANSACTION_TIMEOUT_S) -> int:
         return run_forever(self, poll_interval=poll_interval, start_timeout_s=start_timeout_s)
 
     def _reconcile_once(self, *, state: KeeperState, start_timeout_s: float) -> KeeperState:
@@ -90,12 +92,17 @@ def _spawn_daemon(app: ProjectKeeper, *, state: KeeperState, start_timeout_s: fl
     try:
         config = load_project_config(app.project_root).config
         config_signature = str(project_config_identity_payload(config)['config_signature'])
+        startup_id = uuid.uuid4().hex
+        deadline_at = _timestamp_plus_seconds(now, start_timeout_s)
         starting = lifecycle.with_phase(
             'starting',
             occurred_at=now,
             desired_state='running',
             generation=max(int(lifecycle.generation), int(getattr(getattr(inspection, 'lease', None), 'generation', 0) or 0)) + 1,
-            startup_id=uuid.uuid4().hex,
+            startup_id=startup_id,
+            startup_stage='spawn_requested',
+            last_progress_at=now,
+            startup_deadline_at=deadline_at,
             keeper_pid=app.pid,
             owner_pid=None,
             owner_daemon_instance_id=None,
@@ -124,6 +131,9 @@ def _spawn_daemon(app: ProjectKeeper, *, state: KeeperState, start_timeout_s: fl
                 config_signature=str(getattr(lease, 'config_signature', '') or '').strip() or config_signature,
                 socket_path=str(getattr(lease, 'socket_path', '') or app.paths.ccbd_socket_path),
                 socket_inode=current_socket_inode(getattr(lease, 'socket_path', app.paths.ccbd_socket_path)),
+                startup_stage='mounted',
+                last_progress_at=app.clock(),
+                startup_deadline_at=None,
                 last_failure_reason=None,
                 shutdown_intent=None,
             )
@@ -138,6 +148,9 @@ def _spawn_daemon(app: ProjectKeeper, *, state: KeeperState, start_timeout_s: fl
                     owner_pid=None,
                     owner_daemon_instance_id=None,
                     socket_inode=None,
+                    startup_stage='spawn_failed',
+                    last_progress_at=app.clock(),
+                    startup_deadline_at=None,
                     last_failure_reason=str(exc),
                 )
             )
@@ -158,6 +171,10 @@ def _try_acquire_keeper_lock(path: Path):
 
 def _reap_child_processes(*, waitpid_fn=os.waitpid) -> tuple[int, ...]:
     return reap_child_processes(waitpid_fn=waitpid_fn)
+
+
+def _timestamp_plus_seconds(value: str, seconds: float) -> str:
+    return (parse_utc_timestamp(value) + timedelta(seconds=max(0.0, float(seconds)))).isoformat().replace('+00:00', 'Z')
 
 
 __all__ = [

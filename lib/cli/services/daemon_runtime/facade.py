@@ -7,15 +7,18 @@ from cli.kill_runtime.processes import is_pid_alive
 from .keeper import ensure_keeper_started as ensure_keeper_started_runtime
 from .keeper import keeper_pid as keeper_pid_runtime
 from .keeper import wait_for_keeper_exit as wait_for_keeper_exit_runtime
+from .policy import (
+    KEEPER_READY_TIMEOUT_S,
+    STARTUP_PROGRESS_STALL_TIMEOUT_S,
+    STARTUP_TRANSACTION_TIMEOUT_S,
+)
 from .processes import (
     should_restart_unreachable_daemon as should_restart_unreachable_daemon_runtime,
 )
 from .processes import spawn_ccbd as spawn_ccbd_runtime
 
-
-START_TIMEOUT_S = 5.0
 SHUTDOWN_TIMEOUT_S = 2.0
-KEEPER_READY_TIMEOUT_S = 2.0
+START_TIMEOUT_S = STARTUP_TRANSACTION_TIMEOUT_S
 
 
 def incompatible_daemon_error() -> str:
@@ -53,13 +56,15 @@ def should_restart_unreachable_daemon(inspection) -> bool:
 
 
 def spawn_ccbd_process(context) -> None:
-    spawn_ccbd_runtime(context, start_timeout_s=START_TIMEOUT_S)
+    spawn_ccbd_runtime(context, start_timeout_s=STARTUP_TRANSACTION_TIMEOUT_S)
 
 
 __all__ = [
     'KEEPER_READY_TIMEOUT_S',
+    'STARTUP_PROGRESS_STALL_TIMEOUT_S',
     'SHUTDOWN_TIMEOUT_S',
     'START_TIMEOUT_S',
+    'STARTUP_TRANSACTION_TIMEOUT_S',
     'ensure_keeper_started',
     'incompatible_daemon_error',
     'keeper_pid',

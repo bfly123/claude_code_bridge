@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 
 from agents.models import parse_layout_spec
@@ -7,14 +8,6 @@ from agents.models import parse_layout_spec
 from ..common import ConfigLoadResult, ConfigValidationError
 from ..parsing import validate_project_config
 from ..paths import project_config_path
-
-try:  # pragma: no branch
-    import tomllib as _toml_reader
-except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback
-    try:
-        import tomli as _toml_reader  # type: ignore[no-redef]
-    except ModuleNotFoundError:  # pragma: no cover - external fallback
-        import toml as _toml_reader  # type: ignore[no-redef]
 
 
 def _build_compact_agent_record(provider: str, *, workspace_mode: str) -> dict[str, str]:
@@ -115,13 +108,33 @@ def _looks_like_rich_config(text: str) -> bool:
     return False
 
 
+def _import_optional_toml_reader():
+    for module_name in ('tomllib', 'tomli', 'toml'):
+        try:
+            return importlib.import_module(module_name)
+        except ModuleNotFoundError:
+            continue
+    return None
+
+
+def _load_toml_reader(path: Path):
+    reader = _import_optional_toml_reader()
+    if reader is None:
+        raise ConfigValidationError(
+            f'{path}: rich TOML config requires Python 3.11+ or an installed tomli/toml parser'
+        )
+    loads = getattr(reader, 'loads', None)
+    if not callable(loads):  # pragma: no cover - defensive guard for unexpected parser shims
+        raise ConfigValidationError(f'{path}: TOML parser does not expose a supported loads() entrypoint')
+    return loads
+
+
 def _parse_toml_config_document(text: str, *, path: Path) -> dict[str, object]:
     try:
-        if hasattr(_toml_reader, 'loads'):
-            document = _toml_reader.loads(text)
-        else:  # pragma: no cover
-            document = _toml_reader.load(text)
+        document = _load_toml_reader(path)(text)
     except Exception as exc:
+        if isinstance(exc, ConfigValidationError):
+            raise
         raise ConfigValidationError(f'{path}: invalid TOML config: {exc}') from exc
     if not isinstance(document, dict):
         raise ConfigValidationError(f'{path}: TOML config must decode to a table/object')

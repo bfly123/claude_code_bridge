@@ -8,13 +8,14 @@ from ccbd.models import LeaseHealth
 from ccbd.services.project_namespace_state import ProjectNamespaceStateStore
 from ccbd.services.lifecycle import current_socket_inode, lifecycle_from_inspection
 from ccbd.socket_client import CcbdClient, CcbdClientError
+from ccbd.startup_policy import STARTUP_TRANSACTION_TIMEOUT_S
 
 from .records import KeeperState
 from .state import compute_project_id, restart_backoff_active
 from .support import reap_child_processes, try_acquire_keeper_lock
 
 
-def run_forever(app, *, poll_interval: float = 0.5, start_timeout_s: float = 5.0) -> int:
+def run_forever(app, *, poll_interval: float = 0.5, start_timeout_s: float = STARTUP_TRANSACTION_TIMEOUT_S) -> int:
     lock_path = app.paths.ccbd_dir / 'keeper.lock'
     lock_handle = try_acquire_keeper_lock(lock_path)
     if lock_handle is None:

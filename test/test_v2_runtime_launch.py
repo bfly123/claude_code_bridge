@@ -21,6 +21,7 @@ import cli.services.runtime_launch as runtime_launch
 from cli.services.runtime_launch import ensure_agent_runtime
 from provider_backends.claude import launcher as claude_launcher
 from provider_backends.codex import launcher as codex_launcher
+import provider_backends.codex.launcher_runtime.command_runtime.home as codex_home_runtime
 from provider_backends.gemini import launcher as gemini_launcher
 from provider_backends.runtime_restore import ProviderRestoreTarget
 from provider_profiles.models import ResolvedProviderProfile
@@ -1306,6 +1307,31 @@ def test_codex_launcher_build_start_cmd_isolates_invalid_global_codex_config(mon
     assert f'CODEX_SESSION_ROOT={shlex.quote(str(isolated_home / "sessions"))}' in cmd
     assert (isolated_home / 'auth.json').is_file()
     assert (isolated_home / 'config.toml').is_file()
+
+
+def test_codex_launcher_build_start_cmd_does_not_require_toml_parser_for_config_sync(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    runtime_dir = tmp_path / 'runtime-no-toml'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    source_home = tmp_path / 'source-home-no-toml'
+    source_home.mkdir(parents=True, exist_ok=True)
+    (source_home / 'config.toml').write_text('model = "gpt-5"\n', encoding='utf-8')
+    (source_home / 'skills' / 'demo').mkdir(parents=True, exist_ok=True)
+    (source_home / 'skills' / 'demo' / 'SKILL.md').write_text('skill\n', encoding='utf-8')
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+    monkeypatch.setattr(codex_home_runtime, '_import_optional_toml_reader', lambda: None)
+
+    spec = _spec('agent1')
+    command = ParsedStartCommand(project=None, agent_names=('agent1',), restore=False, auto_permission=False)
+
+    cmd = codex_launcher.build_start_cmd(command, spec, runtime_dir, 'sess-no-toml')
+
+    isolated_home = runtime_dir / 'codex-state' / 'home'
+    assert f'CODEX_HOME={shlex.quote(str(isolated_home))}' in cmd
+    assert (isolated_home / 'config.toml').read_text(encoding='utf-8') == 'model = "gpt-5"\n'
+    assert (isolated_home / 'skills' / 'demo' / 'SKILL.md').read_text(encoding='utf-8') == 'skill\n'
 
 
 def test_codex_launcher_build_start_cmd_uses_agent_scoped_session_root_by_default(monkeypatch, tmp_path: Path) -> None:
