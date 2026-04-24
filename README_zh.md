@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/模型皆可控-CF1322?style=for-the-badge" alt="模型皆可控">
 </p>
 
-[![Version](https://img.shields.io/badge/version-6.0.10-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-6.0.11-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 [English](README.md) | **中文**
@@ -98,6 +98,15 @@ cmd; writer:codex, reviewer:claude; qa:gemini(worktree)
 历史说明：下面较旧的发布记录里仍可能出现 `askd`、旧 flag 或已移除命令。这些内容仅作为 changelog 历史保留，不代表当前 CLI 入口。
 
 <details open>
+<summary><b>v6.0.11</b> - 项目启动热修复</summary>
+
+- **冷启动 namespace 修复**：项目 tmux namespace 冷启动时，`no server running on <project socket>` 现在会被判定为“namespace 缺失，需要创建”，不再被错误打成通用 tmux inspect 失败
+- **release 回归覆盖补齐**：新增针对 namespace backend/state 的回归测试，锁住这条冷启动路径，覆盖 `ccb -> ping -> kill` 生命周期闭环
+- **契约语义补全**：startup supervision contract 现在明确把 project-socket 上的 `no server running` 定义为重建信号，而不是致命 inspect 失败
+
+</details>
+
+<details>
 <summary><b>v6.0.10</b> - 启动预算加固与 Gemini 登录继承</summary>
 
 - **Gemini 登录继承**：managed Gemini home 现在会为 `oauth-personal` 投影登录鉴权选择与 `oauth_creds.json`，并在关闭 auth 继承时清理旧的复制凭据

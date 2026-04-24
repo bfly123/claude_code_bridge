@@ -322,6 +322,58 @@ def test_project_namespace_controller_recreates_missing_session_with_new_epoch(t
     assert latest_event.details['reason'] == 'missing_session'
 
 
+def test_project_namespace_controller_recreates_after_kill_when_has_session_reports_no_server_running(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-recreate-no-server'
+    layout = PathLayout(project_root)
+
+    class _NoServerWhenAbsentBackend(_FakeTmuxBackend):
+        def _tmux_run(
+            self,
+            args: list[str],
+            *,
+            check: bool = False,
+            capture: bool = False,
+            input_bytes: bytes | None = None,
+            timeout: float | None = None,
+        ):
+            if len(args) >= 3 and args[:2] == ['has-session', '-t'] and args[2] not in self.sessions:
+                self.tmux_calls.append((list(args), capture))
+                return SimpleNamespace(
+                    returncode=1,
+                    stdout='',
+                    stderr=f'no server running on {layout.ccbd_tmux_socket_path}\n',
+                )
+            return super()._tmux_run(
+                args,
+                check=check,
+                capture=capture,
+                input_bytes=input_bytes,
+                timeout=timeout,
+            )
+
+    backend = _NoServerWhenAbsentBackend()
+    controller = ProjectNamespaceController(
+        layout,
+        'proj-2b',
+        clock=lambda: '2026-04-03T03:30:00Z',
+        backend_factory=lambda socket_path=None: backend,
+    )
+
+    first = controller.ensure()
+    controller.destroy(reason='kill')
+    second = controller.ensure()
+    latest_event = ProjectNamespaceEventStore(layout).load_latest()
+
+    assert first.namespace_epoch == 1
+    assert second.namespace_epoch == 2
+    assert second.ui_attachable is True
+    assert layout.ccbd_tmux_session_name in backend.sessions
+    assert latest_event is not None
+    assert latest_event.event_kind == 'namespace_created'
+    assert latest_event.namespace_epoch == 2
+    assert latest_event.details['reason'] == 'missing_session'
+
+
 def test_project_namespace_controller_recreates_session_when_layout_version_changes(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-layout-upgrade'
     layout = PathLayout(project_root)

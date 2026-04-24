@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Every_Model_Controllable-CF1322?style=for-the-badge" alt="Every Model Controllable">
 </p>
 
-[![Version](https://img.shields.io/badge/version-6.0.10-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-6.0.11-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 **English** | [Chinese](README_zh.md)
@@ -92,6 +92,15 @@ This layout means:
 Historical note: older release notes below may mention `askd`, legacy flags, or removed commands. Those references are kept only as changelog history and do not redefine the current CLI surface.
 
 <details open>
+<summary><b>v6.0.11</b> - Project Startup Hotfix</summary>
+
+- **Cold Start Namespace Fix**: project tmux namespace startup now treats `no server running on <project socket>` as an absent namespace that must be created, instead of failing startup as a generic tmux inspect error
+- **Release Regression Coverage**: targeted namespace backend/state regression tests now lock this cold-start path so `ccb -> ping -> kill` blackbox lifecycle stays covered
+- **Contract Clarification**: the startup supervision contract now explicitly defines project-socket `no server running` as a recreate signal rather than a fatal inspect failure
+
+</details>
+
+<details>
 <summary><b>v6.0.10</b> - Startup Budget Hardening & Gemini Login Inheritance</summary>
 
 - **Gemini Login Inheritance**: managed Gemini homes now project login-auth selection and `oauth_creds.json` for `oauth-personal` reuse, and remove stale copied credentials when auth inheritance is disabled

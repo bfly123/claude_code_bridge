@@ -6,6 +6,7 @@ from typing import Callable
 
 from terminal_runtime.tmux_readiness import (
     TmuxTransientServerUnavailable,
+    is_tmux_absent_server_text,
     is_tmux_missing_session_text,
     is_tmux_transient_server_error_text,
     tmux_object_ready_poll_interval_s,
@@ -359,6 +360,8 @@ def _session_alive_once(backend, session_name: str) -> bool:
     stderr = str(getattr(result, 'stderr', '') or '').strip()
     stdout = str(getattr(result, 'stdout', '') or '').strip()
     detail = stderr or stdout
+    if is_tmux_absent_server_text(detail):
+        return False
     if is_tmux_transient_server_error_text(detail):
         raise TmuxTransientServerUnavailable(detail)
     if not detail or is_tmux_missing_session_text(detail):

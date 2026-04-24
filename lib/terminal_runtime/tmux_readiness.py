@@ -7,6 +7,9 @@ _TMUX_TRANSIENT_SERVER_ERROR_MARKERS = (
     'no server running',
     'server exited unexpectedly',
 )
+_TMUX_ABSENT_SERVER_ERROR_MARKERS = (
+    'no server running',
+)
 _TMUX_MISSING_SESSION_ERROR_MARKERS = (
     "can't find session",
     'session not found',
@@ -42,6 +45,13 @@ def is_tmux_transient_server_error(exc: BaseException) -> bool:
     return is_tmux_transient_server_error_text(str(exc))
 
 
+def is_tmux_absent_server_text(text: str) -> bool:
+    normalized = str(text or '').strip().lower()
+    if not normalized:
+        return False
+    return any(marker in normalized for marker in _TMUX_ABSENT_SERVER_ERROR_MARKERS)
+
+
 def is_tmux_missing_session_text(text: str) -> bool:
     normalized = str(text or '').strip().lower()
     if not normalized:
@@ -60,6 +70,7 @@ def tmux_object_ready_poll_interval_s() -> float:
 
 
 __all__ = [
+    'is_tmux_absent_server_text',
     'TmuxTransientServerUnavailable',
     'is_tmux_missing_session_text',
     'is_tmux_transient_server_error',

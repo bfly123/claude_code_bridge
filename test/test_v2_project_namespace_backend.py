@@ -22,6 +22,7 @@ class _FlakyBackend:
         self._remaining_failures: dict[tuple[str, ...], int] = {}
         self.session_created = False
         self.require_session_for_server_policy = False
+        self.missing_session_stderr: str | None = None
 
     def fail_once(self, *args: str) -> None:
         self._remaining_failures[tuple(args)] = 1
@@ -56,11 +57,12 @@ class _FlakyBackend:
                 stderr='',
             )
         if key[:2] == ('has-session', '-t'):
+            missing_stderr = self.missing_session_stderr or f"can't find session: {key[2]}\n"
             return subprocess.CompletedProcess(
                 ['tmux', *key],
                 0 if self.session_created else 1,
                 stdout='',
-                stderr='' if self.session_created else f"can't find session: {key[2]}\n",
+                stderr='' if self.session_created else missing_stderr,
             )
         if key[:2] == ('list-panes', '-t'):
             return subprocess.CompletedProcess(
@@ -154,10 +156,35 @@ def test_session_alive_retries_transient_tmux_failures(monkeypatch) -> None:
     monkeypatch.setenv('CCB_TMUX_OBJECT_READY_POLL_INTERVAL_S', '0')
     backend = _FlakyBackend()
     backend.session_created = True
-    backend.fail_once('has-session', '-t', 'ccb-proj')
+
+    original_tmux_run = backend._tmux_run
+    state = {'remaining': 1}
+
+    def _tmux_run(args, *, check=False, capture=False, timeout=None):
+        if tuple(str(item) for item in args) == ('has-session', '-t', 'ccb-proj') and state['remaining'] > 0:
+            state['remaining'] -= 1
+            backend.calls.append(tuple(str(item) for item in args))
+            return subprocess.CompletedProcess(
+                ['tmux', *args],
+                1,
+                stdout='',
+                stderr='fork failed: resource temporarily unavailable\n',
+            )
+        return original_tmux_run(args, check=check, capture=capture, timeout=timeout)
+
+    backend._tmux_run = _tmux_run  # type: ignore[method-assign]
 
     assert session_alive(backend, 'ccb-proj') is True
     assert backend.calls.count(('has-session', '-t', 'ccb-proj')) == 2
+
+
+def test_session_alive_treats_absent_project_server_as_missing_namespace(monkeypatch) -> None:
+    monkeypatch.setenv('CCB_TMUX_OBJECT_READY_POLL_INTERVAL_S', '0')
+    backend = _FlakyBackend()
+    backend.missing_session_stderr = 'no server running on /tmp/ccb-runtime/test.sock\n'
+
+    assert session_alive(backend, 'ccb-proj') is False
+    assert backend.calls.count(('has-session', '-t', 'ccb-proj')) == 1
 
 
 def test_wait_for_root_pane_raises_transient_unavailable_for_fast_probe(monkeypatch) -> None:

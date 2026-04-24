@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v6.0.11 (2026-04-24)
+
+### Project Startup Hotfix
+
+- **Cold-Start Namespace Classification Fix**: project tmux namespace liveness now treats `no server running on <project socket>` as an absent namespace that should be created or recreated, instead of surfacing a false `failed to inspect tmux session` startup failure
+- **Project Lifecycle Regression Coverage**: added backend/state regression tests for the absent-server cold-start path so real `ccb -> ping -> kill` lifecycle flows remain covered
+- **Startup Contract Clarified**: the startup supervision contract now explicitly defines project-socket `no server running` as a namespace-absent signal during create/recreate decisions
+
 ## v6.0.10 (2026-04-24)
 
 ### Startup Budget Hardening & Gemini Login Inheritance
