@@ -10,7 +10,7 @@ def ensure_project_namespace(
     recreate_namespace: bool,
     reflow_workspace: bool,
     recreate_reason: str | None,
-    background_maintenance: bool,
+    background_maintenance: bool = False,
 ):
     if reflow_workspace:
         return _reflow_project_workspace(
