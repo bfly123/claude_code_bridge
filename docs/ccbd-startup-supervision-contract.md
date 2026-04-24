@@ -286,6 +286,7 @@ Foreground command split:
   - ensures the project tmux namespace
   - ensures desired agents are mounted
   - plain `ccb` is the default interactive start path and implicitly includes `-a -r`
+  - release-update advisory checks may read install-scoped cached metadata and schedule background refresh, but they must not join or block the project startup transaction
   - in an interactive terminal, attaches the foreground to the project namespace after the start transaction succeeds
   - foreground attach must tolerate short tmux visibility lag after namespace create/reflow:
     - persisted namespace state may become visible slightly before tmux session/window targets are selectable

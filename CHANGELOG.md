@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v6.0.12 (2026-04-24)
+
+### Non-Blocking Startup Update Prompt
+
+- **Cached Startup Update Prompt**: interactive foreground `ccb` start can now read install-scoped cached release metadata and offer an upgrade prompt only when a newer stable release is already known locally
+- **Background Refresh Without Startup Stall**: cache misses or stale cache now schedule a background refresh with short network budgets instead of joining the project startup transaction
+- **Prompt Deferral And Silence Controls**: users can upgrade immediately, continue and defer the prompt for the current version, or silence that exact version
+- **Startup Contract Boundary Preserved**: startup supervision now explicitly treats release-update checks as advisory logic outside the lifecycle startup transaction
+
 ## v6.0.11 (2026-04-24)
 
 ### Project Startup Hotfix

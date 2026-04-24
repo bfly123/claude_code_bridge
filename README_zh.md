@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/模型皆可控-CF1322?style=for-the-badge" alt="模型皆可控">
 </p>
 
-[![Version](https://img.shields.io/badge/version-6.0.11-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-6.0.12-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 [English](README.md) | **中文**
@@ -98,6 +98,16 @@ cmd; writer:codex, reviewer:claude; qa:gemini(worktree)
 历史说明：下面较旧的发布记录里仍可能出现 `askd`、旧 flag 或已移除命令。这些内容仅作为 changelog 历史保留，不代表当前 CLI 入口。
 
 <details open>
+<summary><b>v6.0.12</b> - 非阻塞启动更新提示</summary>
+
+- **缓存化启动提示**：交互式前台 `ccb` 启动现在会读取安装级缓存的 release 元数据，只有本地已知存在更高稳定版时才提示升级
+- **后台刷新**：缓存缺失或过期时会用短网络预算在后台刷新，不再阻塞项目启动路径
+- **升级 / 延后 / 静默**：启动提示支持立即升级、对当前版本延后提醒，或静默当前版本
+- **启动边界保持干净**：release 更新检查仍是 advisory 逻辑，不进入项目生命周期启动事务
+
+</details>
+
+<details>
 <summary><b>v6.0.11</b> - 项目启动热修复</summary>
 
 - **冷启动 namespace 修复**：项目 tmux namespace 冷启动时，`no server running on <project socket>` 现在会被判定为“namespace 缺失，需要创建”，不再被错误打成通用 tmux inspect 失败
