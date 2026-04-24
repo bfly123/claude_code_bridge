@@ -3,12 +3,17 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from ccbd.services.project_namespace_runtime.backend import (
     create_session,
     ensure_server_policy,
     list_windows,
     prepare_server,
+    session_alive,
+    wait_for_root_pane,
 )
+from terminal_runtime.tmux_readiness import TmuxTransientServerUnavailable
 
 
 class _FlakyBackend:
@@ -48,6 +53,20 @@ class _FlakyBackend:
                 ['tmux', *key],
                 0,
                 stdout='@1\tcmd\t1\n@2\tworkspace\t0\n',
+                stderr='',
+            )
+        if key[:2] == ('has-session', '-t'):
+            return subprocess.CompletedProcess(
+                ['tmux', *key],
+                0 if self.session_created else 1,
+                stdout='',
+                stderr='' if self.session_created else f"can't find session: {key[2]}\n",
+            )
+        if key[:2] == ('list-panes', '-t'):
+            return subprocess.CompletedProcess(
+                ['tmux', *key],
+                0,
+                stdout='%7\n',
                 stderr='',
             )
         return subprocess.CompletedProcess(['tmux', *key], 0, stdout='', stderr='')
@@ -129,3 +148,22 @@ def test_list_windows_retries_transient_tmux_failures(monkeypatch) -> None:
         ('@2', 'workspace', False),
     ]
     assert backend.calls.count(('list-windows', '-t', 'ccb-proj', '-F', '#{window_id}\t#{window_name}\t#{window_active}')) == 2
+
+
+def test_session_alive_retries_transient_tmux_failures(monkeypatch) -> None:
+    monkeypatch.setenv('CCB_TMUX_OBJECT_READY_POLL_INTERVAL_S', '0')
+    backend = _FlakyBackend()
+    backend.session_created = True
+    backend.fail_once('has-session', '-t', 'ccb-proj')
+
+    assert session_alive(backend, 'ccb-proj') is True
+    assert backend.calls.count(('has-session', '-t', 'ccb-proj')) == 2
+
+
+def test_wait_for_root_pane_raises_transient_unavailable_for_fast_probe(monkeypatch) -> None:
+    monkeypatch.setenv('CCB_TMUX_OBJECT_READY_POLL_INTERVAL_S', '0')
+    backend = _FlakyBackend()
+    backend.fail_once('list-panes', '-t', 'ccb-proj:workspace', '-F', '#{pane_id}')
+
+    with pytest.raises(TmuxTransientServerUnavailable):
+        wait_for_root_pane(backend, target_window='ccb-proj:workspace', timeout_s=0.0)

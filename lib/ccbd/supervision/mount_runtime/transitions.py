@@ -66,6 +66,53 @@ def persist_mount_exception(
     return failed.health
 
 
+def persist_mount_transient(
+    starting,
+    *,
+    runtime,
+    project_id: str,
+    agent_name: str,
+    attempted_at: str,
+    prior_health: str,
+    next_restart_count: int,
+    reason: str,
+    event_store,
+    upsert_if_changed_fn,
+) -> str:
+    if runtime is None:
+        deferred = upsert_if_changed_fn(
+            starting,
+            state=AgentState.FAILED,
+            health='start-deferred',
+            lifecycle_state='degraded',
+            reconcile_state='deferred',
+            restart_count=next_restart_count,
+            last_reconcile_at=attempted_at,
+            last_failure_reason=reason,
+        )
+    else:
+        deferred = upsert_if_changed_fn(
+            starting,
+            state=runtime.state,
+            health=runtime.health,
+            lifecycle_state=runtime.lifecycle_state,
+            reconcile_state='deferred',
+            restart_count=next_restart_count,
+            last_reconcile_at=attempted_at,
+            last_failure_reason=reason,
+        )
+    record_mount_failed(
+        event_store,
+        project_id=project_id,
+        agent_name=agent_name,
+        attempted_at=attempted_at,
+        prior_health=prior_health,
+        runtime=deferred,
+        reason=reason,
+    )
+    return deferred.health
+
+
 def persist_mount_success(
     refreshed,
     *,
@@ -98,6 +145,7 @@ __all__ = [
     'mount_actions_missing',
     'mount_or_reflow',
     'persist_mount_exception',
+    'persist_mount_transient',
     'persist_mount_success',
     'start_mount_attempt',
 ]

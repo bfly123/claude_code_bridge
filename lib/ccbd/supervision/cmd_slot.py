@@ -9,10 +9,16 @@ from ccbd.services.project_namespace_pane import inspect_project_namespace_pane
 from ccbd.services.project_namespace_runtime.backend import build_backend
 from ccbd.start_runtime.layout import cmd_bootstrap_command
 from terminal_runtime.tmux_identity import apply_ccb_pane_identity
+from terminal_runtime.tmux_readiness import (
+    TmuxTransientServerUnavailable,
+    is_tmux_transient_server_error_text,
+    tmux_failure_detail,
+)
 
 from .loop_context import RuntimeSupervisionContext
 
 _PLACEHOLDER_CMD = 'while :; do sleep 3600; done'
+_BACKGROUND_CMD_SLOT_PROBE_TIMEOUT_S = 0.0
 
 
 @dataclass(frozen=True)
@@ -31,17 +37,23 @@ def reconcile_cmd_slot(ctx: RuntimeSupervisionContext) -> str | None:
     backend = _build_namespace_backend(namespace_controller, namespace)
     if backend is None:
         return request_cmd_workspace_reflow(ctx)
-    root_pane_id = _load_root_pane_id(namespace_controller, namespace)
-    record = _inspect_root_record(backend, root_pane_id)
+    try:
+        root_pane_id = _load_root_pane_id(namespace_controller, namespace)
+        record = _inspect_root_record(backend, root_pane_id)
+    except TmuxTransientServerUnavailable:
+        return 'deferred'
     if cmd_slot_matches_namespace(ctx, namespace, record):
         return 'healthy'
-    if replace_cmd_slot_locally(
-        ctx,
-        backend=backend,
-        namespace=namespace,
-        anchor_pane_id=root_pane_id,
-    ):
-        return 'restored-local'
+    try:
+        if replace_cmd_slot_locally(
+            ctx,
+            backend=backend,
+            namespace=namespace,
+            anchor_pane_id=root_pane_id,
+        ):
+            return 'restored-local'
+    except TmuxTransientServerUnavailable:
+        return 'deferred'
     return request_cmd_workspace_reflow(ctx)
 
 
@@ -67,35 +79,40 @@ def replace_cmd_slot_locally(
     plan = resolve_cmd_local_replacement_plan(ctx)
     if plan is None:
         return False
-    new_pane_id = split_before_anchor_pane(
-        backend,
-        anchor_pane_id=pane_text,
-        project_root=str(ctx.layout.project_root),
-        plan=plan,
-    )
-    if new_pane_id is None:
+    try:
+        new_pane_id = split_before_anchor_pane(
+            backend,
+            anchor_pane_id=pane_text,
+            project_root=str(ctx.layout.project_root),
+            plan=plan,
+        )
+        if new_pane_id is None:
+            return False
+        respawn = getattr(backend, 'respawn_pane', None)
+        if not callable(respawn):
+            return False
+        respawn(
+            new_pane_id,
+            cmd=cmd_bootstrap_command(),
+            cwd=str(ctx.layout.project_root),
+            remain_on_exit=False,
+        )
+        apply_ccb_pane_identity(
+            backend,
+            new_pane_id,
+            title='cmd',
+            agent_label='cmd',
+            project_id=ctx.project_id,
+            is_cmd=True,
+            slot_key='cmd',
+            namespace_epoch=getattr(namespace, 'namespace_epoch', None),
+            managed_by='ccbd',
+        )
+        record = _inspect_root_record(backend, new_pane_id)
+    except TmuxTransientServerUnavailable:
+        raise
+    except Exception:
         return False
-    respawn = getattr(backend, 'respawn_pane', None)
-    if not callable(respawn):
-        return False
-    respawn(
-        new_pane_id,
-        cmd=cmd_bootstrap_command(),
-        cwd=str(ctx.layout.project_root),
-        remain_on_exit=False,
-    )
-    apply_ccb_pane_identity(
-        backend,
-        new_pane_id,
-        title='cmd',
-        agent_label='cmd',
-        project_id=ctx.project_id,
-        is_cmd=True,
-        slot_key='cmd',
-        namespace_epoch=getattr(namespace, 'namespace_epoch', None),
-        managed_by='ccbd',
-    )
-    record = _inspect_root_record(backend, new_pane_id)
     return cmd_slot_matches_namespace(ctx, namespace, record)
 
 
@@ -140,29 +157,35 @@ def split_before_anchor_pane(
     runner = getattr(backend, '_tmux_run', None)
     if not callable(runner):
         return None
+    args = [
+        'split-pane',
+        '-P',
+        '-F',
+        '#{pane_id}',
+        '-t',
+        anchor_pane_id,
+        plan.tmux_direction_flag,
+        '-b',
+        '-p',
+        str(plan.percent),
+        '-c',
+        project_root,
+        'sh',
+        '-lc',
+        _PLACEHOLDER_CMD,
+    ]
     try:
         cp = runner(
-            [
-                'split-pane',
-                '-P',
-                '-F',
-                '#{pane_id}',
-                '-t',
-                anchor_pane_id,
-                plan.tmux_direction_flag,
-                '-b',
-                '-p',
-                str(plan.percent),
-                '-c',
-                project_root,
-                'sh',
-                '-lc',
-                _PLACEHOLDER_CMD,
-            ],
+            args,
             capture=True,
-            check=True,
+            check=False,
         )
     except Exception:
+        return None
+    if int(getattr(cp, 'returncode', 1) or 0) != 0:
+        detail = tmux_failure_detail(cp, args)
+        if is_tmux_transient_server_error_text(detail):
+            raise TmuxTransientServerUnavailable(detail)
         return None
     pane_id = ((getattr(cp, 'stdout', '') or '').splitlines() or [''])[0].strip()
     return pane_id if pane_id.startswith('%') else None
@@ -219,13 +242,23 @@ def _inspect_root_record(backend, pane_id: str | None):
         return None
     try:
         return inspect_project_namespace_pane(backend, pane_text)
+    except TmuxTransientServerUnavailable:
+        raise
     except Exception:
         return None
 
 
 def _load_root_pane_id(namespace_controller: ProjectNamespaceController, namespace) -> str | None:
     try:
-        pane_id = namespace_controller.root_pane_id(namespace)
+        try:
+            pane_id = namespace_controller.root_pane_id(
+                namespace,
+                timeout_s=_BACKGROUND_CMD_SLOT_PROBE_TIMEOUT_S,
+            )
+        except TypeError:
+            pane_id = namespace_controller.root_pane_id(namespace)
+    except TmuxTransientServerUnavailable:
+        raise
     except Exception:
         return None
     pane_text = str(pane_id or '').strip()

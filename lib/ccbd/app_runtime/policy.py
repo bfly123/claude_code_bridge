@@ -31,6 +31,7 @@ def mount_agent_from_policy(app, agent_name: str) -> None:
         auto_permission=auto_permission,
         cleanup_tmux_orphans=False,
         interactive_tmux_layout=False,
+        background_maintenance=True,
     )
 
 
@@ -46,6 +47,7 @@ def remount_project_from_policy(app, reason: str) -> None:
         recreate_namespace=not reason_text.startswith('pane_recovery:'),
         reflow_workspace=reason_text.startswith('pane_recovery:'),
         recreate_reason=reason_text,
+        background_maintenance=True,
     )
 
 

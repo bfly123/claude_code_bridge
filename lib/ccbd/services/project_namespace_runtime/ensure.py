@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .ensure_context import load_namespace_context
+from .ensure_context import load_namespace_context, refresh_session_liveness
 from .ensure_identity import prepare_namespace_root_pane
 from .ensure_state import (
     build_created_namespace,
@@ -16,12 +16,18 @@ def ensure_project_namespace(
     layout_signature: str | None = None,
     force_recreate: bool = False,
     recreate_reason: str | None = None,
+    session_probe_timeout_s: float | None = None,
 ) -> object:
     controller._layout.ccbd_dir.mkdir(parents=True, exist_ok=True)
     context = load_namespace_context(
         controller,
         layout_signature=layout_signature,
         recreate_reason=recreate_reason,
+    )
+    context = refresh_session_liveness(
+        controller,
+        context,
+        timeout_s=session_probe_timeout_s,
     )
 
     if force_recreate:

@@ -6,13 +6,15 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
+from .tmux_readiness import (
+    TmuxTransientServerUnavailable,
+    is_tmux_transient_server_error,
+    is_tmux_transient_server_error_text,
+    tmux_failure_detail,
+)
+
 _TMUX_RESPAWN_RETRY_TIMEOUT_S = 1.0
 _TMUX_RESPAWN_RETRY_INTERVAL_S = 0.05
-_TMUX_RESPAWN_TRANSIENT_ERROR_MARKERS = (
-    'fork failed',
-    'no server running',
-    'server exited unexpectedly',
-)
 
 
 @dataclass
@@ -94,7 +96,7 @@ def _tmux_default_shell(service: TmuxRespawnService) -> str:
 
 
 def _set_remain_on_exit(service: TmuxRespawnService, pane_id: str) -> None:
-    service.tmux_run_fn(['set-option', '-p', '-t', pane_id, 'remain-on-exit', 'on'], check=False)
+    service.tmux_run_fn(['set-option', '-p', '-t', pane_id, 'remain-on-exit', 'on'], check=False, capture=True)
 
 
 def _run_respawn_command(service: TmuxRespawnService, tmux_args: list[str]) -> None:
@@ -110,6 +112,8 @@ def _run_respawn_command(service: TmuxRespawnService, tmux_args: list[str]) -> N
             last_error = exc
         if time.monotonic() >= deadline:
             if last_error is not None:
+                if is_tmux_transient_server_error(last_error):
+                    raise TmuxTransientServerUnavailable(str(last_error)) from last_error
                 raise last_error
             raise RuntimeError('respawn pane failed')
         time.sleep(_TMUX_RESPAWN_RETRY_INTERVAL_S)
@@ -119,16 +123,16 @@ def _run_respawn_once(service: TmuxRespawnService, tmux_args: list[str]) -> None
     cp = service.tmux_run_fn(tmux_args, check=False, capture=True)
     if int(getattr(cp, 'returncode', 1) or 0) == 0:
         return
-    raise RuntimeError(_respawn_failure_text(cp, tmux_args))
+    detail = _respawn_failure_text(cp, tmux_args)
+    if is_tmux_transient_server_error_text(detail):
+        raise TmuxTransientServerUnavailable(detail)
+    raise RuntimeError(detail)
 
 
 def _respawn_failure_text(cp: subprocess.CompletedProcess | object, tmux_args: list[str]) -> str:
-    stderr = str(getattr(cp, 'stderr', '') or '').strip()
-    stdout = str(getattr(cp, 'stdout', '') or '').strip()
-    detail = stderr or stdout or f'tmux command failed: {" ".join(tmux_args)}'
+    detail = tmux_failure_detail(cp, tmux_args)
     return f'respawn pane failed: {detail}'
 
 
 def _is_retryable_respawn_error(exc: RuntimeError) -> bool:
-    text = str(exc).strip().lower()
-    return any(marker in text for marker in _TMUX_RESPAWN_TRANSIENT_ERROR_MARKERS)
+    return is_tmux_transient_server_error(exc)

@@ -3,6 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from terminal_runtime.tmux_readiness import (
+    TmuxTransientServerUnavailable,
+    is_tmux_transient_server_error_text,
+    tmux_failure_detail,
+)
+
 
 @dataclass(frozen=True)
 class ProjectNamespacePaneRecord:
@@ -126,6 +132,17 @@ def _describe_pane_via_tmux(backend, pane_id: str) -> dict[str, str] | None:
     except Exception:
         return None
     if getattr(cp, 'returncode', 1) != 0:
+        detail = tmux_failure_detail(
+            cp,
+            [
+                'display-message',
+                '-p',
+                '-t',
+                pane_id,
+            ],
+        )
+        if is_tmux_transient_server_error_text(detail):
+            raise TmuxTransientServerUnavailable(detail)
         return None
     line = ((getattr(cp, 'stdout', '') or '').splitlines() or [''])[0]
     return _decode_tmux_pane_description(line)

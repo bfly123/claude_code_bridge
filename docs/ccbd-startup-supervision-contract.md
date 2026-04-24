@@ -394,6 +394,8 @@ Important rule:
 - if pane recovery is done by project-namespace reflow, pane position must return to the canonical layout derived from `.ccb/ccb.config`, not whichever slot tmux happens to assign during local recovery
 - workspace reflow must preserve the tmux server and tmux session; only the workspace window may be replaced
 - transient tmux/server-readiness failures during heartbeat-driven supervision must degrade or retry background maintenance, but must not by themselves crash or unmount the current authoritative `ccbd`
+- heartbeat-driven namespace liveness probes must use a short non-blocking readiness budget; if the project tmux server/socket is transiently unavailable, the daemon must defer that maintenance pass instead of spending the full foreground startup timeout inside `has-session` / `list-panes`
+- heartbeat-driven mount/reflow attempts that hit transient tmux/server unavailability must preserve current authority, record retry/backoff evidence, and retry later; they must not immediately reinterpret that transient as a stable missing-session signal
 - recovery must always use restore semantics even if the original foreground `ccb` invocation did not pass `-r`
 - recovery must inherit `auto_permission` from the persisted project start policy rather than falling back to hardcoded defaults
 

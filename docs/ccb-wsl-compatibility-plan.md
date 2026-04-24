@@ -200,11 +200,15 @@ WSL 下除了 socket 放置，还存在 tmux server/socket 短暂就绪抖动。
 
 - project namespace backend 必须把 tmux server/socket readiness 吸收到同一个 namespace backend 边界处理
 - `prepare_server`、`create_session`、`create_window`、`rename_window`、`select-window`、`list-panes/list-windows` 这类 namespace control-plane 操作，必须使用统一的 ready-retry 语义
+- 前台 start/reflow 与后台 heartbeat probe 必须区分 readiness budget：
+  - 前台 namespace 建立/重建可以使用完整 ready-retry budget
+  - 后台 heartbeat 的 `has-session` / root-pane probe 必须使用短预算并在 transient `no server running` 时返回 defer，而不是长时间阻塞 `ccbd` RPC loop
 - tmux server warmup 与 server policy 持久化必须分阶段处理：
   - `prepare_server` 只负责 warm up server 边界
   - `destroy-unattached off` 这类 server-global policy 只能在 authoritative project session 已存在后写入
   - 不得把 pre-session `set-option` 失败误判成 namespace 不可启动；真实 tmux 可能在 `start-server` 后仍返回 `no server running`
 - 背景 heartbeat 内的 namespace/supervision 失败只能记为最近一次后台维护失败，不得直接把已 mounted 的 `ccbd` authority 打成 unmounted
+- 背景 mount/recovery 若在 namespace/session liveness probe 上遇到 transient tmux 不可用，必须落到 defer/backoff，而不是立刻进入 project reflow / recreate
 - 这类容错属于 tmux namespace runtime 边界，不得散落到 CLI、provider adapter、或测试调用点
 
 ## 6. Diagnostics 方案

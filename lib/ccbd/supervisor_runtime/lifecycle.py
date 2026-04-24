@@ -18,6 +18,7 @@ def start_supervisor(
     recreate_namespace: bool,
     reflow_workspace: bool,
     recreate_reason: str | None,
+    background_maintenance: bool,
     run_start_flow_fn,
 ):
     try:
@@ -33,6 +34,7 @@ def start_supervisor(
                 recreate_namespace=recreate_namespace,
                 reflow_workspace=reflow_workspace,
                 recreate_reason=recreate_reason,
+                background_maintenance=background_maintenance,
             )
             if supervisor._project_namespace is not None
             else None
