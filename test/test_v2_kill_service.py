@@ -419,7 +419,7 @@ def test_shutdown_daemon_terminates_lingering_ccbd_pid(tmp_path: Path, monkeypat
     summary = shutdown_daemon(context, force=False)
 
     assert client_calls == ['shutdown']
-    assert captured['timeout_s'] == daemon_service.CONTROL_PLANE_RPC_TIMEOUT_S
+    assert captured['timeout_s'] is None
     assert terminated == [321]
     assert mark_calls == [
         {
