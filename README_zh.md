@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/模型皆可控-CF1322?style=for-the-badge" alt="模型皆可控">
 </p>
 
-[![Version](https://img.shields.io/badge/version-6.0.9-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-6.0.10-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 [English](README.md) | **中文**
@@ -98,6 +98,16 @@ cmd; writer:codex, reviewer:claude; qa:gemini(worktree)
 历史说明：下面较旧的发布记录里仍可能出现 `askd`、旧 flag 或已移除命令。这些内容仅作为 changelog 历史保留，不代表当前 CLI 入口。
 
 <details open>
+<summary><b>v6.0.10</b> - 启动预算加固与 Gemini 登录继承</summary>
+
+- **Gemini 登录继承**：managed Gemini home 现在会为 `oauth-personal` 投影登录鉴权选择与 `oauth_creds.json`，并在关闭 auth 继承时清理旧的复制凭据
+- **统一 tmux 就绪预算**：项目自有 pane 的 `respawn-pane` 现在与 namespace create/reflow 共用同一套 tmux ready-retry 预算，降低启动与后台 supervision 中瞬时 `no server running` 失败
+- **后台启动兼容性加固**：后台 lifecycle 启动继续保持 supervision 兼容，同时把 readiness probe 超时与业务 RPC budget 解耦
+- **诊断包凭据脱敏**：diagnostic bundle 现在会像其他 provider 凭据一样排除 Gemini `oauth_creds.json`
+
+</details>
+
+<details>
 <summary><b>v6.0.9</b> - 跨平台生命周期与 watch 稳定性增强</summary>
 
 - **WSL 兼容性修复**：项目 runtime 现在会避开不支持 Unix socket 的 WSL 挂载盘路径，同时加固 installer staging 与 tmux namespace readiness

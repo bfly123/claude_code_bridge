@@ -10,11 +10,10 @@ from .tmux_readiness import (
     TmuxTransientServerUnavailable,
     is_tmux_transient_server_error,
     is_tmux_transient_server_error_text,
+    tmux_object_ready_poll_interval_s,
+    tmux_object_ready_timeout_s,
     tmux_failure_detail,
 )
-
-_TMUX_RESPAWN_RETRY_TIMEOUT_S = 1.0
-_TMUX_RESPAWN_RETRY_INTERVAL_S = 0.05
 
 
 @dataclass
@@ -100,7 +99,7 @@ def _set_remain_on_exit(service: TmuxRespawnService, pane_id: str) -> None:
 
 
 def _run_respawn_command(service: TmuxRespawnService, tmux_args: list[str]) -> None:
-    deadline = time.monotonic() + _TMUX_RESPAWN_RETRY_TIMEOUT_S
+    deadline = time.monotonic() + tmux_object_ready_timeout_s()
     last_error: RuntimeError | None = None
     while True:
         try:
@@ -116,7 +115,7 @@ def _run_respawn_command(service: TmuxRespawnService, tmux_args: list[str]) -> N
                     raise TmuxTransientServerUnavailable(str(last_error)) from last_error
                 raise last_error
             raise RuntimeError('respawn pane failed')
-        time.sleep(_TMUX_RESPAWN_RETRY_INTERVAL_S)
+        time.sleep(tmux_object_ready_poll_interval_s())
 
 
 def _run_respawn_once(service: TmuxRespawnService, tmux_args: list[str]) -> None:

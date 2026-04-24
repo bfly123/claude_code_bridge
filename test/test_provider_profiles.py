@@ -266,6 +266,114 @@ def test_materialize_gemini_home_config_projects_system_settings_into_managed_ho
     assert payload['theme'] == 'Default'
 
 
+def test_materialize_gemini_home_config_projects_oauth_credentials_for_login_auth(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.gemini' / 'settings.json'
+    source_oauth = source_home / '.gemini' / 'oauth_creds.json'
+    source_settings.parent.mkdir(parents=True, exist_ok=True)
+    source_settings.write_text(
+        json.dumps(
+            {
+                'security': {
+                    'auth': {
+                        'selectedType': 'oauth-personal',
+                    }
+                },
+                'theme': 'Default',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    source_oauth.write_text(
+        json.dumps({'refresh_token': 'system-refresh-token'}, ensure_ascii=False, indent=2),
+        encoding='utf-8',
+    )
+
+    layout = materialize_gemini_home_config(target_home, source_home=source_home)
+
+    payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert payload['security']['auth']['selectedType'] == 'oauth-personal'
+    assert json.loads((layout.gemini_dir / 'oauth_creds.json').read_text(encoding='utf-8'))['refresh_token'] == 'system-refresh-token'
+
+
+def test_materialize_gemini_home_config_strips_oauth_selection_and_credentials_when_auth_not_inherited(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.gemini' / 'settings.json'
+    source_oauth = source_home / '.gemini' / 'oauth_creds.json'
+    source_settings.parent.mkdir(parents=True, exist_ok=True)
+    source_settings.write_text(
+        json.dumps(
+            {
+                'security': {
+                    'auth': {
+                        'selectedType': 'oauth-personal',
+                    }
+                },
+                'theme': 'Default',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    source_oauth.write_text(
+        json.dumps({'refresh_token': 'system-refresh-token'}, ensure_ascii=False, indent=2),
+        encoding='utf-8',
+    )
+    target_oauth = target_home / '.gemini' / 'oauth_creds.json'
+    target_oauth.parent.mkdir(parents=True, exist_ok=True)
+    target_oauth.write_text('{"refresh_token":"stale-token"}\n', encoding='utf-8')
+
+    layout = materialize_gemini_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_auth=False, inherit_config=True),
+        source_home=source_home,
+    )
+
+    payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert payload['theme'] == 'Default'
+    assert payload.get('security', {}).get('auth', {}).get('selectedType') is None
+    assert not (layout.gemini_dir / 'oauth_creds.json').exists()
+
+
+def test_materialize_gemini_home_config_strips_api_auth_selection_when_api_not_inherited(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.gemini' / 'settings.json'
+    source_settings.parent.mkdir(parents=True, exist_ok=True)
+    source_settings.write_text(
+        json.dumps(
+            {
+                'env': {'GEMINI_API_KEY': 'system-gemini-key'},
+                'security': {
+                    'auth': {
+                        'selectedType': 'gemini-api-key',
+                    }
+                },
+                'theme': 'Default',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    layout = materialize_gemini_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_api=False, inherit_config=True),
+        source_home=source_home,
+    )
+
+    payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert payload['theme'] == 'Default'
+    assert payload.get('env') is None
+    assert payload.get('security', {}).get('auth', {}).get('selectedType') is None
+
+
 def test_materialize_gemini_home_config_preserves_runtime_hooks(tmp_path: Path) -> None:
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'

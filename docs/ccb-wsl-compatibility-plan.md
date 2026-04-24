@@ -199,7 +199,7 @@ WSL 下除了 socket 放置，还存在 tmux server/socket 短暂就绪抖动。
 规则：
 
 - project namespace backend 必须把 tmux server/socket readiness 吸收到同一个 namespace backend 边界处理
-- `prepare_server`、`create_session`、`create_window`、`rename_window`、`select-window`、`list-panes/list-windows` 这类 namespace control-plane 操作，必须使用统一的 ready-retry 语义
+- `prepare_server`、`create_session`、`create_window`、`rename_window`、`select-window`、`list-panes/list-windows`，以及 project-owned pane 的 `respawn-pane` 这类 namespace control-plane 操作，必须使用统一的 ready-retry 语义
 - 前台 start/reflow 与后台 heartbeat probe 必须区分 readiness budget：
   - 前台 namespace 建立/重建可以使用完整 ready-retry budget
   - 后台 heartbeat 的 `has-session` / root-pane probe 必须使用短预算并在 transient `no server running` 时返回 defer，而不是长时间阻塞 `ccbd` RPC loop

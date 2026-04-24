@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v6.0.10 (2026-04-24)
+
+### Startup Budget Hardening & Gemini Login Inheritance
+
+- **Gemini Login Auth Inheritance**: managed Gemini startup now projects `security.auth.selectedType` and `oauth_creds.json` for login-backed `oauth-personal` reuse, while stale copied credentials are removed whenever auth inheritance is disabled
+- **Shared Tmux Ready Budget**: project-owned pane respawn now uses the same tmux object readiness retry budget as namespace create/reflow instead of a separate shorter timeout, reducing transient `no server running` failures during startup and supervision
+- **Background Startup Compatibility**: background lifecycle startup preserves supervisor compatibility and keeps readiness-probe budgets separated from operational RPC timeouts
+- **Diagnostics Credential Redaction**: support bundles now exclude Gemini `oauth_creds.json` together with other provider credential artifacts
+
 ## v6.0.9 (2026-04-23)
 
 ### Cross-Platform Lifecycle & Watch Stability

@@ -322,6 +322,7 @@ Project namespace compatibility:
 - project-namespace bootstrap must treat tmux server warmup and tmux server-policy persistence as separate steps:
   - `prepare_server` warms the server boundary only
   - server-global options that require a live session, such as `destroy-unattached off`, must be applied only after the authoritative project session exists
+- project-owned pane mutation commands, including `respawn-pane` used by `cmd` bootstrap and pane-backed runtime launch/relaunch, must use the same shared tmux ready-retry budget as namespace create/reflow rather than a separate shorter timeout
 - startup must not rely on "real shell first, respawn later" behavior for the `cmd` pane, because that leaves stale prompt residue and can surface zsh no-newline `%` markers
 - `cmd`-anchored projects must treat exact project-namespace pane membership as the reuse gate for pane-backed bindings
 - provider-specific live runtime identity proof may further narrow that reuse gate

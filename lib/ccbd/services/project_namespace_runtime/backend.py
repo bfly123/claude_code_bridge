@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import os
 import time
 from typing import Callable
 
@@ -9,13 +8,13 @@ from terminal_runtime.tmux_readiness import (
     TmuxTransientServerUnavailable,
     is_tmux_missing_session_text,
     is_tmux_transient_server_error_text,
+    tmux_object_ready_poll_interval_s,
+    tmux_object_ready_timeout_s,
     tmux_failure_detail,
 )
 
 
 _PLACEHOLDER_CMD = 'while :; do sleep 3600; done'
-_TMUX_OBJECT_READY_TIMEOUT_S = 3.0
-_TMUX_OBJECT_READY_POLL_INTERVAL_S = 0.05
 
 
 @dataclass(frozen=True)
@@ -368,23 +367,11 @@ def _session_alive_once(backend, session_name: str) -> bool:
 
 
 def _tmux_object_ready_timeout_s(timeout_s: float | None = None) -> float:
-    if timeout_s is not None:
-        return max(0.0, float(timeout_s))
-    return _env_float('CCB_TMUX_OBJECT_READY_TIMEOUT_S', _TMUX_OBJECT_READY_TIMEOUT_S)
+    return tmux_object_ready_timeout_s(timeout_s)
 
 
 def _tmux_object_ready_poll_interval_s() -> float:
-    return max(0.0, _env_float('CCB_TMUX_OBJECT_READY_POLL_INTERVAL_S', _TMUX_OBJECT_READY_POLL_INTERVAL_S))
-
-
-def _env_float(name: str, default: float) -> float:
-    raw = str(os.environ.get(name) or '').strip()
-    if not raw:
-        return default
-    try:
-        return float(raw)
-    except Exception:
-        return default
+    return tmux_object_ready_poll_interval_s()
 
 
 __all__ = [

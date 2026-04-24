@@ -286,6 +286,51 @@ def test_prepare_provider_workspace_materializes_gemini_settings_before_hooks(tm
     assert not (workspace / '.gemini').exists()
 
 
+def test_prepare_provider_workspace_materializes_gemini_oauth_credentials_when_login_auth_selected(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root = tmp_path / 'repo'
+    workspace = project_root / 'workspace'
+    system_home = tmp_path / 'system-home'
+    system_settings = system_home / '.gemini' / 'settings.json'
+    system_oauth = system_home / '.gemini' / 'oauth_creds.json'
+    system_settings.parent.mkdir(parents=True, exist_ok=True)
+    system_settings.write_text(
+        json.dumps(
+            {
+                'security': {
+                    'auth': {
+                        'selectedType': 'oauth-personal',
+                    }
+                }
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    system_oauth.write_text(
+        json.dumps({'refresh_token': 'system-refresh-token'}, ensure_ascii=False, indent=2),
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('HOME', str(system_home))
+
+    prepare_provider_workspace(
+        layout=PathLayout(project_root),
+        spec=_spec('agent1', provider='gemini'),
+        workspace_path=workspace,
+        completion_dir=project_root / '.ccb' / 'agents' / 'agent1' / 'provider-runtime' / 'gemini' / 'completion',
+        agent_name='agent1',
+        refresh_profile=True,
+    )
+
+    managed_settings = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-state' / 'gemini' / 'home' / '.gemini' / 'settings.json'
+    managed_oauth = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-state' / 'gemini' / 'home' / '.gemini' / 'oauth_creds.json'
+    payload = json.loads(managed_settings.read_text(encoding='utf-8'))
+    assert payload['security']['auth']['selectedType'] == 'oauth-personal'
+    assert json.loads(managed_oauth.read_text(encoding='utf-8'))['refresh_token'] == 'system-refresh-token'
+
+
 def test_prepare_provider_workspace_repairs_existing_gemini_hook_only_settings(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / 'repo'
     workspace = project_root / 'workspace'
