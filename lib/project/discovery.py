@@ -24,6 +24,9 @@ def global_ccb_dir() -> Path:
 
 
 def find_current_project_anchor(start_dir: Path) -> Path | None:
+    env_anchor = _env_project_anchor()
+    if env_anchor is not None:
+        return env_anchor
     current = _resolved_dir(start_dir)
     if _project_anchor_dir(current) is None:
         return None
