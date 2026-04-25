@@ -659,7 +659,7 @@ def test_runtime_supervisor_bootstraps_fresh_cmd_pane_after_layout(tmp_path: Pat
     assert respawn_calls == [
         {
             'pane_id': '%0',
-            'cmd': 'if [ -n "${SHELL:-}" ]; then exec "$SHELL" -l; fi; if command -v bash >/dev/null 2>&1; then exec bash -l; fi; exec sh',
+            'cmd': 'exec sh -lc \'if [ -n "${SHELL:-}" ]; then exec "$SHELL" -l; fi; if command -v bash >/dev/null 2>&1; then exec bash -l; fi; exec sh\'',
             'cwd': str(project_root),
             'remain_on_exit': False,
             'socket_path': str(app.paths.ccbd_tmux_socket_path),

@@ -102,7 +102,8 @@ def bootstrap_project_namespace_cmd_pane(
 
 def cmd_bootstrap_command() -> str:
     return (
+        "exec sh -lc '"
         'if [ -n "${SHELL:-}" ]; then exec "$SHELL" -l; fi; '
         'if command -v bash >/dev/null 2>&1; then exec bash -l; fi; '
-        'exec sh'
+        "exec sh'"
     )

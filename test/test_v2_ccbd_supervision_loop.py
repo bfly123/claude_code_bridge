@@ -642,7 +642,7 @@ def test_runtime_supervision_loop_reflows_when_cmd_slot_is_missing(tmp_path: Pat
     ]]
     assert fake_backend.respawn_calls == [{
         'pane_id': '%cmd',
-        'cmd': 'if [ -n "${SHELL:-}" ]; then exec "$SHELL" -l; fi; if command -v bash >/dev/null 2>&1; then exec bash -l; fi; exec sh',
+        'cmd': 'exec sh -lc \'if [ -n "${SHELL:-}" ]; then exec "$SHELL" -l; fi; if command -v bash >/dev/null 2>&1; then exec bash -l; fi; exec sh\'',
         'cwd': str(layout.project_root),
         'stderr_log_path': None,
         'remain_on_exit': False,

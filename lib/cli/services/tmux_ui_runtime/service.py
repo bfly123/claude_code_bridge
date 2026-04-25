@@ -94,6 +94,9 @@ def _apply_pane_theme(backend, *, session_name: str, border_script: str | None) 
     tmux_run(backend, ['set-window-option', '-t', session_name, 'pane-border-status', 'top'])
     tmux_run(backend, ['set-window-option', '-t', session_name, 'pane-border-style', 'fg=#3b4261,bold'])
     tmux_run(backend, ['set-window-option', '-t', session_name, 'pane-active-border-style', 'fg=#7aa2f7,bold'])
+    tmux_run(backend, ['set-window-option', '-t', session_name, 'automatic-rename', 'off'])
+    tmux_run(backend, ['set-window-option', '-t', session_name, 'allow-rename', 'off'])
+    tmux_run(backend, ['set-window-option', '-t', session_name, 'allow-set-title', 'off'])
     tmux_run(
         backend,
         [

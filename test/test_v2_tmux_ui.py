@@ -91,6 +91,9 @@ def test_apply_project_tmux_ui_sets_session_theme_and_hook_from_current_install_
     assert ['set-window-option', '-t', 'ccb-demo', 'pane-border-status', 'top'] in calls
     assert ['set-window-option', '-t', 'ccb-demo', 'pane-border-style', 'fg=#3b4261,bold'] in calls
     assert ['set-window-option', '-t', 'ccb-demo', 'pane-active-border-style', 'fg=#7aa2f7,bold'] in calls
+    assert ['set-window-option', '-t', 'ccb-demo', 'automatic-rename', 'off'] in calls
+    assert ['set-window-option', '-t', 'ccb-demo', 'allow-rename', 'off'] in calls
+    assert ['set-window-option', '-t', 'ccb-demo', 'allow-set-title', 'off'] in calls
     assert any(
         call[:4] == ['set-window-option', '-t', 'ccb-demo', 'pane-border-format']
         for call in calls
