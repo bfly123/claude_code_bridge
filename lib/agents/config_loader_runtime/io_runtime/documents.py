@@ -3,11 +3,14 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 
-from agents.models import parse_layout_spec
+from agents.models import normalize_agent_name, parse_layout_spec
 
 from ..common import ConfigLoadResult, ConfigValidationError
 from ..parsing import validate_project_config
 from ..paths import project_config_path
+
+_ALLOWED_HYBRID_TOP_LEVEL_KEYS = {'agents'}
+_HYBRID_HEADER_OWNED_AGENT_KEYS = {'provider', 'workspace_mode'}
 
 
 def _build_compact_agent_record(provider: str, *, workspace_mode: str) -> dict[str, str]:
@@ -98,14 +101,30 @@ def _parse_compact_config_document(text: str, *, path: Path) -> dict[str, object
     }
 
 
-def _looks_like_rich_config(text: str) -> bool:
-    for line in text.splitlines():
+def _classify_config_document(text: str) -> tuple[str, str, str | None]:
+    lines = text.splitlines()
+    first_meaningful_kind: str | None = None
+    first_rich_index: int | None = None
+    for index, line in enumerate(lines):
         body = line.split('#', 1)[0].strip()
         if not body:
             continue
-        if body.startswith('[') or '=' in body:
-            return True
-    return False
+        kind = 'rich' if body.startswith('[') or '=' in body else 'compact'
+        if first_meaningful_kind is None:
+            first_meaningful_kind = kind
+        if kind == 'rich':
+            first_rich_index = index
+            break
+
+    if first_meaningful_kind == 'rich':
+        return 'rich', text, None
+    if first_meaningful_kind == 'compact' and first_rich_index is None:
+        return 'compact', text, None
+    if first_meaningful_kind == 'compact' and first_rich_index is not None:
+        compact_text = '\n'.join(lines[:first_rich_index])
+        overlay_text = '\n'.join(lines[first_rich_index:])
+        return 'hybrid', compact_text, overlay_text
+    return 'compact', text, None
 
 
 def _import_optional_toml_reader():
@@ -141,11 +160,75 @@ def _parse_toml_config_document(text: str, *, path: Path) -> dict[str, object]:
     return dict(document)
 
 
+def _parse_hybrid_config_document(text: str, overlay_text: str, *, path: Path) -> dict[str, object]:
+    base_document = _parse_compact_config_document(text, path=path)
+    overlay_document = _parse_toml_config_document(overlay_text, path=path)
+    return _merge_hybrid_overlay(base_document, overlay_document, path=path)
+
+
+def _merge_hybrid_overlay(
+    base_document: dict[str, object],
+    overlay_document: dict[str, object],
+    *,
+    path: Path,
+) -> dict[str, object]:
+    unknown_top = sorted(set(overlay_document) - _ALLOWED_HYBRID_TOP_LEVEL_KEYS)
+    if unknown_top:
+        raise ConfigValidationError(
+            f'{path}: hybrid overlay contains unsupported top-level fields: {", ".join(unknown_top)}'
+        )
+
+    merged_agents = {
+        str(name): dict(spec)
+        for name, spec in dict(base_document.get('agents') or {}).items()
+    }
+    raw_overlay_agents = overlay_document.get('agents') or {}
+    if not isinstance(raw_overlay_agents, dict):
+        raise ConfigValidationError(f'{path}: hybrid overlay agents must be a table/object')
+
+    for raw_name, raw_spec in raw_overlay_agents.items():
+        if not isinstance(raw_name, str):
+            raise ConfigValidationError(f'{path}: hybrid overlay agent names must be strings')
+        normalized_name = normalize_agent_name(raw_name)
+        if normalized_name not in merged_agents:
+            raise ConfigValidationError(
+                f'{path}: hybrid overlay cannot define agent {normalized_name!r} outside the compact layout'
+            )
+        if not isinstance(raw_spec, dict):
+            raise ConfigValidationError(f'{path}: agents.{raw_name} must be a table/object')
+        forbidden = sorted(set(raw_spec) & _HYBRID_HEADER_OWNED_AGENT_KEYS)
+        if forbidden:
+            raise ConfigValidationError(
+                f'{path}: hybrid overlay cannot redefine compact-header fields for agents.{normalized_name}: '
+                + ', '.join(forbidden)
+            )
+        merged_agents[normalized_name] = _deep_merge_dicts(merged_agents[normalized_name], dict(raw_spec))
+
+    return {
+        **dict(base_document),
+        'agents': merged_agents,
+    }
+
+
+def _deep_merge_dicts(base: dict[str, object], overlay: dict[str, object]) -> dict[str, object]:
+    merged = dict(base)
+    for key, value in overlay.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_dicts(dict(merged[key]), dict(value))
+        else:
+            merged[key] = value
+    return merged
+
+
 def _load_config_document(path: Path) -> dict[str, object]:
     text = path.read_text(encoding='utf-8')
-    if _looks_like_rich_config(text):
-        return _parse_toml_config_document(text, path=path)
-    return _parse_compact_config_document(text, path=path)
+    kind, primary_text, overlay_text = _classify_config_document(text)
+    if kind == 'rich':
+        return _parse_toml_config_document(primary_text, path=path)
+    if kind == 'hybrid':
+        assert overlay_text is not None
+        return _parse_hybrid_config_document(primary_text, overlay_text, path=path)
+    return _parse_compact_config_document(primary_text, path=path)
 
 
 def load_project_config(project_root: Path) -> ConfigLoadResult:

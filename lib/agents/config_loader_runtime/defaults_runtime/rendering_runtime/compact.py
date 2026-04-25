@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agents.models import PermissionMode, ProviderProfileSpec, QueuePolicy, RestoreMode, RuntimeMode, WorkspaceMode
+from agents.models import AgentApiSpec, PermissionMode, ProviderProfileSpec, QueuePolicy, RestoreMode, RuntimeMode, WorkspaceMode
 
 
 def can_render_compact(config) -> bool:
@@ -12,6 +12,7 @@ def can_render_compact(config) -> bool:
 def is_compact_agent_compatible(spec) -> bool:
     return (
         core_agent_defaults_match(spec)
+        and spec.api == AgentApiSpec()
         and spec.provider_profile == ProviderProfileSpec()
         and spec.branch_template is None
         and not spec.labels
@@ -29,6 +30,7 @@ def core_agent_defaults_match(spec) -> bool:
         and spec.restore_default is RestoreMode.AUTO
         and spec.permission_default is PermissionMode.MANUAL
         and spec.queue_policy is QueuePolicy.SERIAL_PER_AGENT
+        and spec.model is None
         and not spec.startup_args
         and not spec.env
     )

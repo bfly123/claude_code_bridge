@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from agents.models import (
+    AgentApiSpec,
     AgentSpec,
     AgentValidationError,
     PermissionMode,
@@ -13,8 +14,14 @@ from agents.models import (
     WorkspaceMode,
     normalize_runtime_mode,
 )
+from provider_profiles import (
+    provider_api_env_keys,
+    provider_api_shortcut_env,
+    supported_provider_api_shortcuts,
+)
 
 from ..common import ALLOWED_AGENT_KEYS, ConfigValidationError
+from .agent_api import parse_agent_api_shortcut
 from .expectations import expect_mapping, expect_string, expect_string_list, expect_string_mapping
 from .provider_profiles import parse_provider_profile
 
@@ -26,6 +33,22 @@ def build_agent_spec(agent_name: str, raw: dict[str, Any]) -> AgentSpec:
             f'agents.{agent_name} contains unknown fields: {", ".join(unknown)}'
         )
     provider = expect_string(raw.get('provider'), field_name=f'agents.{agent_name}.provider')
+    env = expect_string_mapping(raw.get('env', {}), field_name=f'agents.{agent_name}.env')
+    api = parse_agent_api_shortcut(agent_name, raw)
+    provider_profile = (
+        parse_provider_profile(agent_name, raw['provider_profile'])
+        if raw.get('provider_profile') is not None
+        else ProviderProfileSpec()
+    )
+    if api != AgentApiSpec():
+        provider_profile = _apply_agent_api_shortcut(
+            agent_name,
+            provider=provider,
+            env=env,
+            api=api,
+            provider_profile=provider_profile,
+            raw_provider_profile=raw.get('provider_profile'),
+        )
     try:
         return AgentSpec(
             name=agent_name,
@@ -52,13 +75,15 @@ def build_agent_spec(agent_name: str, raw: dict[str, Any]) -> AgentSpec:
                 expect_string(raw.get('permission'), field_name=f'agents.{agent_name}.permission')
             ),
             queue_policy=QueuePolicy(str(raw.get('queue_policy') or QueuePolicy.SERIAL_PER_AGENT.value)),
-            startup_args=expect_string_list(raw.get('startup_args', []), field_name=f'agents.{agent_name}.startup_args'),
-            env=expect_string_mapping(raw.get('env', {}), field_name=f'agents.{agent_name}.env'),
-            provider_profile=(
-                parse_provider_profile(agent_name, raw['provider_profile'])
-                if raw.get('provider_profile') is not None
-                else ProviderProfileSpec()
+            model=(
+                expect_string(raw['model'], field_name=f'agents.{agent_name}.model')
+                if raw.get('model') is not None
+                else None
             ),
+            startup_args=expect_string_list(raw.get('startup_args', []), field_name=f'agents.{agent_name}.startup_args'),
+            env=env,
+            api=api,
+            provider_profile=provider_profile,
             branch_template=(
                 expect_string(raw['branch_template'], field_name=f'agents.{agent_name}.branch_template')
                 if raw.get('branch_template') is not None
@@ -97,6 +122,72 @@ def parse_agents(raw_agents: Any) -> dict[str, AgentSpec]:
             expect_mapping(raw_spec, field_name=f'agents.{raw_name}'),
         )
     return parsed_agents
+
+
+def _apply_agent_api_shortcut(
+    agent_name: str,
+    *,
+    provider: str,
+    env: dict[str, str],
+    api: AgentApiSpec,
+    provider_profile: ProviderProfileSpec,
+    raw_provider_profile: Any,
+) -> ProviderProfileSpec:
+    api_env_keys = provider_api_env_keys(provider)
+    if not api_env_keys:
+        supported = ', '.join(supported_provider_api_shortcuts())
+        raise ConfigValidationError(
+            f'agents.{agent_name}.key/url is supported only for providers: {supported}'
+        )
+    _ensure_no_api_env_conflict(
+        agent_name,
+        source='agents.{agent}.env',
+        env_map=env,
+        api_env_keys=api_env_keys,
+    )
+    _ensure_no_api_env_conflict(
+        agent_name,
+        source='agents.{agent}.provider_profile.env',
+        env_map=provider_profile.env,
+        api_env_keys=api_env_keys,
+    )
+    if raw_provider_profile is not None:
+        raw_profile = expect_mapping(raw_provider_profile, field_name=f'agents.{agent_name}.provider_profile')
+        if 'inherit_api' in raw_profile and provider_profile.inherit_api:
+            raise ConfigValidationError(
+                f'agents.{agent_name}.key/url cannot be combined with agents.{agent_name}.provider_profile.inherit_api = true'
+            )
+    try:
+        api_env = provider_api_shortcut_env(provider, key=api.key, url=api.url)
+    except ValueError as exc:
+        raise ConfigValidationError(f'agents.{agent_name}.key/url: {exc}') from exc
+    return ProviderProfileSpec(
+        mode=provider_profile.mode,
+        home=provider_profile.home,
+        env={**provider_profile.env, **api_env},
+        inherit_api=False,
+        inherit_auth=provider_profile.inherit_auth,
+        inherit_config=provider_profile.inherit_config,
+        inherit_skills=provider_profile.inherit_skills,
+        inherit_commands=provider_profile.inherit_commands,
+    )
+
+
+def _ensure_no_api_env_conflict(
+    agent_name: str,
+    *,
+    source: str,
+    env_map: dict[str, str],
+    api_env_keys: set[str],
+) -> None:
+    overlap = sorted(set(env_map) & set(api_env_keys))
+    if not overlap:
+        return
+    joined = ', '.join(overlap)
+    rendered_source = source.format(agent=agent_name)
+    raise ConfigValidationError(
+        f'agents.{agent_name}.key/url cannot be mixed with provider API env in {rendered_source}: {joined}'
+    )
 
 
 __all__ = ['build_agent_spec', 'parse_agents']

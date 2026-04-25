@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from .config import AgentApiSpec, AgentSpec, ProjectConfig
 from provider_profiles.models import ProviderProfileSpec
 
-from .config import AgentSpec, ProjectConfig
 from .enums import (
     AgentState,
     PermissionMode,
@@ -29,6 +29,7 @@ from .runtime import AgentRestoreState, AgentRuntime
 
 __all__ = [
     'AGENT_NAME_PATTERN',
+    'AgentApiSpec',
     'AgentRestoreState',
     'AgentRuntime',
     'AgentSpec',

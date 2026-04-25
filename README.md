@@ -212,7 +212,7 @@ Historical note: older release notes below may mention `askd`, legacy flags, or 
 - **Worktree Safety Guard**: Dirty or unmerged CCB-managed worktrees still block destructive rebuilds until the user resolves them
 
 **🔄 Upgrade Policy:**
-- **Linux/WSL Only**: `ccb update` is now available only on Linux/WSL for the 6.x line
+- **Linux/macOS/WSL**: `ccb update` is available on Linux, macOS, and WSL for the 6.x line
 - **Release-Only Upgrades**: Source tags are still published with each version, but `ccb update` for 6.x installs the GitHub release asset, not the source archive
 - **Stable Release Targeting**: Default upgrades now resolve to the latest stable release instead of the moving `main` branch
 - **Major Upgrade Confirmation**: Upgrading into `6.0.0` requires explicit confirmation before replacing the installed runtime
@@ -630,7 +630,15 @@ Rules:
 - Cmd pane participates in the layout as the first extra pane and does not change which AI runs in the current pane.
 
 ### Update
-CCB v6 currently supports `ccb update` only on Linux/WSL. A major upgrade fully replaces the installed runtime. On the first `ccb` inside an older project, CCB preserves `.ccb/ccb.config`, clears the rest of the old `.ccb` state, and rebuilds locally.
+CCB v6 currently supports `ccb update` on Linux, macOS, and WSL. A major upgrade fully replaces the installed runtime. On the first `ccb` inside an older project, CCB preserves `.ccb/ccb.config`, clears the rest of the old `.ccb` state, and rebuilds locally.
+
+If you installed from a git checkout with `./install.sh install`, that install now runs in source dev mode:
+
+- Global `ccb` and `ask` link back to the checkout instead of using a copied snapshot
+- CCB-owned skills and helper scripts also follow the live source tree
+- Source installs do not participate in startup auto-update prompts
+- Stay on the source/dev track with `git pull` or by switching commits, then rerun `./install.sh install`
+- Or run `ccb update` to install the latest stable release and repoint global `ccb` links to the managed release install
 
 ```bash
 ccb update              # Update to the latest stable release

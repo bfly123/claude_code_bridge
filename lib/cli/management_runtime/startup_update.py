@@ -310,7 +310,7 @@ def _release_refresh_lock(lock_path: Path) -> None:
 
 
 def _supports_startup_release_update(local_info: dict[str, object]) -> bool:
-    if platform.system() != "Linux":
+    if platform.system() not in {"Linux", "Darwin"}:
         return False
     return (
         str(local_info.get("install_mode") or "").strip() == "release"

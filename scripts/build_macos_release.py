@@ -14,7 +14,7 @@ from build_release import main_for_target
 
 
 def main() -> int:
-    return main_for_target("linux")
+    return main_for_target("macos")
 
 
 if __name__ == "__main__":

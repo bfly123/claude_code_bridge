@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from agents.models import (
+    AgentApiSpec,
     AgentRuntime,
     AgentState,
     AgentRestoreState,
@@ -31,6 +32,8 @@ def test_agent_stores_roundtrip(tmp_path: Path) -> None:
         restore_default=RestoreMode.AUTO,
         permission_default=PermissionMode.MANUAL,
         queue_policy=QueuePolicy.SERIAL_PER_AGENT,
+        model='gpt-5',
+        api=AgentApiSpec(key='sk-store', url='https://api.store.example.test/v1'),
         branch_template='ccb/{agent_name}',
     )
     runtime = AgentRuntime(

@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 
 def _load_module():
-    script_path = Path(__file__).resolve().parents[1] / "scripts" / "build_linux_release.py"
-    spec = importlib.util.spec_from_file_location("build_linux_release", script_path)
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "build_release.py"
+    spec = importlib.util.spec_from_file_location("build_release", script_path)
     module = importlib.util.module_from_spec(spec)
     assert spec is not None
     assert spec.loader is not None

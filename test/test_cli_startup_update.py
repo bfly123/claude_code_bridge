@@ -58,9 +58,53 @@ def _fresh_update_state(*, current: str = "6.0.10", latest: str = "6.0.11") -> d
     }
 
 
+def _source_install(tmp_path: Path, *, version: str = "6.0.10") -> Path:
+    (tmp_path / "install.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    (tmp_path / "ccb").write_text(
+        f'#!/usr/bin/env python3\nVERSION = "{version}"\nGIT_COMMIT = "abc1234"\nGIT_DATE = "2026-04-24"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "BUILD_INFO.json").write_text(
+        json.dumps(
+            {
+                "version": version,
+                "commit": "abc1234",
+                "date": "2026-04-24",
+                "build_time": "2026-04-24T07:44:20Z",
+                "platform": "linux",
+                "arch": "x86_64",
+                "channel": "dev",
+                "source_kind": "source",
+                "install_mode": "source",
+            }
+        ),
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
 def test_maybe_handle_startup_release_update_schedules_background_refresh_when_cache_missing(tmp_path: Path) -> None:
     install_dir = _release_install(tmp_path)
     calls: list[tuple[Path, Path]] = []
+
+    code = startup_update_runtime.maybe_handle_startup_release_update(
+        [],
+        script_root=install_dir,
+        cwd=install_dir,
+        stdout=_TtyStringIO(),
+        stderr=StringIO(),
+        stdin=_TtyInput(""),
+        schedule_refresh_fn=lambda *, script_root, install_dir: calls.append((script_root, install_dir)) or True,
+    )
+
+    assert code is None
+    assert calls == [(install_dir, install_dir)]
+
+
+def test_maybe_handle_startup_release_update_supports_macos_release(tmp_path: Path, monkeypatch) -> None:
+    install_dir = _release_install(tmp_path)
+    calls: list[tuple[Path, Path]] = []
+    monkeypatch.setattr(startup_update_runtime.platform, "system", lambda: "Darwin")
 
     code = startup_update_runtime.maybe_handle_startup_release_update(
         [],
@@ -189,6 +233,25 @@ def test_maybe_handle_startup_release_update_schedules_refresh_for_stale_cache_w
     assert code is None
     assert calls == [True]
     assert "Release update available" not in stdout.getvalue()
+
+
+def test_maybe_handle_startup_release_update_skips_source_install(tmp_path: Path) -> None:
+    install_dir = _source_install(tmp_path)
+    calls: list[bool] = []
+
+    code = startup_update_runtime.maybe_handle_startup_release_update(
+        [],
+        script_root=install_dir,
+        cwd=install_dir,
+        stdout=_TtyStringIO(),
+        stderr=StringIO(),
+        stdin=_TtyInput("y\n"),
+        schedule_refresh_fn=lambda **_: calls.append(True) or True,
+    )
+
+    assert code is None
+    assert calls == []
+    assert startup_update_runtime.load_update_check_state(install_dir) is None
 
 
 def test_schedule_background_update_refresh_creates_lock_and_spawns_internal_command(monkeypatch, tmp_path: Path) -> None:

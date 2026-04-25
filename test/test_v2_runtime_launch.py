@@ -1355,6 +1355,31 @@ def test_codex_launcher_build_start_cmd_uses_agent_scoped_session_root_by_defaul
     assert codex_home.is_dir()
 
 
+def test_codex_launcher_build_start_cmd_includes_agent_model_shortcut(monkeypatch, tmp_path: Path) -> None:
+    runtime_dir = tmp_path / 'runtime-codex-model'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.delenv('CODEX_HOME', raising=False)
+
+    spec = AgentSpec(
+        name='agent1',
+        provider='codex',
+        target='.',
+        workspace_mode=WorkspaceMode.GIT_WORKTREE,
+        workspace_root=None,
+        runtime_mode=RuntimeMode.PANE_BACKED,
+        restore_default=RestoreMode.AUTO,
+        permission_default=PermissionMode.MANUAL,
+        queue_policy=QueuePolicy.SERIAL_PER_AGENT,
+        model='gpt-5',
+        startup_args=('--search',),
+    )
+    command = ParsedStartCommand(project=None, agent_names=('agent1',), restore=False, auto_permission=False)
+
+    cmd = codex_launcher.build_start_cmd(command, spec, runtime_dir, 'sess-model')
+
+    assert 'codex -c disable_paste_burst=true -m gpt-5 --search' in cmd
+
+
 def test_codex_launcher_build_start_cmd_uses_agent_scoped_resume_session(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-codex-resume'
     runtime_dir = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-runtime' / 'codex'
@@ -1466,6 +1491,28 @@ def test_claude_launcher_build_start_cmd_uses_overlay_and_drops_dead_local_user_
         'claude --setting-sources user,project,local --dangerously-skip-permissions --continue'
     )
     assert not (runtime_dir / 'claude-settings.json').exists()
+
+
+def test_claude_launcher_build_start_cmd_includes_agent_model_shortcut(tmp_path: Path) -> None:
+    runtime_dir = tmp_path / 'runtime-claude-model'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    spec = AgentSpec(
+        name='reviewer',
+        provider='claude',
+        target='.',
+        workspace_mode=WorkspaceMode.GIT_WORKTREE,
+        workspace_root=None,
+        runtime_mode=RuntimeMode.PANE_BACKED,
+        restore_default=RestoreMode.AUTO,
+        permission_default=PermissionMode.MANUAL,
+        queue_policy=QueuePolicy.SERIAL_PER_AGENT,
+        model='opus',
+    )
+    command = ParsedStartCommand(project=None, agent_names=('reviewer',), restore=False, auto_permission=False)
+
+    start_cmd = claude_launcher.build_start_cmd(command, spec, runtime_dir, 'claude-sess-model')
+
+    assert start_cmd.endswith('claude --setting-sources user,project,local --model opus')
 
 
 
