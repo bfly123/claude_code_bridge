@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v6.0.13 (2026-04-25)
+
+### macOS Release Path & Preview Packaging Fix
+
+- **macOS Release Path**: shared release artifact naming and updater resolution now cover the macOS universal bundle alongside Linux/WSL release assets
+- **Source Dev Install Mode**: installs from a git checkout now stay linked to the live source tree, skip startup auto-update prompts, and can switch to a managed release install through `ccb update`
+- **Agent API / Model Shortcuts**: `.ccb/ccb.config` now accepts flat per-agent `key`, `url`, and `model` shortcuts so common provider overrides stay concise
+- **Preview Packaging Hardening**: preview release exports now exclude generated output paths inside the repo, fixing recursive self-copy failures such as `dist-macos-smoke`
+
 ## v6.0.12 (2026-04-24)
 
 ### Non-Blocking Startup Update Prompt

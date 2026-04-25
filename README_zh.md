@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/模型皆可控-CF1322?style=for-the-badge" alt="模型皆可控">
 </p>
 
-[![Version](https://img.shields.io/badge/version-6.0.12-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-6.0.13-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 [English](README.md) | **中文**
@@ -98,6 +98,16 @@ cmd; writer:codex, reviewer:claude; qa:gemini(worktree)
 历史说明：下面较旧的发布记录里仍可能出现 `askd`、旧 flag 或已移除命令。这些内容仅作为 changelog 历史保留，不代表当前 CLI 入口。
 
 <details open>
+<summary><b>v6.0.13</b> - macOS release 路径与预览打包修复</summary>
+
+- **macOS release 路径补齐**：共享 release 产物命名和 updater 解析现在同时覆盖 macOS universal 包以及 Linux/WSL release 资产
+- **source dev 安装模式**：从 git checkout 执行安装后会继续链接到实时源码树，不参与启动自动更新提示，但仍可通过 `ccb update` 切换到托管 release 安装
+- **Agent API / Model 简写**：`.ccb/ccb.config` 现在支持 agent 级扁平 `key`、`url`、`model` 字段，让常见 provider 覆盖保持简洁
+- **预览打包加固**：preview release 导出现在会排除仓库内构建过程生成的输出路径，修复 `dist-macos-smoke` 这类目录上的递归自拷贝失败
+
+</details>
+
+<details>
 <summary><b>v6.0.12</b> - 非阻塞启动更新提示</summary>
 
 - **缓存化启动提示**：交互式前台 `ccb` 启动现在会读取安装级缓存的 release 元数据，只有本地已知存在更高稳定版时才提示升级
