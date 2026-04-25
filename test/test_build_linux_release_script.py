@@ -59,6 +59,48 @@ def test_copy_repo_tree_excludes_runtime_state(tmp_path: Path) -> None:
     assert not (destination / ".tmp_test_env_arch1").exists()
 
 
+def test_copy_repo_tree_excludes_generated_output_subtree_inside_repo(tmp_path: Path) -> None:
+    module = _load_module()
+    repo_root = tmp_path / "repo"
+    output_dir = repo_root / "dist-macos-smoke"
+    destination = output_dir / ".stage-ccb-macos-universal" / "ccb-macos-universal"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "lib").mkdir(parents=True)
+    (repo_root / "lib" / "app.py").write_text("print('ok')\n", encoding="utf-8")
+    (output_dir / "old-build" / "stale.txt").parent.mkdir(parents=True)
+    (output_dir / "old-build" / "stale.txt").write_text("stale\n", encoding="utf-8")
+
+    module.copy_repo_tree(
+        repo_root,
+        destination,
+        generated_paths=(output_dir, destination.parent, output_dir / "SHA256SUMS"),
+    )
+
+    assert (destination / "lib" / "app.py").exists()
+    assert not (destination / "dist-macos-smoke").exists()
+
+
+def test_copy_repo_tree_excludes_generated_stage_when_output_dir_is_repo_root(tmp_path: Path) -> None:
+    module = _load_module()
+    repo_root = tmp_path / "repo"
+    stage_root = repo_root / ".stage-ccb-linux-x86_64"
+    destination = stage_root / "ccb-linux-x86_64"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "lib").mkdir(parents=True)
+    (repo_root / "lib" / "app.py").write_text("print('ok')\n", encoding="utf-8")
+    (stage_root / "stale.txt").parent.mkdir(parents=True)
+    (stage_root / "stale.txt").write_text("stale\n", encoding="utf-8")
+
+    module.copy_repo_tree(
+        repo_root,
+        destination,
+        generated_paths=(repo_root, stage_root, repo_root / "ccb-linux-x86_64.tar.gz", repo_root / "SHA256SUMS"),
+    )
+
+    assert (destination / "lib" / "app.py").exists()
+    assert not (destination / ".stage-ccb-linux-x86_64").exists()
+
+
 def test_dirty_worktree_entries_reads_porcelain_output(monkeypatch) -> None:
     module = _load_module()
 
@@ -181,7 +223,7 @@ def test_export_release_tree_allows_dirty_preview(monkeypatch, tmp_path: Path) -
     monkeypatch.setattr(
         module,
         "copy_repo_tree",
-        lambda path, dest: calls.append(("copy", path, dest)),
+        lambda path, dest, *, generated_paths=None: calls.append(("copy", path, dest, generated_paths)),
     )
     monkeypatch.setattr(module, "ensure_clean_worktree", lambda path: calls.append(("clean", path)))
     monkeypatch.setattr(
@@ -190,9 +232,17 @@ def test_export_release_tree_allows_dirty_preview(monkeypatch, tmp_path: Path) -
         lambda path, dest, *, git_ref: calls.append(("archive", path, dest, git_ref)),
     )
 
-    module.export_release_tree(repo_root, destination, git_ref="HEAD", allow_dirty=True)
+    generated_paths = (repo_root / "dist",)
 
-    assert calls == [("copy", repo_root, destination)]
+    module.export_release_tree(
+        repo_root,
+        destination,
+        git_ref="HEAD",
+        allow_dirty=True,
+        generated_paths=generated_paths,
+    )
+
+    assert calls == [("copy", repo_root, destination, generated_paths)]
 
 
 def test_resolve_version_prefers_git_ref_snapshot(monkeypatch, tmp_path: Path) -> None:

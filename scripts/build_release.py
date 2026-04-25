@@ -80,6 +80,7 @@ def main_for_target(target_platform: str) -> int:
         artifact_root,
         git_ref=args.git_ref,
         allow_dirty=args.allow_dirty,
+        generated_paths=(output_dir, stage_root, artifact_path, sha_path),
     )
     patch_ccb_metadata(artifact_root / "ccb", version=version, commit=commit, date=commit_date)
 
@@ -190,9 +191,49 @@ def read_git_file(repo_root: Path, *, git_ref: str, relative_path: str) -> str:
     return result.stdout
 
 
-def copy_repo_tree(repo_root: Path, destination: Path) -> None:
-    def _ignore(_dir: str, names: list[str]) -> set[str]:
-        return {name for name in names if name in EXCLUDES}
+def generated_relpaths_under_repo(repo_root: Path, paths: tuple[Path, ...] | list[Path] | None = None) -> tuple[Path, ...]:
+    repo_root = repo_root.resolve()
+    relpaths: set[Path] = set()
+    for raw_path in paths or ():
+        path = Path(raw_path).resolve()
+        try:
+            relpath = path.relative_to(repo_root)
+        except ValueError:
+            continue
+        if not relpath.parts:
+            continue
+        relpaths.add(relpath)
+    return tuple(sorted(relpaths, key=lambda item: (len(item.parts), item.as_posix())))
+
+
+def is_generated_relpath(path: Path, generated_relpaths: tuple[Path, ...]) -> bool:
+    return any(path == relpath or relpath in path.parents for relpath in generated_relpaths)
+
+
+def should_ignore_copy_relpath(path: Path, *, generated_relpaths: tuple[Path, ...]) -> bool:
+    if is_excluded_relpath(path):
+        return True
+    return is_generated_relpath(path, generated_relpaths)
+
+
+def copy_repo_tree(
+    repo_root: Path,
+    destination: Path,
+    *,
+    generated_paths: tuple[Path, ...] | list[Path] | None = None,
+) -> None:
+    repo_root = repo_root.resolve()
+    generated_relpaths = generated_relpaths_under_repo(repo_root, generated_paths)
+
+    def _ignore(current_dir: str, names: list[str]) -> set[str]:
+        current_path = Path(current_dir).resolve()
+        current_relpath = current_path.relative_to(repo_root)
+        ignored: set[str] = set()
+        for name in names:
+            candidate = current_relpath / name if current_relpath.parts else Path(name)
+            if should_ignore_copy_relpath(candidate, generated_relpaths=generated_relpaths):
+                ignored.add(name)
+        return ignored
 
     shutil.copytree(repo_root, destination, ignore=_ignore)
     prune_excluded_paths(destination)
@@ -204,15 +245,16 @@ def export_release_tree(
     *,
     git_ref: str,
     allow_dirty: bool,
+    generated_paths: tuple[Path, ...] | list[Path] | None = None,
 ) -> None:
     if is_git_checkout(repo_root):
         if allow_dirty:
-            copy_repo_tree(repo_root, destination)
+            copy_repo_tree(repo_root, destination, generated_paths=generated_paths)
             return
         ensure_clean_worktree(repo_root)
         export_git_archive(repo_root, destination, git_ref=git_ref)
         return
-    copy_repo_tree(repo_root, destination)
+    copy_repo_tree(repo_root, destination, generated_paths=generated_paths)
 
 
 def is_git_checkout(repo_root: Path) -> bool:
@@ -348,7 +390,9 @@ __all__ = [
     "ensure_clean_worktree",
     "export_git_archive",
     "export_release_tree",
+    "generated_relpaths_under_repo",
     "is_git_checkout",
+    "is_generated_relpath",
     "main_for_target",
     "normalize_arch",
     "parse_args",
@@ -360,6 +404,7 @@ __all__ = [
     "resolve_git_metadata",
     "resolve_version",
     "run_git",
+    "should_ignore_copy_relpath",
     "utc_now",
     "write_release_metadata",
     "write_sha256",
