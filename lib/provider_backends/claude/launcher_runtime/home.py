@@ -9,6 +9,11 @@ from provider_profiles import provider_api_env_keys
 from ..home_layout import ClaudeHomeLayout, claude_layout_for_home, claude_layout_from_session_data
 from .session_paths import read_session_payload, session_file_for_runtime_dir, state_dir_for_runtime_dir
 
+_CLAUDE_RUNTIME_SETTINGS_KEYS = ('hooks', 'permissions')
+_CLAUDE_AUTH_ENV_KEYS = ('ANTHROPIC_AUTH_TOKEN',)
+_CLAUDE_API_AUTH_ENV_KEYS = ('ANTHROPIC_API_KEY',)
+_CLAUDE_ROUTE_ENV_KEYS = ('ANTHROPIC_BASE_URL',)
+
 
 def resolve_claude_home_layout(runtime_dir: Path, profile) -> ClaudeHomeLayout:
     explicit_runtime_home = _profile_runtime_home(profile)
@@ -115,7 +120,7 @@ def _materialize_inherited_assets(source_home: Path, target_layout: ClaudeHomeLa
 def _materialize_settings(source_home: Path, target_layout: ClaudeHomeLayout, *, profile) -> None:
     payload = _projected_settings_payload(source_home / '.claude' / 'settings.json', profile=profile)
     existing = _read_json_object(target_layout.settings_path)
-    merged = _merge_settings_payload(payload, existing=existing)
+    merged = _merge_settings_payload(payload, existing=existing, profile=profile)
     if merged is None:
         return
     target_layout.settings_path.parent.mkdir(parents=True, exist_ok=True)
@@ -162,21 +167,79 @@ def _merge_settings_payload(
     projected: dict[str, object] | None,
     *,
     existing: dict[str, object],
+    profile=None,
 ) -> dict[str, object] | None:
     existing_payload = dict(existing or {})
     projected_payload = dict(projected or {})
     merged = dict(projected_payload)
+    _carry_forward_managed_auth_env(merged, existing_payload, profile=profile)
 
-    for key in ('hooks', 'permissions'):
+    for key in _CLAUDE_RUNTIME_SETTINGS_KEYS:
         value = existing_payload.get(key)
         if value is not None:
             merged[key] = value
 
-    if not merged and existing_payload:
-        return existing_payload
     if merged:
         return merged
+    if projected is not None:
+        return {}
     return None
+
+
+def _carry_forward_managed_auth_env(
+    merged_payload: dict[str, object],
+    existing_payload: dict[str, object],
+    *,
+    profile=None,
+) -> None:
+    if not _inherits_auth(profile):
+        return
+    existing_env = _read_env_payload(existing_payload)
+    if not existing_env:
+        return
+    merged_env = _read_env_payload(merged_payload)
+    if _has_projected_auth_authority(merged_env):
+        return
+
+    preserved_any = False
+    for key in _CLAUDE_AUTH_ENV_KEYS:
+        value = existing_env.get(key)
+        if _env_value_present(value):
+            merged_env[key] = value
+            preserved_any = True
+    if _inherits_api(profile):
+        for key in _CLAUDE_API_AUTH_ENV_KEYS:
+            value = existing_env.get(key)
+            if _env_value_present(value):
+                merged_env[key] = value
+                preserved_any = True
+        if preserved_any:
+            for key in _CLAUDE_ROUTE_ENV_KEYS:
+                if _env_value_present(merged_env.get(key)):
+                    continue
+                value = existing_env.get(key)
+                if _env_value_present(value):
+                    merged_env[key] = value
+
+    if merged_env:
+        merged_payload['env'] = merged_env
+    else:
+        merged_payload.pop('env', None)
+
+
+def _read_env_payload(payload: dict[str, object]) -> dict[str, object]:
+    env_payload = payload.get('env')
+    return dict(env_payload) if isinstance(env_payload, dict) else {}
+
+
+def _has_projected_auth_authority(env_payload: dict[str, object]) -> bool:
+    return any(_env_value_present(env_payload.get(key)) for key in (*_CLAUDE_AUTH_ENV_KEYS, *_CLAUDE_API_AUTH_ENV_KEYS))
+
+
+def _env_value_present(value: object) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    return value is not None
 
 
 def _needs_settings_stub(profile) -> bool:

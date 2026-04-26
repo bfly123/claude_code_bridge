@@ -1824,6 +1824,66 @@ def test_claude_launcher_build_start_cmd_refreshes_managed_home_projection(monke
     assert (managed_claude_dir / 'CLAUDE.md').read_text(encoding='utf-8') == 'claude-md-v2\n'
 
 
+def test_claude_launcher_build_start_cmd_preserves_managed_auth_when_system_home_logged_out(
+    monkeypatch, tmp_path: Path
+) -> None:
+    project_root = tmp_path / 'repo-claude-auth-refresh'
+    runtime_dir = project_root / '.ccb' / 'agents' / 'reviewer' / 'provider-runtime' / 'claude'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    home_dir = tmp_path / 'home'
+    source_claude_dir = home_dir / '.claude'
+    source_claude_dir.mkdir(parents=True, exist_ok=True)
+    (source_claude_dir / 'settings.json').write_text(
+        json.dumps(
+            {
+                'env': {
+                    'ANTHROPIC_BASE_URL': 'https://claude.example.test',
+                },
+                'theme': 'light',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    managed_settings = project_root / '.ccb' / 'agents' / 'reviewer' / 'provider-state' / 'claude' / 'home' / '.claude' / 'settings.json'
+    managed_settings.parent.mkdir(parents=True, exist_ok=True)
+    managed_settings.write_text(
+        json.dumps(
+            {
+                'env': {
+                    'ANTHROPIC_AUTH_TOKEN': 'managed-token',
+                    'ANTHROPIC_BASE_URL': 'https://managed.example.test',
+                },
+                'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': 'echo hook'}]}]},
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    spec = _spec('reviewer', provider='claude')
+    command = ParsedStartCommand(project=None, agent_names=('reviewer',), restore=False, auto_permission=False)
+
+    monkeypatch.setattr('provider_backends.claude.launcher.Path.home', lambda: home_dir)
+    monkeypatch.setattr('provider_backends.claude.launcher_runtime.home.Path.home', lambda: home_dir)
+    monkeypatch.setattr(
+        claude_launcher,
+        '_resolve_claude_restore_target',
+        lambda **kwargs: ProviderRestoreTarget(run_cwd=runtime_dir, has_history=False),
+    )
+
+    start_cmd = claude_launcher.build_start_cmd(command, spec, runtime_dir, 'claude-sess-auth-refresh')
+
+    payload = json.loads(managed_settings.read_text(encoding='utf-8'))
+    assert payload['env']['ANTHROPIC_AUTH_TOKEN'] == 'managed-token'
+    assert payload['env']['ANTHROPIC_BASE_URL'] == 'https://claude.example.test'
+    assert payload['theme'] == 'light'
+    assert payload['hooks']['Stop'][0]['hooks'][0]['command'] == 'echo hook'
+    assert f'HOME={shlex.quote(str(project_root / ".ccb" / "agents" / "reviewer" / "provider-state" / "claude" / "home"))}' in start_cmd
+
+
 def test_gemini_launcher_build_start_cmd_uses_isolated_profile_api_env(tmp_path: Path) -> None:
     runtime_dir = tmp_path / 'runtime'
     _write_provider_profile(

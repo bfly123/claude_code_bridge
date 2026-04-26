@@ -196,6 +196,125 @@ def test_materialize_claude_home_config_respects_inherit_skills_flag(tmp_path: P
     assert (layout.claude_dir / 'commands' / 'check.md').read_text(encoding='utf-8') == 'command\n'
 
 
+def test_materialize_claude_home_config_preserves_managed_auth_when_source_is_logged_out(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.claude' / 'settings.json'
+    source_settings.parent.mkdir(parents=True, exist_ok=True)
+    source_settings.write_text(
+        json.dumps(
+            {
+                'env': {
+                    'ANTHROPIC_BASE_URL': 'https://claude.example.test',
+                },
+                'theme': 'light',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    target_settings = target_home / '.claude' / 'settings.json'
+    target_settings.parent.mkdir(parents=True, exist_ok=True)
+    target_settings.write_text(
+        json.dumps(
+            {
+                'env': {
+                    'ANTHROPIC_AUTH_TOKEN': 'managed-token',
+                    'ANTHROPIC_BASE_URL': 'https://managed.example.test',
+                },
+                'theme': 'stale-theme',
+                'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': 'echo hook'}]}]},
+                'permissions': {'allow': ['Bash(ls)']},
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+
+    payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert payload['env']['ANTHROPIC_AUTH_TOKEN'] == 'managed-token'
+    assert payload['env']['ANTHROPIC_BASE_URL'] == 'https://claude.example.test'
+    assert payload['theme'] == 'light'
+    assert payload['hooks']['Stop'][0]['hooks'][0]['command'] == 'echo hook'
+    assert payload['permissions']['allow'] == ['Bash(ls)']
+
+
+def test_materialize_claude_home_config_refreshes_source_auth_over_managed_auth(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.claude' / 'settings.json'
+    source_settings.parent.mkdir(parents=True, exist_ok=True)
+    source_settings.write_text(
+        json.dumps(
+            {
+                'env': {
+                    'ANTHROPIC_AUTH_TOKEN': 'system-token',
+                    'ANTHROPIC_BASE_URL': 'https://claude.example.test',
+                },
+                'theme': 'light',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    target_settings = target_home / '.claude' / 'settings.json'
+    target_settings.parent.mkdir(parents=True, exist_ok=True)
+    target_settings.write_text(
+        json.dumps(
+            {
+                'env': {
+                    'ANTHROPIC_AUTH_TOKEN': 'managed-token',
+                    'ANTHROPIC_BASE_URL': 'https://managed.example.test',
+                },
+                'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': 'echo hook'}]}]},
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+
+    payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert payload['env']['ANTHROPIC_AUTH_TOKEN'] == 'system-token'
+    assert payload['env']['ANTHROPIC_BASE_URL'] == 'https://claude.example.test'
+    assert payload['theme'] == 'light'
+    assert payload['hooks']['Stop'][0]['hooks'][0]['command'] == 'echo hook'
+
+
+def test_materialize_claude_home_config_clears_stale_managed_auth_when_auth_is_not_inherited(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    target_settings = target_home / '.claude' / 'settings.json'
+    target_settings.parent.mkdir(parents=True, exist_ok=True)
+    target_settings.write_text(
+        json.dumps(
+            {
+                'env': {'ANTHROPIC_AUTH_TOKEN': 'managed-token'},
+                'theme': 'stale-theme',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    layout = materialize_claude_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_auth=False, inherit_api=False, inherit_config=True),
+        source_home=source_home,
+    )
+
+    payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert payload == {}
+
+
 def test_materialize_gemini_profile_keeps_runtime_home_unset_without_explicit_override(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo'
 

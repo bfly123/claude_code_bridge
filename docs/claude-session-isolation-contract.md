@@ -106,6 +106,19 @@ When `ccb` starts a managed Claude agent:
 - managed `settings.json` projection must treat inherited system settings as the
   baseline and preserve managed runtime sections such as `hooks` and compatible
   Claude-written runtime state such as `permissions`
+- managed `settings.json` projection must treat Claude auth env keys such as
+  `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_API_KEY` as auth authority, not generic
+  config
+- when source-home auth inheritance is enabled and the source Claude settings
+  still provide auth env keys, startup must refresh those source auth values
+  into the managed home on each managed launch
+- when source-home auth inheritance is enabled but the source Claude settings no
+  longer provide auth env keys, startup must preserve compatible managed-local
+  Claude auth state already written inside the managed home instead of blanking
+  it during projection; this allows an agent-scoped Claude re-login to survive
+  restart after the global Claude home has been logged out
+- when auth inheritance is disabled, startup must not silently keep stale
+  managed Claude auth env state
 - when inheritance is enabled, it must refresh inherited Claude `skills/`,
   `commands/`, and `.claude/CLAUDE.md` projections into the managed home on
   each managed launch so source-home updates become visible after restart
