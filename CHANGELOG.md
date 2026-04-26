@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v6.0.14 (2026-04-26)
+
+### Claude Logout Recovery Hardening
+
+- **Managed Claude Auth Preservation**: managed Claude homes now preserve agent-local login auth when the global Claude home has been logged out, so a project-scoped re-login survives restart instead of re-entering a browser-link loop
+- **Auth Projection Semantics Tightened**: Claude startup still refreshes source auth when it exists, but stops treating missing source auth as an instruction to blank managed auth; disabled auth inheritance continues to clear stale copied auth state
+- **Startup Regression Coverage Expanded**: targeted tests now lock this behavior at the projection layer, provider workspace preparation, and Claude launcher startup path
+
 ## v6.0.13 (2026-04-25)
 
 ### macOS Release Path & Preview Packaging Fix

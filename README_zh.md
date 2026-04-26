@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/模型皆可控-CF1322?style=for-the-badge" alt="模型皆可控">
 </p>
 
-[![Version](https://img.shields.io/badge/version-6.0.13-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-6.0.14-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 [English](README.md) | **中文**
@@ -98,6 +98,15 @@ cmd; writer:codex, reviewer:claude; qa:gemini(worktree)
 历史说明：下面较旧的发布记录里仍可能出现 `askd`、旧 flag 或已移除命令。这些内容仅作为 changelog 历史保留，不代表当前 CLI 入口。
 
 <details open>
+<summary><b>v6.0.14</b> - Claude logout 恢复加固</summary>
+
+- **managed Claude 登录态保留**：当全局 Claude home 已执行 logout 时，managed Claude home 现在会保留 agent 私有的本地登录态，避免项目内重新登录后重启再次掉回浏览器链接循环
+- **auth 投影语义收紧**：当 source home 仍有 auth 时，启动继续按 source 刷新；当 source auth 缺失时，不再把它解释为“必须清空 managed auth”，而 `inherit_auth = false` 仍会清理旧的复制鉴权
+- **启动链路回归覆盖补齐**：新增回归测试覆盖 projection 层、provider workspace 准备以及 Claude launcher 启动路径，锁住这条 logout 后恢复语义
+
+</details>
+
+<details>
 <summary><b>v6.0.13</b> - macOS release 路径与预览打包修复</summary>
 
 - **macOS release 路径补齐**：共享 release 产物命名和 updater 解析现在同时覆盖 macOS universal 包以及 Linux/WSL release 资产

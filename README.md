@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Every_Model_Controllable-CF1322?style=for-the-badge" alt="Every Model Controllable">
 </p>
 
-[![Version](https://img.shields.io/badge/version-6.0.13-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-6.0.14-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 **English** | [Chinese](README_zh.md)
@@ -92,6 +92,15 @@ This layout means:
 Historical note: older release notes below may mention `askd`, legacy flags, or removed commands. Those references are kept only as changelog history and do not redefine the current CLI surface.
 
 <details open>
+<summary><b>v6.0.14</b> - Claude Logout Recovery Hardening</summary>
+
+- **Managed Claude Auth Preservation**: managed Claude homes now preserve agent-local login auth when the global Claude home has been logged out, so a project-scoped re-login survives restart instead of re-entering a browser-link loop
+- **Auth Projection Semantics Tightened**: Claude startup still refreshes source auth when it exists, but no longer treats missing source auth as an instruction to blank managed auth; disabled auth inheritance still clears stale copied auth state
+- **Startup Regression Coverage Expanded**: targeted regressions now lock this behavior at the projection layer, provider workspace preparation, and Claude launcher startup path
+
+</details>
+
+<details>
 <summary><b>v6.0.13</b> - macOS Release Path & Preview Packaging Fix</summary>
 
 - **macOS Release Path**: shared release artifact naming and updater resolution now cover the macOS universal bundle alongside Linux/WSL release assets
