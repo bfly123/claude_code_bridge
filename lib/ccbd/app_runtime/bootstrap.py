@@ -35,6 +35,7 @@ from provider_execution.state_store import ExecutionStateStore
 from storage.paths import PathLayout
 
 from .handlers import register_handlers
+from .lifecycle import shutdown as shutdown_app
 
 APP_REQUEST_TIMEOUT_S = 0.0
 JOB_HEARTBEAT_SILENCE_START_AFTER_S = 600.0
@@ -83,6 +84,7 @@ def initialize_app(app, project_root: str | Path, *, clock, pid: int | None) -> 
         runtime_service=app.runtime_service,
         mount_agent_fn=app._mount_agent_from_policy,
         remount_project_fn=app._remount_project_from_policy,
+        shutdown_project_fn=lambda reason: shutdown_app(app, reason=reason),
         clock=app.clock,
         generation_getter=lambda: app.lease.generation if app.lease is not None else None,
     )

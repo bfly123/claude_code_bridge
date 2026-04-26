@@ -143,7 +143,93 @@ class _FakeCmdReplacementBackend:
             self.pane_options.setdefault(pane_id, {})['pane-active-border-style'] = active_border_style
 
 
-def test_runtime_supervision_loop_recovers_idle_degraded_agent(tmp_path: Path) -> None:
+def test_runtime_supervision_loop_requests_shutdown_when_agent_pane_exits(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-supervision-agent-exit'
+    project_root.mkdir()
+    ctx = bootstrap_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex')
+    registry = AgentRegistry(layout, config)
+    runtime_service = RuntimeService(layout, registry, ctx.project_id, clock=lambda: '2026-03-18T00:00:00Z')
+    degraded = _runtime('codex', project_id=ctx.project_id, layout=layout, pid=101, health='pane-dead')
+    degraded.runtime_ref = 'tmux:%41'
+    degraded.pane_state = 'dead'
+    registry.upsert(degraded)
+    shutdown_calls: list[str] = []
+
+    loop = RuntimeSupervisionLoop(
+        project_id=ctx.project_id,
+        layout=layout,
+        config=config,
+        registry=registry,
+        runtime_service=runtime_service,
+        shutdown_project_fn=lambda reason: shutdown_calls.append(reason),
+        clock=lambda: '2026-03-18T00:00:10Z',
+        generation_getter=lambda: 51,
+    )
+
+    statuses = loop.reconcile_once()
+
+    assert statuses == {'codex': 'shutdown-requested'}
+    assert shutdown_calls == ['pane_exited:codex']
+    runtime = registry.get('codex')
+    assert runtime is not None
+    assert runtime.health == 'pane-dead'
+    events = SupervisionEventStore(layout).read_all()
+    assert [event.event_kind for event in events] == ['shutdown_requested']
+    assert events[0].details == {'reason': 'pane_exited:codex'}
+
+
+def test_runtime_supervision_loop_requests_shutdown_when_cmd_pane_exits(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-supervision-cmd-exit'
+    project_root.mkdir()
+    ctx = bootstrap_project(project_root)
+    layout = PathLayout(project_root)
+    config = replace(_provider_config('codex'), cmd_enabled=True, layout_spec='cmd; codex')
+    registry = AgentRegistry(layout, config)
+    runtime_service = RuntimeService(layout, registry, ctx.project_id, clock=lambda: '2026-03-18T00:00:00Z')
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101, health='healthy'))
+    shutdown_calls: list[str] = []
+
+    class _NamespaceController:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self._backend_factory = lambda socket_path=None: object()
+
+        def load(self):
+            return SimpleNamespace(
+                ui_attachable=True,
+                tmux_socket_path=str(layout.ccbd_tmux_socket_path),
+                tmux_session_name=layout.ccbd_tmux_session_name,
+                workspace_window_id='@2',
+            )
+
+        def root_pane_id(self, namespace=None) -> str:
+            del namespace
+            return ''
+
+    monkeypatch.setattr('ccbd.supervision.cmd_slot.ProjectNamespaceController', _NamespaceController)
+
+    loop = RuntimeSupervisionLoop(
+        project_id=ctx.project_id,
+        layout=layout,
+        config=config,
+        registry=registry,
+        runtime_service=runtime_service,
+        shutdown_project_fn=lambda reason: shutdown_calls.append(reason),
+        clock=lambda: '2026-03-18T00:00:10Z',
+        generation_getter=lambda: 52,
+    )
+
+    statuses = loop.reconcile_once()
+
+    assert statuses == {'codex': 'shutdown-requested'}
+    assert shutdown_calls == ['pane_exited:cmd']
+    events = SupervisionEventStore(layout).read_all()
+    assert [event.event_kind for event in events] == ['shutdown_requested']
+    assert events[0].details == {'reason': 'pane_exited:cmd'}
+
+
+def test_runtime_supervision_loop_requests_shutdown_instead_of_recovering_exited_agent(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-supervision-recover'
     project_root.mkdir()
     ctx = bootstrap_project(project_root)
@@ -164,63 +250,44 @@ def test_runtime_supervision_loop_recovers_idle_degraded_agent(tmp_path: Path) -
         clock=lambda: '2026-03-18T00:00:00Z',
     )
     registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101, health='pane-dead'))
+    shutdown_calls: list[str] = []
     loop = RuntimeSupervisionLoop(
         project_id=ctx.project_id,
         layout=layout,
         config=config,
         registry=registry,
         runtime_service=runtime_service,
+        shutdown_project_fn=lambda reason: shutdown_calls.append(reason),
         clock=lambda: '2026-03-18T00:00:10Z',
         generation_getter=lambda: 7,
     )
 
     statuses = loop.reconcile_once()
 
-    assert statuses == {'codex': 'healthy'}
+    assert statuses == {'codex': 'shutdown-requested'}
+    assert shutdown_calls == ['pane_exited:codex']
     runtime = registry.get('codex')
     assert runtime is not None
-    assert runtime.state is AgentState.IDLE
-    assert runtime.health == 'healthy'
-    assert runtime.runtime_ref == 'tmux:%88'
-    assert runtime.session_ref == 'codex-session-new'
-    assert runtime.daemon_generation == 7
-    assert runtime.desired_state == 'mounted'
-    assert runtime.reconcile_state == 'steady'
-    assert runtime.restart_count == 1
-    assert runtime.last_reconcile_at == '2026-03-18T00:00:10Z'
-    assert runtime.last_failure_reason is None
-    assert session.ensure_calls == 1
+    assert runtime.state is AgentState.DEGRADED
+    assert runtime.health == 'pane-dead'
+    assert session.ensure_calls == 0
     events = SupervisionEventStore(layout).read_all()
-    assert [event.event_kind for event in events] == ['recover_started', 'recover_succeeded']
-    assert events[0].prior_health == 'pane-dead'
-    assert events[1].result_health == 'healthy'
-    assert events[1].daemon_generation == 7
+    assert [event.event_kind for event in events] == ['shutdown_requested']
+    assert events[0].details == {'reason': 'pane_exited:codex'}
 
 
-def test_runtime_supervision_loop_reflows_after_local_replacement_when_project_namespace_is_safe(tmp_path: Path) -> None:
+def test_runtime_supervision_loop_reflows_project_namespace_for_foreign_pane(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-supervision-reflow'
     project_root.mkdir()
     ctx = bootstrap_project(project_root)
     layout = PathLayout(project_root)
     config = _provider_config('codex', 'claude')
     registry = AgentRegistry(layout, config)
-    session = RecoveringBindingSession(
-        pane_id='%41',
-        fake_session_id='codex-session-old',
-        recovered_pane_id='%55',
-        recovered_session_id='codex-session-local',
-    )
-    runtime_service = RuntimeService(
-        layout,
-        registry,
-        ctx.project_id,
-        session_bindings=_binding_map('codex', session),
-        clock=lambda: '2026-03-18T00:00:00Z',
-    )
-    degraded = _runtime('codex', project_id=ctx.project_id, layout=layout, pid=101, health='pane-dead')
+    runtime_service = RuntimeService(layout, registry, ctx.project_id, clock=lambda: '2026-03-18T00:00:00Z')
+    degraded = _runtime('codex', project_id=ctx.project_id, layout=layout, pid=101, health='pane-foreign')
     degraded.runtime_ref = 'tmux:%41'
     degraded.tmux_socket_path = str(layout.ccbd_tmux_socket_path)
-    degraded.pane_state = 'dead'
+    degraded.pane_state = 'foreign'
     steady = _runtime('claude', project_id=ctx.project_id, layout=layout, pid=202, health='healthy')
     steady.runtime_ref = 'tmux:%202'
     steady.tmux_socket_path = str(layout.ccbd_tmux_socket_path)
@@ -267,12 +334,11 @@ def test_runtime_supervision_loop_reflows_after_local_replacement_when_project_n
     assert runtime is not None
     assert runtime.runtime_ref == 'tmux:%99'
     assert runtime.session_ref == 'codex-session-reflowed'
-    assert session.ensure_calls == 1
     events = SupervisionEventStore(layout).read_all()
     assert [event.event_kind for event in events] == ['recover_started', 'recover_succeeded']
 
 
-def test_runtime_supervision_loop_recovers_missing_pane_locally_even_when_other_agent_busy(tmp_path: Path) -> None:
+def test_runtime_supervision_loop_recovers_missing_pane_even_if_other_agent_busy(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-supervision-reflow-busy'
     project_root.mkdir()
     ctx = bootstrap_project(project_root)
@@ -303,6 +369,7 @@ def test_runtime_supervision_loop_recovers_missing_pane_locally_even_when_other_
     registry.upsert(degraded)
     registry.upsert(busy)
     remount_calls: list[str] = []
+    shutdown_calls: list[str] = []
 
     loop = RuntimeSupervisionLoop(
         project_id=ctx.project_id,
@@ -311,6 +378,7 @@ def test_runtime_supervision_loop_recovers_missing_pane_locally_even_when_other_
         registry=registry,
         runtime_service=runtime_service,
         remount_project_fn=lambda reason: remount_calls.append(reason),
+        shutdown_project_fn=lambda reason: shutdown_calls.append(reason),
         clock=lambda: '2026-03-18T00:00:10Z',
         generation_getter=lambda: 45,
     )
@@ -319,6 +387,7 @@ def test_runtime_supervision_loop_recovers_missing_pane_locally_even_when_other_
 
     assert statuses == {'codex': 'healthy', 'claude': 'healthy'}
     assert remount_calls == []
+    assert shutdown_calls == []
     assert session.ensure_calls == 1
 
 
@@ -730,7 +799,7 @@ def test_runtime_supervision_loop_restores_cmd_slot_locally_while_other_agent_bu
     assert fake_backend.respawn_calls[0]['pane_id'] == '%cmd'
 
 
-def test_runtime_supervision_loop_reflows_cmd_when_local_replacement_is_unavailable(tmp_path: Path, monkeypatch) -> None:
+def test_runtime_supervision_loop_reflows_when_cmd_root_is_unavailable(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / 'repo-supervision-cmd-reflow'
     project_root.mkdir()
     ctx = bootstrap_project(project_root)
@@ -740,6 +809,7 @@ def test_runtime_supervision_loop_reflows_cmd_when_local_replacement_is_unavaila
     runtime_service = RuntimeService(layout, registry, ctx.project_id, clock=lambda: '2026-03-18T00:00:00Z')
     registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101, health='healthy'))
     remount_calls: list[str] = []
+    shutdown_calls: list[str] = []
 
     class _NamespaceController:
         def __init__(self, *_args, **_kwargs) -> None:
@@ -767,6 +837,7 @@ def test_runtime_supervision_loop_reflows_cmd_when_local_replacement_is_unavaila
         registry=registry,
         runtime_service=runtime_service,
         remount_project_fn=lambda reason: remount_calls.append(reason),
+        shutdown_project_fn=lambda reason: shutdown_calls.append(reason),
         clock=lambda: '2026-03-18T00:00:10Z',
         generation_getter=lambda: 49,
     )
@@ -775,6 +846,112 @@ def test_runtime_supervision_loop_reflows_cmd_when_local_replacement_is_unavaila
 
     assert statuses == {'codex': 'healthy'}
     assert remount_calls == ['pane_recovery:cmd']
+    assert shutdown_calls == []
+    events = SupervisionEventStore(layout).read_all()
+    assert events == []
+
+
+def test_runtime_supervision_loop_reflows_when_cmd_inspection_fails(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-supervision-cmd-inspect-fails'
+    project_root.mkdir()
+    ctx = bootstrap_project(project_root)
+    layout = PathLayout(project_root)
+    config = replace(_provider_config('codex'), cmd_enabled=True, layout_spec='cmd; codex')
+    registry = AgentRegistry(layout, config)
+    runtime_service = RuntimeService(layout, registry, ctx.project_id, clock=lambda: '2026-03-18T00:00:00Z')
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101, health='healthy'))
+    remount_calls: list[str] = []
+    shutdown_calls: list[str] = []
+
+    class _NamespaceController:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self._backend_factory = lambda socket_path=None: object()
+
+        def load(self):
+            return SimpleNamespace(
+                ui_attachable=True,
+                tmux_socket_path=str(layout.ccbd_tmux_socket_path),
+                tmux_session_name=layout.ccbd_tmux_session_name,
+                workspace_window_id='@2',
+            )
+
+        def root_pane_id(self, namespace=None) -> str:
+            del namespace
+            return '%8'
+
+    monkeypatch.setattr('ccbd.supervision.cmd_slot.ProjectNamespaceController', _NamespaceController)
+    monkeypatch.setattr('ccbd.supervision.cmd_slot.build_backend', lambda backend_factory, socket_path=None: object())
+    monkeypatch.setattr('ccbd.supervision.cmd_slot.inspect_project_namespace_pane', lambda backend, pane_id: None)
+
+    loop = RuntimeSupervisionLoop(
+        project_id=ctx.project_id,
+        layout=layout,
+        config=config,
+        registry=registry,
+        runtime_service=runtime_service,
+        remount_project_fn=lambda reason: remount_calls.append(reason),
+        shutdown_project_fn=lambda reason: shutdown_calls.append(reason),
+        clock=lambda: '2026-03-18T00:00:10Z',
+        generation_getter=lambda: 50,
+    )
+
+    statuses = loop.reconcile_once()
+
+    assert statuses == {'codex': 'healthy'}
+    assert remount_calls == ['pane_recovery:cmd']
+    assert shutdown_calls == []
+    assert SupervisionEventStore(layout).read_all() == []
+
+
+def test_runtime_supervision_loop_does_not_shutdown_for_missing_pane_health(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-supervision-missing-no-shutdown'
+    project_root.mkdir()
+    ctx = bootstrap_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex')
+    registry = AgentRegistry(layout, config)
+    session = RecoveringBindingSession(
+        pane_id='%41',
+        fake_session_id='codex-session-old',
+        recovered_pane_id='%88',
+        recovered_session_id='codex-session-new',
+    )
+    runtime_service = RuntimeService(
+        layout,
+        registry,
+        ctx.project_id,
+        session_bindings=_binding_map('codex', session),
+        clock=lambda: '2026-03-18T00:00:00Z',
+    )
+    runtime = _runtime('codex', project_id=ctx.project_id, layout=layout, pid=101, health='pane-missing')
+    runtime.runtime_ref = 'tmux:%41'
+    runtime.tmux_socket_path = str(layout.ccbd_tmux_socket_path)
+    runtime.pane_state = 'missing'
+    registry.upsert(runtime)
+    shutdown_calls: list[str] = []
+
+    loop = RuntimeSupervisionLoop(
+        project_id=ctx.project_id,
+        layout=layout,
+        config=config,
+        registry=registry,
+        runtime_service=runtime_service,
+        shutdown_project_fn=lambda reason: shutdown_calls.append(reason),
+        clock=lambda: '2026-03-18T00:00:10Z',
+        generation_getter=lambda: 14,
+    )
+
+    statuses = loop.reconcile_once()
+
+    assert statuses == {'codex': 'healthy'}
+    assert shutdown_calls == []
+    assert session.ensure_calls == 1
+    persisted = registry.get('codex')
+    assert persisted is not None
+    assert persisted.health == 'healthy'
+    assert persisted.runtime_ref == 'tmux:%88'
+    assert persisted.reconcile_state == 'steady'
+    assert [event.event_kind for event in SupervisionEventStore(layout).read_all()] == ['recover_started', 'recover_succeeded']
 
 
 def test_runtime_supervision_loop_skips_healthy_runtime(tmp_path: Path, monkeypatch) -> None:
@@ -852,7 +1029,7 @@ def test_runtime_supervision_loop_skips_session_missing_runtime(tmp_path: Path, 
     assert SupervisionEventStore(layout).read_all() == []
 
 
-def test_runtime_supervision_loop_persists_failure_reason_and_event(tmp_path: Path) -> None:
+def test_runtime_supervision_loop_shutdown_events_replace_recovery_failure_for_exited_pane(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-supervision-failure'
     project_root.mkdir()
     ctx = bootstrap_project(project_root)
@@ -874,30 +1051,83 @@ def test_runtime_supervision_loop_persists_failure_reason_and_event(tmp_path: Pa
         clock=lambda: '2026-03-18T00:00:00Z',
     )
     registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101, health='pane-dead'))
+    shutdown_calls: list[str] = []
     loop = RuntimeSupervisionLoop(
         project_id=ctx.project_id,
         layout=layout,
         config=config,
         registry=registry,
         runtime_service=runtime_service,
+        shutdown_project_fn=lambda reason: shutdown_calls.append(reason),
         clock=lambda: '2026-03-18T00:00:10Z',
         generation_getter=lambda: 12,
     )
 
     statuses = loop.reconcile_once()
 
-    assert statuses == {'codex': 'pane-dead'}
+    assert statuses == {'codex': 'shutdown-requested'}
+    assert shutdown_calls == ['pane_exited:codex']
+    assert session.ensure_calls == 0
     runtime = registry.get('codex')
     assert runtime is not None
     assert runtime.state is AgentState.DEGRADED
     assert runtime.daemon_generation == 12
     assert runtime.reconcile_state == 'degraded'
-    assert runtime.restart_count == 1
-    assert runtime.last_reconcile_at == '2026-03-18T00:00:10Z'
-    assert runtime.last_failure_reason == 'pane-dead'
+    assert runtime.restart_count == 0
+    assert runtime.last_reconcile_at is None
+    assert runtime.last_failure_reason is None
     events = SupervisionEventStore(layout).read_all()
-    assert [event.event_kind for event in events] == ['recover_started', 'recover_failed']
-    assert events[1].details == {'reason': 'pane-dead'}
+    assert [event.event_kind for event in events] == ['shutdown_requested']
+    assert events[0].details == {'reason': 'pane_exited:codex'}
+
+
+def test_runtime_supervision_loop_shutdown_takes_precedence_over_backoff_for_exited_pane(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-supervision-backoff'
+    project_root.mkdir()
+    ctx = bootstrap_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex')
+    registry = AgentRegistry(layout, config)
+    runtime_service = RuntimeService(layout, registry, ctx.project_id, clock=lambda: '2026-03-18T00:00:00Z')
+    runtime = _runtime('codex', project_id=ctx.project_id, layout=layout, pid=101, health='pane-dead')
+    runtime.restart_count = 2
+    runtime.last_reconcile_at = '2026-03-18T00:00:09Z'
+    runtime.last_failure_reason = 'pane-dead'
+    registry.upsert(runtime)
+    shutdown_calls: list[str] = []
+    loop = RuntimeSupervisionLoop(
+        project_id=ctx.project_id,
+        layout=layout,
+        config=config,
+        registry=registry,
+        runtime_service=runtime_service,
+        shutdown_project_fn=lambda reason: shutdown_calls.append(reason),
+        clock=lambda: '2026-03-18T00:00:10Z',
+        generation_getter=lambda: 13,
+    )
+    calls: list[str] = []
+
+    def _refresh(agent_name: str, *, recover: bool = False):
+        calls.append(f'{agent_name}:{recover}')
+        raise AssertionError('exited pane should not trigger recovery')
+
+    monkeypatch.setattr(runtime_service, 'refresh_provider_binding', _refresh)
+
+    statuses = loop.reconcile_once()
+
+    assert statuses == {'codex': 'shutdown-requested'}
+    assert shutdown_calls == ['pane_exited:codex']
+    assert calls == []
+    persisted = registry.get('codex')
+    assert persisted is not None
+    assert persisted.daemon_generation == 13
+    assert persisted.reconcile_state == 'degraded'
+    assert persisted.restart_count == 2
+    assert persisted.last_reconcile_at == '2026-03-18T00:00:09Z'
+    events = SupervisionEventStore(layout).read_all()
+    assert [event.event_kind for event in events] == ['shutdown_requested']
+    assert events[0].details == {'reason': 'pane_exited:codex'}
+
 
 
 def test_runtime_supervision_loop_persists_mount_failure(tmp_path: Path) -> None:
@@ -940,49 +1170,6 @@ def test_runtime_supervision_loop_persists_mount_failure(tmp_path: Path) -> None
     events = SupervisionEventStore(layout).read_all()
     assert [event.event_kind for event in events] == ['mount_started', 'mount_failed']
     assert events[1].details == {'reason': 'RuntimeError: launch boom'}
-
-
-def test_runtime_supervision_loop_applies_failure_backoff(tmp_path: Path, monkeypatch) -> None:
-    project_root = tmp_path / 'repo-supervision-backoff'
-    project_root.mkdir()
-    ctx = bootstrap_project(project_root)
-    layout = PathLayout(project_root)
-    config = _provider_config('codex')
-    registry = AgentRegistry(layout, config)
-    runtime_service = RuntimeService(layout, registry, ctx.project_id, clock=lambda: '2026-03-18T00:00:00Z')
-    runtime = _runtime('codex', project_id=ctx.project_id, layout=layout, pid=101, health='pane-dead')
-    runtime.restart_count = 2
-    runtime.last_reconcile_at = '2026-03-18T00:00:09Z'
-    runtime.last_failure_reason = 'pane-dead'
-    registry.upsert(runtime)
-    loop = RuntimeSupervisionLoop(
-        project_id=ctx.project_id,
-        layout=layout,
-        config=config,
-        registry=registry,
-        runtime_service=runtime_service,
-        clock=lambda: '2026-03-18T00:00:10Z',
-        generation_getter=lambda: 13,
-    )
-    calls: list[str] = []
-
-    def _refresh(agent_name: str, *, recover: bool = False):
-        calls.append(f'{agent_name}:{recover}')
-        raise AssertionError('runtime in backoff should not trigger recovery')
-
-    monkeypatch.setattr(runtime_service, 'refresh_provider_binding', _refresh)
-
-    statuses = loop.reconcile_once()
-
-    assert statuses == {'codex': 'pane-dead'}
-    assert calls == []
-    persisted = registry.get('codex')
-    assert persisted is not None
-    assert persisted.daemon_generation == 13
-    assert persisted.reconcile_state == 'degraded'
-    assert persisted.restart_count == 2
-    assert persisted.last_reconcile_at == '2026-03-18T00:00:09Z'
-    assert SupervisionEventStore(layout).read_all() == []
 
 
 def test_runtime_supervision_loop_applies_mount_failure_backoff(tmp_path: Path, monkeypatch) -> None:

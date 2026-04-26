@@ -13,6 +13,7 @@ from terminal_runtime.tmux_identity import apply_ccb_pane_identity
 from .loop_context import RuntimeSupervisionContext
 
 _PLACEHOLDER_CMD = 'while :; do sleep 3600; done'
+_CMD_ROOT_UNAVAILABLE = object()
 
 
 @dataclass(frozen=True)
@@ -32,7 +33,13 @@ def reconcile_cmd_slot(ctx: RuntimeSupervisionContext) -> str | None:
     if backend is None:
         return request_cmd_workspace_reflow(ctx)
     root_pane_id = _load_root_pane_id(namespace_controller, namespace)
+    if root_pane_id is _CMD_ROOT_UNAVAILABLE:
+        return request_cmd_workspace_reflow(ctx)
+    if cmd_slot_exited(root_pane_id):
+        return 'pane-exited'
     record = _inspect_root_record(backend, root_pane_id)
+    if record is None:
+        return request_cmd_workspace_reflow(ctx)
     if cmd_slot_matches_namespace(ctx, namespace, record):
         return 'healthy'
     if replace_cmd_slot_locally(
@@ -168,6 +175,11 @@ def split_before_anchor_pane(
     return pane_id if pane_id.startswith('%') else None
 
 
+def cmd_slot_exited(root_pane_id: str | None) -> bool:
+    pane_text = str(root_pane_id or '').strip()
+    return not pane_text.startswith('%')
+
+
 def cmd_slot_matches_namespace(
     ctx: RuntimeSupervisionContext,
     namespace,
@@ -223,11 +235,11 @@ def _inspect_root_record(backend, pane_id: str | None):
         return None
 
 
-def _load_root_pane_id(namespace_controller: ProjectNamespaceController, namespace) -> str | None:
+def _load_root_pane_id(namespace_controller: ProjectNamespaceController, namespace):
     try:
         pane_id = namespace_controller.root_pane_id(namespace)
     except Exception:
-        return None
+        return _CMD_ROOT_UNAVAILABLE
     pane_text = str(pane_id or '').strip()
     return pane_text if pane_text.startswith('%') else None
 

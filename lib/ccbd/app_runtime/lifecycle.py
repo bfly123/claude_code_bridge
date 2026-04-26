@@ -88,7 +88,7 @@ def request_shutdown(app) -> None:
     app.socket_server.shutdown()
 
 
-def shutdown(app) -> None:
+def shutdown(app, *, reason: str = 'shutdown') -> None:
     try:
         app.runtime_supervisor.stop_all(force=True)
     except Exception:

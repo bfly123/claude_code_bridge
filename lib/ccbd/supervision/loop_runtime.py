@@ -89,6 +89,15 @@ def runtime_health(runtime) -> str:
     return normalized_runtime_health(runtime)
 
 
+def should_shutdown_for_exited_pane(ctx: RuntimeSupervisionContext, runtime) -> bool:
+    if runtime_health(runtime) != 'pane-dead':
+        return False
+    spec = runtime_mode_spec(ctx, runtime.agent_name)
+    if spec is None:
+        return False
+    return getattr(spec, 'runtime_mode', None) is RuntimeMode.PANE_BACKED
+
+
 def should_reflow_project_namespace(ctx: RuntimeSupervisionContext, runtime, *, recovered=None) -> bool:
     if recovered is not None and recovered_replacement_requires_workspace_reflow(ctx, runtime, recovered):
         return True
@@ -200,6 +209,7 @@ __all__ = [
     'runtime_requires_mount',
     'runtime_requires_mount_from_foreign_pane',
     'runtime_requires_recovery',
+    'should_shutdown_for_exited_pane',
     'should_reflow_project_mount',
     'should_reflow_project_namespace',
     'upsert_if_changed',
