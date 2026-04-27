@@ -56,6 +56,7 @@ class ProjectNamespaceController(ProjectNamespaceControllerStateMixin):
         force_recreate: bool = False,
         recreate_reason: str | None = None,
         session_probe_timeout_s: float | None = None,
+        terminal_size: tuple[int, int] | None = None,
     ) -> ProjectNamespace:
         return ensure_project_namespace(
             self,
@@ -63,6 +64,7 @@ class ProjectNamespaceController(ProjectNamespaceControllerStateMixin):
             force_recreate=force_recreate,
             recreate_reason=recreate_reason,
             session_probe_timeout_s=session_probe_timeout_s,
+            terminal_size=terminal_size,
         )
 
     def destroy(self, *, reason: str, force: bool = False):

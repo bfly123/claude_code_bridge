@@ -48,14 +48,22 @@ def ensure_server_policy(backend) -> None:
     )
 
 
-def create_session(backend, *, session_name: str, project_root, window_name: str | None = None) -> None:
+def create_session(
+    backend,
+    *,
+    session_name: str,
+    project_root,
+    window_name: str | None = None,
+    terminal_size: tuple[int, int] | None = None,
+) -> None:
+    width, height = _resolved_session_size(terminal_size)
     args = [
         'new-session',
         '-d',
         '-x',
-        '160',
+        str(width),
         '-y',
-        '48',
+        str(height),
         '-s',
         session_name,
     ]
@@ -75,6 +83,20 @@ def create_session(backend, *, session_name: str, project_root, window_name: str
         args,
         failure_message=f'failed to create tmux session {session_name!r}',
     )
+
+
+def _resolved_session_size(terminal_size: tuple[int, int] | None) -> tuple[int, int]:
+    default = (160, 48)
+    if terminal_size is None:
+        return default
+    try:
+        width = int(terminal_size[0])
+        height = int(terminal_size[1])
+    except Exception:
+        return default
+    if width <= 0 or height <= 0:
+        return default
+    return width, height
 
 
 def session_window_target(session_name: str, window_name: str | None = None) -> str:

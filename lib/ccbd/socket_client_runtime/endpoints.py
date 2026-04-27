@@ -63,12 +63,18 @@ def _payload_start(
     agent_names: tuple[str, ...] = (),
     restore: bool = False,
     auto_permission: bool = False,
+    terminal_size: tuple[int, int] | None = None,
 ) -> dict:
-    return {
+    payload = {
         'agent_names': list(agent_names),
         'restore': bool(restore),
         'auto_permission': bool(auto_permission),
     }
+    if terminal_size is not None:
+        width, height = terminal_size
+        payload['terminal_width'] = int(width)
+        payload['terminal_height'] = int(height)
+    return payload
 
 
 def _payload_attach(

@@ -50,6 +50,13 @@ def attach_started_project_namespace(context: CliContext) -> ForegroundAttachSum
         tmux_session_name=tmux_session_name,
         env=env,
     )
+    if attached:
+        _best_effort_refresh_attached_client(
+            tmux_socket_path,
+            tmux_session_name,
+            client_pid=attach.pid,
+            env=env,
+        )
     returncode = attach.wait()
     if attached:
         return summary
@@ -157,6 +164,72 @@ def _tmux_list_client_pids(
         except ValueError:
             continue
     return tuple(client_pids)
+
+
+def _tmux_client_tty(
+    tmux_socket_path: str,
+    tmux_session_name: str,
+    *,
+    client_pid: int,
+    env: dict[str, str],
+) -> str | None:
+    probe = subprocess.run(
+        [
+            'tmux',
+            '-S',
+            tmux_socket_path,
+            'list-clients',
+            '-t',
+            tmux_session_name,
+            '-F',
+            '#{client_pid}\t#{client_tty}',
+        ],
+        check=False,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    if probe.returncode != 0:
+        return None
+    for line in (probe.stdout or '').splitlines():
+        pid_text, _sep, tty_text = line.partition('\t')
+        try:
+            listed_pid = int(pid_text.strip())
+        except ValueError:
+            continue
+        if listed_pid != client_pid:
+            continue
+        tty = tty_text.strip()
+        return tty or None
+    return None
+
+
+def _best_effort_refresh_attached_client(
+    tmux_socket_path: str,
+    tmux_session_name: str,
+    *,
+    client_pid: int,
+    env: dict[str, str],
+) -> None:
+    client_tty = _tmux_client_tty(
+        tmux_socket_path,
+        tmux_session_name,
+        client_pid=client_pid,
+        env=env,
+    )
+    if not client_tty:
+        return
+    try:
+        subprocess.run(
+            ['tmux', '-S', tmux_socket_path, 'refresh-client', '-t', client_tty],
+            check=False,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return
 
 
 def _client_for_started_project(context: CliContext):

@@ -297,10 +297,12 @@ Foreground command split:
   - ensures desired agents are mounted
   - plain `ccb` is the default interactive start path and implicitly includes `-a -r`
   - release-update advisory checks may read install-scoped cached metadata and schedule background refresh, but they must not join or block the project startup transaction
+  - when `ccb` is running in an interactive terminal and will foreground-attach after startup, it should treat that terminal viewport as authoritative startup input and pass the current terminal size into the startup transaction
   - in an interactive terminal, attaches the foreground to the project namespace after the start transaction succeeds
   - foreground attach must tolerate short tmux visibility lag after namespace create/reflow:
     - persisted namespace state may become visible slightly before tmux session/window targets are selectable
     - `ccb` must therefore perform a bounded readiness wait for the authoritative session and workspace window before declaring foreground attach failure
+  - once the tmux client is observed attached, `ccb` should issue a best-effort tmux client refresh so the first attached frame does not depend on a manual user redraw
   - in a non-interactive terminal, reports the start transaction without attaching to tmux
   - startup success and foreground attach success are distinct outcomes; foreground attach failure must not rewrite a successful startup report as failed
 - ask-family and other non-foreground daemon commands
@@ -329,6 +331,7 @@ Project namespace compatibility:
 - when stored namespace `layout_version` differs from the current code contract, startup must recreate the project namespace rather than trying to mutate a stale session in place
 - when the stored visible layout signature differs from the desired visible layout signature for the current foreground start, startup must recreate the project namespace rather than incrementally splitting an old pane tree
 - when startup creates a fresh project namespace session, the root pane must begin as a silent placeholder process rather than an interactive shell
+- when startup creates a fresh project namespace session for an interactive foreground `ccb`, the initial tmux session size should come from that foreground terminal-size hint rather than a detached fixed-size default
 - for a fresh namespace, the `cmd` pane bootstrap happens only after layout finalization and must replace that silent placeholder in place
 - project-namespace bootstrap must treat tmux server warmup and tmux server-policy persistence as separate steps:
   - `prepare_server` warms the server boundary only

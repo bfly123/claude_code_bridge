@@ -70,6 +70,8 @@ def test_start_foreground_attaches_to_namespace_tmux_session(tmp_path: Path, mon
         call = list(args)
         run_calls.append(call)
         if call[3:4] == ['list-clients']:
+            if call[-1] == '#{client_pid}\t#{client_tty}':
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout='4242\t/dev/pts/55\n')
             return subprocess.CompletedProcess(args=args, returncode=0, stdout='4242\n')
         return subprocess.CompletedProcess(args=args, returncode=0)
 
@@ -108,6 +110,17 @@ def test_start_foreground_attaches_to_namespace_tmux_session(tmp_path: Path, mon
             '-F',
             '#{client_pid}',
         ],
+        [
+            'tmux',
+            '-S',
+            str(context.paths.ccbd_tmux_socket_path),
+            'list-clients',
+            '-t',
+            context.paths.ccbd_tmux_session_name,
+            '-F',
+            '#{client_pid}\t#{client_tty}',
+        ],
+        ['tmux', '-S', str(context.paths.ccbd_tmux_socket_path), 'refresh-client', '-t', '/dev/pts/55'],
     ])
     assert ['tmux', '-S', str(context.paths.ccbd_tmux_socket_path), 'attach-session', '-t', context.paths.ccbd_tmux_session_name] in attach_calls
     assert attach_calls.count(
@@ -147,6 +160,8 @@ def test_start_foreground_waits_for_workspace_window_visibility_before_attach(tm
         call = list(args)
         run_calls.append(call)
         if call[3:4] == ['list-clients']:
+            if call[-1] == '#{client_pid}\t#{client_tty}':
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout='4343\t/dev/pts/88\n')
             return subprocess.CompletedProcess(args=args, returncode=0, stdout='4343\n')
         if call[3:4] == ['select-window']:
             select_attempts += 1
@@ -196,6 +211,17 @@ def test_start_foreground_waits_for_workspace_window_visibility_before_attach(tm
             '-F',
             '#{client_pid}',
         ],
+        [
+            'tmux',
+            '-S',
+            str(context.paths.ccbd_tmux_socket_path),
+            'list-clients',
+            '-t',
+            context.paths.ccbd_tmux_session_name,
+            '-F',
+            '#{client_pid}\t#{client_tty}',
+        ],
+        ['tmux', '-S', str(context.paths.ccbd_tmux_socket_path), 'refresh-client', '-t', '/dev/pts/88'],
     ])
     assert ['tmux', '-S', str(context.paths.ccbd_tmux_socket_path), 'attach-session', '-t', context.paths.ccbd_tmux_session_name] in attach_calls
     assert attach_calls.count(
@@ -307,6 +333,8 @@ def test_start_foreground_treats_post_attach_session_exit_as_success(tmp_path: P
         call = list(args)
         run_calls.append(call)
         if call[3:4] == ['list-clients']:
+            if call[-1] == '#{client_pid}\t#{client_tty}':
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout='6161\t/dev/pts/61\n')
             attach_process.returncode = 1
             return subprocess.CompletedProcess(args=args, returncode=0, stdout='6161\n')
         return subprocess.CompletedProcess(args=args, returncode=0)
@@ -345,6 +373,17 @@ def test_start_foreground_treats_post_attach_session_exit_as_success(tmp_path: P
             '-F',
             '#{client_pid}',
         ],
+        [
+            'tmux',
+            '-S',
+            str(context.paths.ccbd_tmux_socket_path),
+            'list-clients',
+            '-t',
+            context.paths.ccbd_tmux_session_name,
+            '-F',
+            '#{client_pid}\t#{client_tty}',
+        ],
+        ['tmux', '-S', str(context.paths.ccbd_tmux_socket_path), 'refresh-client', '-t', '/dev/pts/61'],
     ]
     assert attach_calls == [
         ['tmux', '-S', str(context.paths.ccbd_tmux_socket_path), 'attach-session', '-t', context.paths.ccbd_tmux_session_name]
@@ -376,3 +415,45 @@ def test_start_foreground_requires_attachable_namespace(tmp_path: Path, monkeypa
 
     with pytest.raises(ForegroundAttachError, match='not attachable after successful `ccb` start'):
         attach_started_project_namespace(context)
+
+
+def test_start_foreground_skips_refresh_when_client_tty_is_unavailable(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-attach-no-tty'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    context = _context(project_root)
+
+    class _FakeClient:
+        def __init__(self, socket_path):
+            self.socket_path = socket_path
+
+        def ping(self, target: str) -> dict[str, object]:
+            assert target == 'ccbd'
+            return {
+                'namespace_tmux_socket_path': str(context.paths.ccbd_tmux_socket_path),
+                'namespace_tmux_session_name': context.paths.ccbd_tmux_session_name,
+                'namespace_workspace_window_name': context.paths.ccbd_tmux_workspace_window_name,
+                'namespace_ui_attachable': True,
+            }
+
+    run_calls: list[list[str]] = []
+    attach_process = _FakeAttachProcess(pid=7171, returncode=0)
+
+    def _run(args, **kwargs):
+        call = list(args)
+        run_calls.append(call)
+        if call[3:4] == ['list-clients']:
+            if call[-1] == '#{client_pid}\t#{client_tty}':
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout='7171\t\n')
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout='7171\n')
+        return subprocess.CompletedProcess(args=args, returncode=0)
+
+    monkeypatch.setattr('cli.services.start_foreground.shutil.which', lambda name: f'/usr/bin/{name}')
+    monkeypatch.setattr('cli.services.start_foreground.CcbdClient', _FakeClient)
+    monkeypatch.setattr('cli.services.start_foreground.subprocess.run', _run)
+    monkeypatch.setattr('cli.services.start_foreground.subprocess.Popen', lambda *args, **kwargs: attach_process)
+
+    attach_started_project_namespace(context)
+
+    assert not any(call[3:4] == ['refresh-client'] for call in run_calls)

@@ -17,6 +17,7 @@ def ensure_project_namespace(
     force_recreate: bool = False,
     recreate_reason: str | None = None,
     session_probe_timeout_s: float | None = None,
+    terminal_size: tuple[int, int] | None = None,
 ) -> object:
     controller._layout.ccbd_dir.mkdir(parents=True, exist_ok=True)
     context = load_namespace_context(
@@ -41,6 +42,7 @@ def ensure_project_namespace(
         controller,
         context,
         epoch=context.current.namespace_epoch + 1 if context.current is not None else 1,
+        terminal_size=terminal_size,
     )
     return build_created_namespace(controller, context)
 

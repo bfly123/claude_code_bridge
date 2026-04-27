@@ -194,3 +194,36 @@ def test_wait_for_root_pane_raises_transient_unavailable_for_fast_probe(monkeypa
 
     with pytest.raises(TmuxTransientServerUnavailable):
         wait_for_root_pane(backend, target_window='ccb-proj:workspace', timeout_s=0.0)
+
+
+def test_create_session_uses_terminal_size_hint_when_provided(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('CCB_TMUX_OBJECT_READY_POLL_INTERVAL_S', '0')
+    backend = _FlakyBackend()
+
+    create_session(
+        backend,
+        session_name='ccb-proj',
+        project_root=tmp_path,
+        window_name='cmd',
+        terminal_size=(233, 61),
+    )
+
+    assert backend.calls == [
+        (
+            'new-session',
+            '-d',
+            '-x',
+            '233',
+            '-y',
+            '61',
+            '-s',
+            'ccb-proj',
+            '-n',
+            'cmd',
+            '-c',
+            str(tmp_path),
+            'sh',
+            '-lc',
+            'while :; do sleep 3600; done',
+        )
+    ]

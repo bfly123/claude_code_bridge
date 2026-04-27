@@ -82,6 +82,37 @@ def test_start_agents_calls_ccbd_start_with_cli_flags(tmp_path: Path, monkeypatc
     assert summary.socket_path == str(context.paths.ccbd_socket_path)
 
 
+def test_start_agents_passes_terminal_size_when_provided(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-start-terminal-size'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    command = ParsedStartCommand(project=None, agent_names=('demo',), restore=True, auto_permission=True)
+    context = CliContextBuilder().build(command, cwd=project_root, bootstrap_if_missing=False)
+
+    seen: dict[str, object] = {}
+
+    class _FakeClient:
+        def start(self, **kwargs):
+            seen.update(kwargs)
+            return {
+                'project_root': str(project_root),
+                'project_id': context.project.project_id,
+                'started': ['demo'],
+                'socket_path': str(context.paths.ccbd_socket_path),
+                'cleanup_summaries': [],
+            }
+
+    monkeypatch.setattr(
+        'cli.services.start.ensure_daemon_started',
+        lambda context: SimpleNamespace(client=_FakeClient(), started=True),
+    )
+
+    start_agents(context, command, terminal_size=(233, 61))
+
+    assert seen['terminal_size'] == (233, 61)
+
+
 def test_start_agents_parses_cleanup_summaries_from_ccbd_payload(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / 'repo-start-cleanup'
     (project_root / '.ccb').mkdir(parents=True, exist_ok=True)

@@ -11,6 +11,7 @@ def ensure_project_namespace(
     reflow_workspace: bool,
     recreate_reason: str | None,
     background_maintenance: bool = False,
+    terminal_size: tuple[int, int] | None = None,
 ):
     if reflow_workspace:
         return _reflow_project_workspace(
@@ -25,6 +26,7 @@ def ensure_project_namespace(
         recreate_namespace=recreate_namespace,
         recreate_reason=recreate_reason,
         background_maintenance=background_maintenance,
+        terminal_size=terminal_size,
     ):
         return ensure_fn()
     kwargs = _ensure_kwargs(
@@ -32,6 +34,7 @@ def ensure_project_namespace(
         recreate_namespace=recreate_namespace,
         recreate_reason=recreate_reason,
         background_maintenance=background_maintenance,
+        terminal_size=terminal_size,
     )
     try:
         signature = inspect.signature(ensure_fn)
@@ -53,12 +56,14 @@ def _namespace_kwargs_requested(
     recreate_namespace: bool,
     recreate_reason: str | None,
     background_maintenance: bool,
+    terminal_size: tuple[int, int] | None,
 ) -> bool:
     return bool(
         recreate_namespace
         or str(recreate_reason or '').strip()
         or str(layout_signature or '').strip()
         or background_maintenance
+        or terminal_size is not None
     )
 
 
@@ -104,12 +109,14 @@ def _ensure_kwargs(
     recreate_namespace: bool,
     recreate_reason: str | None,
     background_maintenance: bool,
+    terminal_size: tuple[int, int] | None,
 ) -> dict[str, object]:
     return {
         'layout_signature': layout_signature,
         'force_recreate': recreate_namespace,
         'recreate_reason': recreate_reason,
         'session_probe_timeout_s': 0.0 if background_maintenance else None,
+        'terminal_size': terminal_size,
     }
 
 

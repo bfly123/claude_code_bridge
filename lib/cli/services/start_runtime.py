@@ -19,6 +19,7 @@ def start_agents(
     context,
     command,
     *,
+    terminal_size: tuple[int, int] | None = None,
     ensure_daemon_started_fn,
     startup_report_store_cls,
     cleanup_summary_cls,
@@ -28,11 +29,14 @@ def start_agents(
     pre_start_result = before_client_start_fn(context) if before_client_start_fn is not None else None
     handle = ensure_daemon_started_fn(context)
     assert handle.client is not None
-    payload = handle.client.start(
-        agent_names=command.agent_names,
-        restore=command.restore,
-        auto_permission=command.auto_permission,
-    )
+    start_kwargs = {
+        'agent_names': command.agent_names,
+        'restore': command.restore,
+        'auto_permission': command.auto_permission,
+    }
+    if terminal_size is not None:
+        start_kwargs['terminal_size'] = terminal_size
+    payload = handle.client.start(**start_kwargs)
     _record_daemon_started_flag(
         context,
         daemon_started=handle.started,

@@ -13,6 +13,7 @@ def start_supervisor(
     agent_names: tuple[str, ...],
     restore: bool,
     auto_permission: bool,
+    terminal_size: tuple[int, int] | None,
     cleanup_tmux_orphans: bool,
     interactive_tmux_layout: bool,
     recreate_namespace: bool,
@@ -35,6 +36,7 @@ def start_supervisor(
                 reflow_workspace=reflow_workspace,
                 recreate_reason=recreate_reason,
                 background_maintenance=background_maintenance,
+                terminal_size=terminal_size,
             )
             if supervisor._project_namespace is not None
             else None
