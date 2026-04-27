@@ -116,6 +116,22 @@ Contract:
 - `key/url` is user-facing sugar only. The loader must compile it to the existing
   provider-profile API env authority for that provider and force
   `provider_profile.inherit_api = false`.
+- For Codex, compiling the `url` shortcut must normalize a bare origin such as
+  `https://example.test` to the OpenAI-compatible API root
+  `https://example.test/v1`.
+- Explicit `key/url` authority must also suppress inherited provider state that
+  would silently redefine that API authority.
+  For all shortcut-backed providers, compiling `key/url` must also disable
+  inherited auth projection so managed startup does not retain a second
+  credential authority beside the explicit agent-local API route.
+  For Codex, `key/url` disables inherited global `config.toml` routing
+  projection, replaces it with an agent-local managed `config.toml`
+  `model_provider` / `model_providers.<id>` authority derived from that
+  explicit API route. That managed Codex route must use the standard custom
+  provider shape with `requires_openai_auth = false`, and explicit base-url env
+  exports must be suppressed so the managed `config.toml` remains the single
+  route authority. An explicit `key` also disables inherited global `auth.json`
+  credential projection.
 - When `key` or `url` is present, provider API env must not also be declared in:
   - `agents.<name>.env`
   - `agents.<name>.provider_profile.env`

@@ -7,6 +7,7 @@ from typing import Callable
 
 from provider_core.caller_env import caller_context_env
 from provider_backends.codex.runtime_artifacts import codex_runtime_artifact_layout
+from provider_profiles.codex_home_config import codex_api_authority
 
 
 def build_start_cmd(
@@ -27,6 +28,7 @@ def build_start_cmd(
         command,
         spec,
         runtime_dir,
+        profile=profile,
         provider_start_parts_fn=provider_start_parts_fn,
         load_resume_session_id_fn=load_resume_session_id_fn,
     )
@@ -53,7 +55,7 @@ def build_codex_shell_prefix(*, profile, provider_api_env_keys_fn: Callable[[str
     return [f'unset {key}' for key in sorted(provider_api_env_keys_fn('codex'))]
 
 
-def _codex_args(command, spec, runtime_dir: Path, *, provider_start_parts_fn, load_resume_session_id_fn) -> list[str]:
+def _codex_args(command, spec, runtime_dir: Path, *, profile, provider_start_parts_fn, load_resume_session_id_fn) -> list[str]:
     codex_args = provider_start_parts_fn('codex')
     codex_args.extend(['-c', 'disable_paste_burst=true'])
     if command.auto_permission:
@@ -69,7 +71,7 @@ def _codex_args(command, spec, runtime_dir: Path, *, provider_start_parts_fn, lo
         )
     codex_args.extend(spec.startup_args)
     if command.restore:
-        session_id = load_resume_session_id_fn(spec, runtime_dir)
+        session_id = load_resume_session_id_fn(spec, runtime_dir, profile)
         if session_id:
             codex_args.extend(['resume', session_id])
     return codex_args
@@ -82,6 +84,9 @@ def _env_map(runtime_dir: Path, launch_session_id: str, *, spec, profile, codex_
     if profile is not None:
         explicit_env.update(profile.env)
     explicit_env.update(spec.env)
+    if codex_api_authority(profile) is not None:
+        explicit_env.pop('OPENAI_BASE_URL', None)
+        explicit_env.pop('OPENAI_API_BASE', None)
     return {
         **inherited_api_env,
         **explicit_env,

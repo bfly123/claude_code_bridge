@@ -6,6 +6,7 @@ from pathlib import Path
 from agents.models import AgentSpec, PermissionMode, ProviderProfileSpec, QueuePolicy, RestoreMode, RuntimeMode, WorkspaceMode
 from provider_backends.claude.launcher_runtime.home import materialize_claude_home_config
 from provider_backends.gemini.launcher_runtime.home import materialize_gemini_home_config
+from provider_profiles.codex_home_config import codex_provider_authority_fingerprint
 from provider_profiles import materialize_provider_profile
 from storage.paths import PathLayout
 
@@ -59,6 +60,72 @@ def test_materialize_codex_profile_copies_inherited_assets(tmp_path: Path, monke
     assert (runtime_home / 'skills' / 'demo.md').is_file()
     assert (runtime_home / 'commands' / 'demo.md').is_file()
     assert (runtime_home / 'sessions').is_dir()
+
+
+def test_materialize_codex_profile_writes_agent_local_provider_config_for_explicit_api(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    source_home = tmp_path / 'system-codex-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    (source_home / 'config.toml').write_text(
+        '\n'.join(
+            [
+                'model_provider = "stale"',
+                'model = "gpt-5.4-openai-compact"',
+                'model_reasoning_effort = "xhigh"',
+                'disable_response_storage = true',
+                '',
+                '[projects."/tmp/demo-project"]',
+                'trust_level = "trusted"',
+                '',
+                '[model_providers.stale]',
+                'name = "stale"',
+                'base_url = "https://stale.example.test/v1"',
+                'wire_api = "responses"',
+                'requires_openai_auth = true',
+                '',
+            ]
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+
+    profile = materialize_provider_profile(
+        layout=PathLayout(project_root),
+        spec=_spec(
+            'agent2',
+            provider_profile=ProviderProfileSpec(
+                mode='isolated',
+                env={
+                    'OPENAI_API_KEY': 'profile-key',
+                    'OPENAI_BASE_URL': 'https://api.rootflowai.com',
+                },
+                inherit_api=False,
+                inherit_auth=False,
+                inherit_config=False,
+            ),
+        ),
+        workspace_path=project_root,
+    )
+
+    runtime_home = Path(profile.runtime_home or '')
+    config_text = (runtime_home / 'config.toml').read_text(encoding='utf-8')
+    assert 'model_provider = "custom"' in config_text
+    assert 'model = "gpt-5.4-openai-compact"' in config_text
+    assert 'model_reasoning_effort = "xhigh"' in config_text
+    assert 'disable_response_storage = true' in config_text
+    assert '[projects."/tmp/demo-project"]' in config_text
+    assert '[model_providers.custom]' in config_text
+    assert 'base_url = "https://api.rootflowai.com"' in config_text
+    assert 'wire_api = "responses"' in config_text
+    assert 'requires_openai_auth = false' in config_text
+    assert 'https://stale.example.test/v1' not in config_text
+    assert 'env_key' not in config_text
+    assert codex_provider_authority_fingerprint(profile)
+    auth_payload = json.loads((runtime_home / 'auth.json').read_text(encoding='utf-8'))
+    assert auth_payload == {'OPENAI_API_KEY': 'profile-key'}
 
 
 def test_materialize_claude_profile_creates_runtime_home(tmp_path: Path) -> None:

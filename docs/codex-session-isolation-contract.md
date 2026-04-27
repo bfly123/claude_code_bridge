@@ -61,6 +61,16 @@ By default, the managed Codex session root is derived from that home:
 
 - `.ccb/agents/<agent>/provider-state/codex/home/sessions/`
 
+The managed `sessions/` tree is a first-class namespace, not disposable residue:
+
+- Codex may automatically continue the most recent conversation it finds inside
+  the active managed `sessions/` tree even without an explicit `resume` command
+- therefore `ccb` must treat the active `sessions/` tree as route-bound
+  authority and not merely as log storage
+- when route authority becomes incompatible, `ccb` must rotate the current
+  `sessions/` tree out of the active namespace before starting a fresh
+  conversation
+
 If the effective Codex home is explicitly overridden by a provider profile, the effective session root must still be:
 
 - `<codex_home>/sessions/`
@@ -73,6 +83,10 @@ The managed session file must persist:
 - `codex_session_root`
 - `codex_session_id` once bound
 - `codex_session_path` once bound
+- `codex_provider_authority_fingerprint` for the launch-time route authority
+- `codex_session_authority_fingerprint` once a concrete bound session is known under an explicit route
+- home-level session-namespace authority under the managed Codex home so startup
+  can detect whether the active `sessions/` tree is compatible before launch
 
 These fields are authority for managed Codex runtime recovery.
 
@@ -94,8 +108,29 @@ When `ccb` starts a managed Codex agent:
 - it must ensure `CODEX_SESSION_ROOT == CODEX_HOME/sessions`
 - it must create the managed home and session root before launching Codex
 - it must materialize required Codex config and credential projections into the managed home without treating them as session identity
-- it must refresh inheritable Codex config, auth, skills, and commands projections into the managed home on each managed launch so source-home updates become visible after restart
+- it must refresh only inheritable Codex config, auth, skills, and commands projections into the managed home on each managed launch so source-home updates become visible after restart
 - when API inheritance is enabled, it must pass the current inheritable Codex API environment into the managed Codex process at launch time rather than relying on stale one-time projection state
+- when explicit agent API authority is configured, the managed home must not
+  project global Codex config that can redefine provider routing; instead the
+  managed `config.toml` must materialize an agent-local `model_provider` /
+  `model_providers.<id>` authority derived from the explicit API route so Codex
+  uses that route without consulting caller-global login state
+- that explicit managed route must use Codex's standard custom-provider shape
+  with `requires_openai_auth = false`
+- when such a managed explicit route is present, startup must not also export
+  `OPENAI_BASE_URL` or `OPENAI_API_BASE` into the managed Codex process, so
+  route authority stays singular
+- when an explicit Codex API key is configured, the managed home must not keep a
+  copied global `auth.json` that could shadow that explicit key
+- when an explicit Codex API key is configured, startup must materialize an
+  agent-local `auth.json` derived from that key inside the managed `CODEX_HOME`
+  so Codex request auth and managed route authority stay aligned
+- startup must validate the active managed `sessions/` namespace against the
+  current provider-route authority before launching Codex
+- when that namespace is missing authority metadata or records a different route
+  authority, startup must archive/rotate the current `sessions/` tree and clear
+  stale bound-session fields before launch so Codex cannot auto-continue an
+  incompatible conversation from the same home
 - it must write the effective `codex_home` and `codex_session_root` into the agent session file
 - it must create the canonical runtime `completion/` directory and `bridge.log` before the managed launch is considered bootstrap-ready
 - it must not rely on global `~/.codex/sessions` as the default managed session namespace
@@ -146,6 +181,21 @@ Runtime pane reuse is a separate proof obligation from session-file binding:
 - if the live process identity is missing, unknown, or proves a different/non-resume Codex command, startup must reject that pane as reusable evidence and relaunch through the normal managed start command
 - the persisted `start_cmd` or `codex_start_cmd` is desired launch authority, not proof that the current pane process was launched with that command
 - relaunch after identity mismatch must preserve the agent-scoped `codex_home`, derived `codex_session_root`, and bound `codex_session_id` so ordinary `ccb` restores history while `ccb -n` remains the explicit fresh-start path
+- when the current explicit agent-local Codex provider authority differs from
+  the provider authority recorded for the last managed session, startup must
+  skip `resume` and start a fresh Codex conversation inside the same managed
+  home rather than reattaching a session created under a different route
+- for explicit managed routes, launch-intent fingerprint alone is not sufficient
+  proof for `resume`
+- a bound Codex conversation may be resumed only when
+  `codex_session_authority_fingerprint` matches the current explicit route
+- if a legacy session file has only launch fingerprint but no bound-session
+  fingerprint, startup must treat that binding as untrusted and force one fresh
+  conversation so the binding can be re-established cleanly
+- forcing a fresh conversation under the same managed home also requires a
+  compatible active `sessions/` namespace; skipping explicit `resume` alone is
+  not sufficient because Codex may auto-continue the most recent conversation in
+  that namespace
 
 Legacy agent-only reuse exception:
 

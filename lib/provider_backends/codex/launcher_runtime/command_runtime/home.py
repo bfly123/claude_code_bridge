@@ -1,11 +1,21 @@
 from __future__ import annotations
 
-import importlib
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
 import re
 import shutil
+import time
+
+from provider_backends.codex.session_authority import (
+    current_provider_authority_fingerprint,
+    stored_provider_authority_fingerprint,
+    stored_session_authority_fingerprint,
+)
+from provider_backends.codex.start_cmd import strip_resume_start_cmd
+from provider_sessions.files import safe_write_session
+from provider_profiles.codex_home_config import materialize_codex_home_config
 
 from ..session_paths import read_session_payload, session_file_for_runtime_dir, state_dir_for_runtime_dir
 
@@ -13,6 +23,7 @@ from ..session_paths import read_session_payload, session_file_for_runtime_dir, 
 _ENV_ASSIGNMENT_RE = re.compile(
     r"(?:(?:^|[;\s])export\s+|(?:^|[;\s]))(?P<name>[A-Z0-9_]+)=(?P<value>'[^']*'|\"[^\"]*\"|[^;\s]+)"
 )
+_SESSION_NAMESPACE_MARKER = '.ccb-session-namespace.json'
 
 
 @dataclass(frozen=True)
@@ -44,7 +55,8 @@ def prepare_codex_home_overrides(runtime_dir: Path, profile) -> dict[str, str]:
     layout = resolve_codex_home_layout(runtime_dir, profile)
     layout.codex_home.mkdir(parents=True, exist_ok=True)
     layout.session_root.mkdir(parents=True, exist_ok=True)
-    _prepare_managed_home(_system_codex_home(), layout.codex_home)
+    _prepare_managed_home(_system_codex_home(), layout.codex_home, profile=profile)
+    _ensure_session_namespace_authority(runtime_dir, layout.codex_home, layout.session_root, profile=profile)
 
     return {
         'CODEX_HOME': str(layout.codex_home),
@@ -193,78 +205,125 @@ def _system_codex_home() -> Path:
     return Path(os.environ.get('CODEX_HOME') or (Path.home() / '.codex')).expanduser()
 
 
-def _prepare_managed_home(source_home: Path, target_home: Path) -> None:
-    target_home.mkdir(parents=True, exist_ok=True)
-    (target_home / 'sessions').mkdir(parents=True, exist_ok=True)
-    target_config = target_home / 'config.toml'
-    if _source_config_valid(source_home / 'config.toml'):
-        _sync_file(source_home / 'config.toml', target_config)
-    elif not target_config.exists():
-        target_config.write_text('# ccb agent-local codex config\n', encoding='utf-8')
-    _sync_auth_file(source_home / 'auth.json', target_home / 'auth.json')
-    _sync_tree(source_home / 'skills', target_home / 'skills')
-    _sync_tree(source_home / 'commands', target_home / 'commands')
+def _prepare_managed_home(source_home: Path, target_home: Path, *, profile) -> None:
+    materialize_codex_home_config(target_home, profile=profile, source_home=source_home)
 
 
-def _import_optional_toml_reader():
-    for module_name in ('tomllib', 'tomli', 'toml'):
-        try:
-            return importlib.import_module(module_name)
-        except ModuleNotFoundError:
-            continue
-    return None
+def _ensure_session_namespace_authority(runtime_dir: Path, codex_home: Path, session_root: Path, *, profile) -> None:
+    current_fingerprint = current_provider_authority_fingerprint(profile)
+    marker_path = codex_home / _SESSION_NAMESPACE_MARKER
+    stored_marker = _read_session_namespace_marker(marker_path)
+    session_file = session_file_for_runtime_dir(runtime_dir)
+    session_data = read_session_payload(session_file) if session_file is not None and session_file.is_file() else {}
+    if _session_namespace_requires_reset(
+        stored_marker=stored_marker,
+        current_fingerprint=current_fingerprint,
+        session_data=session_data,
+    ):
+        _archive_session_root(codex_home, session_root, label=stored_marker or stored_provider_authority_fingerprint(session_data))
+        _scrub_project_session_binding(session_file)
+    _write_session_namespace_marker(marker_path, current_fingerprint)
 
 
-def _source_config_valid(config_path: Path) -> bool:
+def _read_session_namespace_marker(marker_path: Path) -> str | None:
     try:
-        if not config_path.is_file():
-            return True
-        reader = _import_optional_toml_reader()
-        if reader is None:
-            # Old/system Python may lack a TOML parser. Validation here is only a best-effort
-            # safety check; absence of the validator must not block daemon startup or config sync.
-            return True
-        if getattr(reader, '__name__', '') == 'toml':
-            reader.loads(config_path.read_text(encoding='utf-8'))
-        elif hasattr(reader, 'load'):
-            with config_path.open('rb') as handle:
-                reader.load(handle)
-        elif hasattr(reader, 'loads'):  # pragma: no cover - defensive fallback
-            reader.loads(config_path.read_text(encoding='utf-8'))
-        else:  # pragma: no cover - unsupported parser shim
-            return True
+        data = json.loads(marker_path.read_text(encoding='utf-8'))
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    return str(data.get('provider_authority_fingerprint') or '').strip()
+
+
+def _session_namespace_requires_reset(
+    *,
+    stored_marker: str | None,
+    current_fingerprint: str,
+    session_data: dict[str, object],
+) -> bool:
+    stored_session_fingerprint = stored_provider_authority_fingerprint(session_data)
+    stored_binding_fingerprint = stored_session_authority_fingerprint(session_data)
+    if stored_marker is not None:
+        return stored_marker != current_fingerprint
+    if current_fingerprint:
         return True
-    except Exception:
-        return False
+    return bool(stored_session_fingerprint or stored_binding_fingerprint)
 
 
-def _sync_auth_file(source: Path, target: Path) -> None:
-    if not source.is_file():
+def _archive_session_root(codex_home: Path, session_root: Path, *, label: str) -> None:
+    normalized_root = Path(session_root).expanduser()
+    if not normalized_root.exists():
+        normalized_root.mkdir(parents=True, exist_ok=True)
         return
     try:
-        shutil.copy2(source, target)
+        has_entries = next(normalized_root.iterdir(), None) is not None
     except Exception:
-        pass
-
-
-def _sync_file(source: Path, target: Path) -> None:
-    if not source.is_file():
+        has_entries = False
+    if not has_entries:
+        normalized_root.mkdir(parents=True, exist_ok=True)
         return
-    target.parent.mkdir(parents=True, exist_ok=True)
+    archive_parent = codex_home / 'archived-sessions'
+    archive_parent.mkdir(parents=True, exist_ok=True)
+    archive_name = f"{time.strftime('%Y%m%d-%H%M%S')}-{_archive_label(label)}"
+    archive_path = archive_parent / archive_name
     try:
-        shutil.copy2(source, target)
+        shutil.move(str(normalized_root), str(archive_path))
     except Exception:
         pass
+    normalized_root.mkdir(parents=True, exist_ok=True)
 
 
-def _sync_tree(source: Path, target: Path) -> None:
-    if not source.is_dir():
+def _archive_label(label: str) -> str:
+    text = str(label or '').strip().lower()
+    if not text:
+        return 'global'
+    return re.sub(r'[^a-z0-9._-]+', '-', text)[:32] or 'global'
+
+
+def _scrub_project_session_binding(session_file: Path | None) -> None:
+    if session_file is None or not session_file.is_file():
         return
-    target.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        shutil.copytree(source, target, dirs_exist_ok=True)
-    except Exception:
-        pass
+    data = read_session_payload(session_file)
+    if not isinstance(data, dict):
+        return
+    old_id = str(data.get('codex_session_id') or '').strip()
+    old_path = str(data.get('codex_session_path') or '').strip()
+    changed = False
+    if old_id and data.get('old_codex_session_id') != old_id:
+        data['old_codex_session_id'] = old_id
+        changed = True
+    if old_path and data.get('old_codex_session_path') != old_path:
+        data['old_codex_session_path'] = old_path
+        changed = True
+    if old_id or old_path:
+        data['old_updated_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
+        changed = True
+    for key in ('codex_session_id', 'codex_session_path', 'codex_session_authority_fingerprint'):
+        if key in data:
+            data.pop(key, None)
+            changed = True
+    for key in ('start_cmd', 'codex_start_cmd'):
+        stripped = strip_resume_start_cmd(data.get(key))
+        current = str(data.get(key) or '').strip()
+        if stripped and stripped != current:
+            data[key] = stripped
+            changed = True
+    if not changed:
+        return
+    ok, error = safe_write_session(session_file, json.dumps(data, ensure_ascii=False, indent=2))
+    if not ok:
+        raise RuntimeError(error or f'failed to rewrite session file: {session_file}')
+
+
+def _write_session_namespace_marker(marker_path: Path, fingerprint: str) -> None:
+    payload = {
+        'provider': 'codex',
+        'provider_authority_fingerprint': str(fingerprint or '').strip(),
+        'updated_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+        'version': 1,
+    }
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    marker_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
 
 
 __all__ = ['CodexHomeLayout', 'prepare_codex_home_overrides', 'resolve_codex_home_layout']

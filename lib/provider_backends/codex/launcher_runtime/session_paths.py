@@ -4,16 +4,19 @@ import json
 from pathlib import Path
 
 from provider_core.pathing import session_filename_for_agent
+from provider_backends.codex.session_authority import resume_authority_matches
 
 from ..start_cmd import extract_resume_session_id
 
 
-def load_resume_session_id(spec, runtime_dir: Path) -> str | None:
+def load_resume_session_id(spec, runtime_dir: Path, profile=None) -> str | None:
     session_path = preferred_session_path(spec, runtime_dir)
     if session_path is None:
         return None
     data = read_session_payload(session_path)
     if data is None:
+        return None
+    if not _provider_authority_matches(data, profile=profile):
         return None
     return payload_resume_session_id(data)
 
@@ -85,6 +88,10 @@ def payload_resume_session_id(data: dict) -> str | None:
     if not start_cmd:
         return None
     return extract_resume_session_id(start_cmd)
+
+
+def _provider_authority_matches(data: dict, *, profile) -> bool:
+    return resume_authority_matches(data, profile=profile)
 
 
 __all__ = ['load_resume_session_id', 'session_file_for_runtime_dir', 'state_dir_for_runtime_dir']

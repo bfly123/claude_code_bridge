@@ -33,7 +33,7 @@ def _migrate_legacy_codex_layout(data: dict[str, object]) -> bool:
     if session_root is None:
         return False
     codex_home = codex_home_path(data)
-    target_home = _home_for_session_root(session_root)
+    target_home = _target_home_for_layout(codex_home=codex_home, session_root=session_root)
     target_root = target_home / "sessions"
     _migrate_root_tree(session_root, target_root)
     updated = False
@@ -50,6 +50,14 @@ def _migrate_legacy_codex_layout(data: dict[str, object]) -> bool:
             data["codex_session_path"] = str(migrated_session_path)
             updated = True
     return updated
+
+
+def _target_home_for_layout(*, codex_home: Path | None, session_root: Path) -> Path:
+    normalized_home = _normalize_path(codex_home)
+    normalized_root = _normalize_path(session_root)
+    if normalized_home is not None and normalized_root is not None and normalized_root == normalized_home / "sessions":
+        return normalized_home
+    return _home_for_session_root(session_root)
 
 
 def _home_for_session_root(session_root: Path) -> Path:

@@ -171,6 +171,16 @@ Managed Codex session authority rules:
 - absent an explicit validated provider-profile runtime home, the default managed Codex home is `.ccb/agents/<agent>/provider-state/codex/home/`
 - the effective managed Codex session root is derived from that home as `<codex_home>/sessions`
 - startup must set and persist both `CODEX_HOME` and `CODEX_SESSION_ROOT`; `CODEX_SESSION_ROOT` alone is not sufficient managed-provider authority
+- startup must also persist Codex provider-route authority for managed explicit
+  routes, and a bound Codex session under such a route is reusable only after
+  that concrete binding is stamped with matching bound-session authority
+- startup must treat the active managed Codex `sessions/` directory as
+  reusable authority, not mere residue, because Codex may auto-continue the
+  newest conversation found there even without explicit `resume`
+- when the managed Codex session namespace authority is missing or incompatible
+  with the current route authority, startup must rotate that `sessions/`
+  directory out of the active namespace before launch and scrub stale bound
+  session fields from project authority
 - provider-base workspace files such as `.codex-session` remain unscoped evidence only unless no explicit configured-agent binding exists
 - startup and restore must persist and reuse the effective managed `codex_home` and derived `codex_session_root` when available
 - restore must not scan or adopt global `~/.codex/sessions` merely because a manual Codex conversation shares the same `work_dir`
@@ -335,6 +345,8 @@ Project namespace compatibility:
   - same current authoritative workspace `window_id`
 - for managed Codex agents with a bound `codex_session_id`, exact namespace membership is still not sufficient:
   - startup must also prove that the live pane process is running the bound `resume <codex_session_id>` conversation
+  - for explicit managed Codex routes, the persisted bound-session authority
+    must also match the current route authority before `resume` is allowed
   - if that proof is unavailable or negative, startup must reject pane reuse and relaunch through the managed start command
 - agent-only legacy layouts with `cmd` disabled may reuse instance-scoped provider session evidence when that session file does not explicitly declare a conflicting tmux socket
 - that legacy reuse exception is narrow:

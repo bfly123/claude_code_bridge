@@ -151,23 +151,38 @@ def _apply_agent_api_shortcut(
         env_map=provider_profile.env,
         api_env_keys=api_env_keys,
     )
-    if raw_provider_profile is not None:
-        raw_profile = expect_mapping(raw_provider_profile, field_name=f'agents.{agent_name}.provider_profile')
-        if 'inherit_api' in raw_profile and provider_profile.inherit_api:
-            raise ConfigValidationError(
-                f'agents.{agent_name}.key/url cannot be combined with agents.{agent_name}.provider_profile.inherit_api = true'
-            )
+    raw_profile = (
+        expect_mapping(raw_provider_profile, field_name=f'agents.{agent_name}.provider_profile')
+        if raw_provider_profile is not None
+        else {}
+    )
+    if 'inherit_api' in raw_profile and provider_profile.inherit_api:
+        raise ConfigValidationError(
+            f'agents.{agent_name}.key/url cannot be combined with agents.{agent_name}.provider_profile.inherit_api = true'
+        )
+    if provider == 'codex' and 'inherit_config' in raw_profile and provider_profile.inherit_config:
+        raise ConfigValidationError(
+            f'agents.{agent_name}.key/url cannot be combined with agents.{agent_name}.provider_profile.inherit_config = true for codex'
+        )
+    if (api.key or api.url) and 'inherit_auth' in raw_profile and provider_profile.inherit_auth:
+        raise ConfigValidationError(
+            f'agents.{agent_name}.key/url cannot be combined with agents.{agent_name}.provider_profile.inherit_auth = true'
+        )
     try:
         api_env = provider_api_shortcut_env(provider, key=api.key, url=api.url)
     except ValueError as exc:
         raise ConfigValidationError(f'agents.{agent_name}.key/url: {exc}') from exc
+    inherit_auth = False
+    inherit_config = provider_profile.inherit_config
+    if provider == 'codex':
+        inherit_config = False
     return ProviderProfileSpec(
         mode=provider_profile.mode,
         home=provider_profile.home,
         env={**provider_profile.env, **api_env},
         inherit_api=False,
-        inherit_auth=provider_profile.inherit_auth,
-        inherit_config=provider_profile.inherit_config,
+        inherit_auth=inherit_auth,
+        inherit_config=inherit_config,
         inherit_skills=provider_profile.inherit_skills,
         inherit_commands=provider_profile.inherit_commands,
     )

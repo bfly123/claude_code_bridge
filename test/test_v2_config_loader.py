@@ -270,7 +270,7 @@ OPENAI_API_KEY = "sk-test"
 
 
 @pytest.mark.parametrize(
-    ('provider', 'api_block', 'expected_key', 'expected_url', 'expected_env'),
+    ('provider', 'api_block', 'expected_key', 'expected_url', 'expected_env', 'expected_inherit_config'),
     [
         (
             'codex',
@@ -281,6 +281,7 @@ OPENAI_API_KEY = "sk-test"
                 'OPENAI_API_KEY': 'sk-test',
                 'OPENAI_BASE_URL': 'https://openai.example.test/v1',
             },
+            False,
         ),
         (
             'claude',
@@ -291,6 +292,7 @@ OPENAI_API_KEY = "sk-test"
                 'ANTHROPIC_API_KEY': 'claude-key',
                 'ANTHROPIC_BASE_URL': 'https://claude.example.test',
             },
+            True,
         ),
         (
             'gemini',
@@ -301,6 +303,7 @@ OPENAI_API_KEY = "sk-test"
                 'GEMINI_API_KEY': 'gemini-key',
                 'GOOGLE_API_BASE': 'https://gemini.example.test',
             },
+            True,
         ),
     ],
 )
@@ -311,6 +314,7 @@ def test_load_project_config_supports_toml_agent_api_shortcut(
     expected_key: str,
     expected_url: str,
     expected_env: dict[str, str],
+    expected_inherit_config: bool,
 ) -> None:
     project_root = tmp_path / f'repo-{provider}-api'
     config_path = project_root / '.ccb' / 'ccb.config'
@@ -337,6 +341,8 @@ permission = "manual"
     assert spec.api.key == expected_key
     assert spec.api.url == expected_url
     assert spec.provider_profile.inherit_api is False
+    assert spec.provider_profile.inherit_auth is False
+    assert spec.provider_profile.inherit_config is expected_inherit_config
     assert spec.provider_profile.env == expected_env
 
 
@@ -373,6 +379,37 @@ url = "https://legacy.example.test/v1"
         'OPENAI_API_KEY': 'sk-legacy',
         'OPENAI_BASE_URL': 'https://legacy.example.test/v1',
     }
+    assert spec.provider_profile.inherit_config is False
+    assert spec.provider_profile.inherit_auth is False
+
+
+def test_load_project_config_codex_api_shortcut_disables_conflicting_global_projection(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-codex-shortcut-flags'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        """version = 2
+default_agents = ["agent1"]
+layout = "cmd; agent1"
+cmd_enabled = true
+
+[agents.agent1]
+provider = "codex"
+target = "."
+workspace_mode = "git-worktree"
+restore = "auto"
+permission = "manual"
+key = "sk-shortcut"
+url = "https://api.example.test/v1"
+""",
+    )
+
+    result = load_project_config(project_root)
+    spec = result.config.agents['agent1']
+
+    assert spec.provider_profile.inherit_api is False
+    assert spec.provider_profile.inherit_config is False
+    assert spec.provider_profile.inherit_auth is False
 
 
 def test_load_project_config_supports_uppercase_agent_api_keys(tmp_path: Path) -> None:
@@ -406,6 +443,38 @@ URL = "https://upper.example.test/v1"
     assert spec.provider_profile.env == {
         'OPENAI_API_KEY': 'sk-upper',
         'OPENAI_BASE_URL': 'https://upper.example.test/v1',
+    }
+
+
+def test_load_project_config_normalizes_bare_codex_api_origin_to_v1_env(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-codex-origin-api'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        """version = 2
+default_agents = ["agent1"]
+layout = "cmd; agent1"
+cmd_enabled = true
+
+[agents.agent1]
+provider = "codex"
+target = "."
+workspace_mode = "git-worktree"
+restore = "auto"
+permission = "manual"
+key = "sk-origin"
+url = "https://api.example.test"
+""",
+    )
+
+    result = load_project_config(project_root)
+    spec = result.config.agents['agent1']
+
+    assert spec.api.key == 'sk-origin'
+    assert spec.api.url == 'https://api.example.test'
+    assert spec.provider_profile.env == {
+        'OPENAI_API_KEY': 'sk-origin',
+        'OPENAI_BASE_URL': 'https://api.example.test/v1',
     }
 
 
@@ -668,6 +737,71 @@ inherit_api = true
     with pytest.raises(
         ConfigValidationError,
         match='key/url cannot be combined with agents\\.agent1\\.provider_profile\\.inherit_api = true',
+    ):
+        load_project_config(project_root)
+
+
+def test_load_project_config_rejects_codex_api_shortcut_with_explicit_inherit_config_true(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-provider-inherit-config-conflict'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        """version = 2
+default_agents = ["agent1"]
+layout = "cmd; agent1"
+cmd_enabled = true
+
+[agents.agent1]
+provider = "codex"
+target = "."
+workspace_mode = "git-worktree"
+restore = "auto"
+permission = "manual"
+url = "https://api.example.test/v1"
+
+[agents.agent1.provider_profile]
+inherit_config = true
+""",
+    )
+
+    with pytest.raises(
+        ConfigValidationError,
+        match='key/url cannot be combined with agents\\.agent1\\.provider_profile\\.inherit_config = true for codex',
+    ):
+        load_project_config(project_root)
+
+
+@pytest.mark.parametrize('provider,key_field', [('codex', 'sk-shortcut'), ('claude', 'claude-key'), ('gemini', 'gemini-key')])
+def test_load_project_config_rejects_agent_api_shortcut_with_explicit_inherit_auth_true(
+    tmp_path: Path,
+    provider: str,
+    key_field: str,
+) -> None:
+    project_root = tmp_path / f'repo-provider-inherit-auth-conflict-{provider}'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        f"""version = 2
+default_agents = ["agent1"]
+layout = "cmd; agent1"
+cmd_enabled = true
+
+[agents.agent1]
+provider = "{provider}"
+target = "."
+workspace_mode = "git-worktree"
+restore = "auto"
+permission = "manual"
+key = "{key_field}"
+
+[agents.agent1.provider_profile]
+inherit_auth = true
+""",
+    )
+
+    with pytest.raises(
+        ConfigValidationError,
+        match='key/url cannot be combined with agents\\.agent1\\.provider_profile\\.inherit_auth = true',
     ):
         load_project_config(project_root)
 

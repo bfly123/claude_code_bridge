@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import urlsplit, urlunsplit
+
 
 _PROVIDER_API_SHORTCUT_ENV = {
     'codex': {
@@ -18,7 +20,8 @@ _PROVIDER_API_SHORTCUT_ENV = {
 
 
 def provider_api_shortcut_env(provider: str, *, key: str | None = None, url: str | None = None) -> dict[str, str]:
-    mapping = _PROVIDER_API_SHORTCUT_ENV.get(str(provider or '').strip().lower())
+    normalized_provider = str(provider or '').strip().lower()
+    mapping = _PROVIDER_API_SHORTCUT_ENV.get(normalized_provider)
     if mapping is None:
         supported = ', '.join(sorted(_PROVIDER_API_SHORTCUT_ENV))
         raise ValueError(f'api shortcut is supported only for providers: {supported}')
@@ -26,8 +29,25 @@ def provider_api_shortcut_env(provider: str, *, key: str | None = None, url: str
     if str(key or '').strip():
         env[mapping['key']] = str(key).strip()
     if str(url or '').strip():
-        env[mapping['url']] = str(url).strip()
+        env[mapping['url']] = _normalized_shortcut_url(normalized_provider, str(url).strip())
     return env
+
+
+def _normalized_shortcut_url(provider: str, url: str) -> str:
+    if provider != 'codex':
+        return url
+    try:
+        parsed = urlsplit(url)
+    except Exception:
+        return url
+    if not parsed.scheme or not parsed.netloc:
+        return url
+    path = parsed.path or ''
+    if path in {'', '/'}:
+        path = '/v1'
+    elif path == '/v1/':
+        path = '/v1'
+    return urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, parsed.fragment))
 
 
 def supported_provider_api_shortcuts() -> tuple[str, ...]:
