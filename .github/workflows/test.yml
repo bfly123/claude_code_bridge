@@ -68,9 +68,11 @@ jobs:
       - name: Run install and update focused tests
         run: |
           pytest -q \
+            test/test_build_macos_release_script.py \
             test/test_install_identity_output.py \
             test/test_install_major_upgrade_guard.py \
-            test/test_cli_management_update.py
+            test/test_cli_management_update.py \
+            test/test_cli_startup_update.py
 
       - name: Smoke macOS installer branches
         shell: bash
@@ -97,6 +99,15 @@ jobs:
           [[ "$install_identity" == *"channel=stable"* ]]
           [[ "$install_identity" == *"version=0.0.0-ci"* ]]
           [[ "$install_identity" == *"Official release package install detected"* ]]
+
+      - name: Smoke macOS release packaging
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dist-macos-smoke
+          python scripts/build_macos_release.py --allow-dirty --output-dir dist-macos-smoke
+          test -f dist-macos-smoke/ccb-macos-universal.tar.gz
+          test -f dist-macos-smoke/SHA256SUMS
 
   test-wsl:
     name: WSL / Ubuntu 22.04

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import time
 
 from ccbd.models import LeaseHealth
@@ -20,6 +21,7 @@ def ensure_daemon_started(
     restart_unreachable_daemon_fn,
     incompatible_daemon_error_fn,
     start_timeout_s: float,
+    progress_stall_timeout_s: float,
 ) -> DaemonHandle:
     clear_shutdown_intent_fn(context)
     startup_requested = bool(record_running_intent_fn(context))
@@ -27,9 +29,9 @@ def ensure_daemon_started(
         keeper_started=bool(ensure_keeper_started_fn(context)),
         started=startup_requested,
     )
-    deadline = time.time() + start_timeout_s
+    local_deadline = time.time() + max(0.0, float(start_timeout_s))
 
-    while time.time() < deadline:
+    while True:
         handle = poll_daemon_start_iteration(
             context,
             state=state,
@@ -41,6 +43,13 @@ def ensure_daemon_started(
         )
         if handle is not None:
             return handle
+        _, _, inspection = inspect_daemon_fn(context)
+        if _startup_wait_exhausted(
+            inspection,
+            local_deadline=local_deadline,
+            progress_stall_timeout_s=progress_stall_timeout_s,
+        ):
+            break
         time.sleep(0.05)
 
     return finalize_daemon_start(
@@ -123,6 +132,43 @@ def _desired_state(inspection) -> str:
     if desired_state:
         return desired_state
     return 'running'
+
+
+def _startup_wait_exhausted(
+    inspection,
+    *,
+    local_deadline: float,
+    progress_stall_timeout_s: float,
+) -> bool:
+    phase = _phase(inspection)
+    now = time.time()
+    if now >= local_deadline:
+        return True
+    if phase != 'starting':
+        return False
+    transaction_deadline = _timestamp_seconds(getattr(inspection, 'startup_deadline_at', None))
+    if transaction_deadline is not None and now >= transaction_deadline:
+        return True
+    if progress_stall_timeout_s <= 0:
+        return False
+    last_progress = _timestamp_seconds(getattr(inspection, 'last_progress_at', None))
+    if last_progress is None:
+        return False
+    return now >= last_progress + float(progress_stall_timeout_s)
+
+
+def _timestamp_seconds(value: object) -> float | None:
+    text = str(value or '').strip()
+    if not text:
+        return None
+    try:
+        normalized = text[:-1] + '+00:00' if text.endswith('Z') else text
+        parsed = datetime.fromisoformat(normalized)
+    except Exception:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
 
 
 __all__ = ['connect_mounted_daemon', 'ensure_daemon_started']

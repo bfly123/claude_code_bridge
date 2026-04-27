@@ -38,6 +38,20 @@
    - 单个项目能反复拉起大量无主后台进程
    - 最终形成 CPU 调度风暴与 swap 压力
 
+3. 冷启动 `ccb ask` 把慢启动误判为失败
+   - `ask` 首次请求本质上只是想等 control-plane ready 并提交任务
+   - 但当前实现把 keeper 拉起、`ccbd` bootstrap、socket readiness、以及本地 CLI deadline 混在一条短预算链路里
+   - 结果是“稍慢但正确”的冷启动会先被本地等待方判成超时，随后 backend 才在后台完成 mounted
+
+冷启动 `ask` 超时的主因不是通用 `CcbdClient` 默认 timeout 太短，而是生命周期预算语义错误：
+
+- keeper 启动事务预算
+- CLI 等待预算
+- 单次 RPC probe timeout
+- foreground attach timeout
+
+这四类预算目前边界不清，导致实现层容易把“冷启动事务上限”错误地落在“通用 socket client 默认 timeout”上。
+
 ### 2.2 最终目标
 
 最终架构固定为：
@@ -57,6 +71,7 @@
 - keeper 是项目生命周期唯一推进者
 - CLI 只能表达启动/停机意图，不能直接与 keeper 竞争 `ccbd` 启动权
 - `mounted` 只能表示 control-plane 已 ready
+- 冷启动 `ask` 只等待 control-plane readiness，不等待 namespace attachability 或全量 desired-agent recovery
 - 显式 `ccb kill` 是强管理动作，不能被 “degraded but heartbeat fresh” 拒绝
 - 所有长期 provider helper 都必须绑定到 slot runtime generation，并具备组级回收 authority
 
@@ -148,6 +163,9 @@ CLI 不再直接拥有 `spawn_ccbd_process()` 的 authority。
 - `socket_inode`
 - `namespace_epoch`
 - `phase_started_at`
+- `startup_stage`
+- `last_progress_at`
+- `startup_deadline_at`
 - `last_failure_reason`
 - `shutdown_intent`
 
@@ -308,7 +326,7 @@ CLI 不再直接 spawn `ccbd`。CLI 只负责：
 1. ensure keeper running
 2. 清除 shutdown intent
 3. 写入 `desired_state=running`
-4. 等待 `phase`
+4. 等待 keeper-owned `startup_id/generation` 事务结果
 
 ### 6.2 启动事务
 
@@ -342,6 +360,71 @@ CLI 不再直接 spawn `ccbd`。CLI 只负责：
 
 - 先写 mounted，再尝试 listen
 - socket 仅存在文件路径，但服务端尚未 ready 也算 mounted
+
+### 6.4 readiness 分层
+
+系统必须显式区分以下三层 readiness：
+
+1. control-plane readiness
+   - 当前 authoritative generation 已 bind/listen project socket
+   - 当前 authoritative generation 已通过最小 readiness probe
+   - `phase=mounted` 仅以这一层为发布条件
+2. namespace UI readiness
+   - project tmux namespace 已存在
+   - authoritative session/window target 已可被 tmux 选择
+   - 当前 UI contract 已应用
+3. desired-agent acceptable mounted state
+   - 显式 foreground start 需要的 agent 已达到可接受 mounted 状态
+   - recovering agent 必须有明确 persisted reason 与 active reconcile ownership
+
+等待规则固定为：
+
+- `ccb ask`、`ping`、`pend`、`watch`、`queue` 等 daemon RPC caller 只等待 control-plane readiness
+- 交互式 `ccb` 先等待 control-plane readiness，再等待 namespace UI readiness
+- 前台 start 结果是否报告“configured agents ready”属于更高层 outcome，不得回灌为 backend mounted 的定义
+
+### 6.5 启动预算策略
+
+预算必须按层拆开，不能再复用一个通用 timeout 常量：
+
+- `startup_transaction_timeout_s`
+  - keeper-owned 冷启动事务的最大预算上限
+  - 不是每次固定等待时长
+  - 已 mounted 的热路径必须立即返回
+  - 正在等待中的 caller 只要观察到事务成功或失败，也必须立即返回
+- `startup_progress_stall_timeout_s`
+  - 对 `startup_stage` / `last_progress_at` 的短超时
+  - 用于提前识别卡死 bootstrap，而不是机械等满整体预算
+- `rpc_probe_timeout_s`
+  - 单次 socket connect / ping / config-check 的短超时
+  - 应维持 fast-fail 语义，不得被提升到冷启动事务级别
+- `foreground_attach_timeout_s`
+  - 只服务交互式 `ccb` 的 namespace/UI attach 等待
+  - 不得影响 `ask`、`ping` 等 control-plane caller
+
+默认策略上，`startup_transaction_timeout_s` 应该是冷启动 ceiling，而不是 steady-state latency 目标。
+实现上可以允许 20 到 30 秒的事务上限，但正常路径必须在 ready 后立刻返回，不能把该值表现成每次调用都要等待的固定延迟。
+
+### 6.6 bootstrap 分层
+
+`ccbd` bootstrap 必须拆成两层，而不是把全部重型初始化都压在 mounted 发布前：
+
+- `bootstrap_core`
+  - project identity / config identity
+  - lifecycle / lease / ownership
+  - socket server
+  - 最小 control-plane RPC surface
+- `bootstrap_runtime`
+  - runtime supervision
+  - namespace recovery
+  - execution/completion tracker
+  - restore/adopt 以及更重的 provider-facing bootstrap
+
+原则：
+
+- mounted 发布只依赖 `bootstrap_core` 完成后的 control-plane readiness
+- 不属于最小 control-plane readiness 的重型工作，不得无界地阻塞 mounted 发布
+- 冷启动 `ask` 允许在 backend mounted 后尽早提交，由 daemon supervision 异步完成后续 runtime 收敛
 
 ## 7. 显式停机时序
 
@@ -568,12 +651,15 @@ helper 必须具备 owner-death 收口能力。
 
 - 引入 `lifecycle.json`
 - keeper 成为唯一 `ccbd` 启动者
-- CLI 改为只写 intent 与等待 phase
+- CLI 改为只写 intent 与等待 keeper-owned startup transaction
+- 冷启动等待从通用 RPC timeout 中剥离
 
 ### Phase 2: Start/Stop Transaction Hardening
 
 - 修正 `starting/mounted/stopping/failed`
 - mounted 只在 ready 后发布
+- 引入 readiness 分层与 path-specific timeout policy
+- `ask` 冷启动只等待 control-plane readiness
 - stop transaction 不再受 degraded socket 语义阻断
 - socket ownership 增加 inode/generation fence
 
@@ -728,10 +814,13 @@ helper ownership 改造必须允许旧项目没有 `helper.json`。
 - keeper 是同项目唯一 `ccbd` 启动者
 - `lifecycle.json` 已成为 phase authority
 - 同项目双终端并发 `ccb ask` 不会产生双 backend generation
+- startup waiter 已不再依赖放大全局 `CcbdClient` timeout
 
 ### Phase 2 出口条件
 
 - `mounted` 只在 readiness 后发布
+- control-plane readiness 与 namespace UI readiness 已明确分层
+- `startup_transaction_timeout_s` 已成为冷启动 ceiling 而非固定等待
 - 普通 `ccb kill` 可处理 `socket_unreachable + heartbeat_fresh`
 - 旧 generation 无法 unlink 新 generation socket
 - 启动失败能够稳定落到 `phase=failed`

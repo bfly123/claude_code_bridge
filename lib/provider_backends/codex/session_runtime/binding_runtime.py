@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..session_authority import remember_bound_session_authority
 from ..start_cmd import persist_resume_start_cmd_fields
 from .pathing import now_str
 
@@ -129,6 +130,7 @@ def apply_current_binding(data: dict[str, object], change: BindingChange) -> Non
         data["codex_session_path"] = change.new_path
     if change.new_id:
         data["codex_session_id"] = change.new_id
+    remember_bound_session_authority(data)
 
 
 def mark_old_binding(data: dict[str, object], *, old_path: str, old_id: str, new_path: str, new_id: str) -> None:

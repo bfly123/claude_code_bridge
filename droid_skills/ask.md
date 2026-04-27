@@ -1,14 +1,14 @@
 ## Execution (MANDATORY)
 
 ```bash
-ccb ask "$TARGET" <<'EOF'
+command ask "$TARGET" <<'EOF'
 $MESSAGE
 EOF
 ```
 
 This returns only an acceptance receipt in the current turn.
 The reply is not echoed into the same command stdout.
-Use `ccb ask --wait "$TARGET"` only when the user explicitly wants the reply now.
+Use `ask --wait "$TARGET"` only when the user explicitly wants the reply now.
 
 ## Rules
 
@@ -20,7 +20,7 @@ Use `ccb ask --wait "$TARGET"` only when the user explicitly wants the reply now
 ## Examples
 
 - `/ask agent1 What is 12+12?` (send via heredoc)
-- `ccb ask agent1 <<'EOF'`
+- `command ask agent1 <<'EOF'`
   `What is 12+12?`
   `EOF`
 

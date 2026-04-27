@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from terminal_runtime.tmux_readiness import TmuxTransientServerUnavailable
+
 from .events import record_mount_started, record_mount_succeeded
 from .transitions import (
     SUCCESS_RUNTIME_HEALTHS,
@@ -8,6 +10,7 @@ from .transitions import (
     mount_actions_missing,
     mount_or_reflow,
     persist_mount_exception,
+    persist_mount_transient,
     persist_mount_success,
     start_mount_attempt,
 )
@@ -61,6 +64,19 @@ def ensure_mounted(
             mount_agent_fn=mount_agent_fn,
             remount_project_fn=remount_project_fn,
             should_reflow_project_mount_fn=should_reflow_project_mount_fn,
+        )
+    except TmuxTransientServerUnavailable as exc:
+        return persist_mount_transient(
+            starting,
+            runtime=runtime,
+            project_id=project_id,
+            agent_name=agent_name,
+            attempted_at=attempted_at,
+            prior_health=prior_health,
+            next_restart_count=next_restart_count,
+            reason=f'{type(exc).__name__}: {exc}',
+            event_store=event_store,
+            upsert_if_changed_fn=upsert_if_changed_fn,
         )
     except Exception as exc:
         return persist_mount_exception(

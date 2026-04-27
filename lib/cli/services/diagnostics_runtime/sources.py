@@ -6,7 +6,7 @@ from pathlib import Path
 _TAIL_SUFFIXES = {'.log', '.jsonl', '.txt', '.yaml', '.yml'}
 _COPY_SUFFIXES = {'.json', '.pid'}
 _PROVIDER_STATE_SUFFIXES = _TAIL_SUFFIXES | _COPY_SUFFIXES | {'.toml'}
-_PROVIDER_STATE_SECRET_FILENAMES = {'auth.json'}
+_PROVIDER_STATE_SECRET_FILENAMES = {'auth.json', 'oauth_creds.json'}
 
 
 def project_root_sources(context) -> tuple[tuple[str, Path], ...]:

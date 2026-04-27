@@ -43,22 +43,26 @@ class RuntimeSupervisor(SupervisorRuntimeStateMixin):
         agent_names: tuple[str, ...],
         restore: bool,
         auto_permission: bool,
+        terminal_size: tuple[int, int] | None = None,
         cleanup_tmux_orphans: bool = True,
         interactive_tmux_layout: bool = True,
         recreate_namespace: bool = False,
         reflow_workspace: bool = False,
         recreate_reason: str | None = None,
+        background_maintenance: bool = False,
     ) -> StartFlowSummary:
         return start_supervisor(
             self,
             agent_names=agent_names,
             restore=restore,
             auto_permission=auto_permission,
+            terminal_size=terminal_size,
             cleanup_tmux_orphans=cleanup_tmux_orphans,
             interactive_tmux_layout=interactive_tmux_layout,
             recreate_namespace=recreate_namespace,
             reflow_workspace=reflow_workspace,
             recreate_reason=recreate_reason,
+            background_maintenance=background_maintenance,
             run_start_flow_fn=run_start_flow,
         )
 

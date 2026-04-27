@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from agents.models import (
+    AgentApiSpec,
     AgentRuntime,
     AgentState,
     AgentRestoreState,
@@ -98,8 +99,10 @@ def _agent_spec_from_record(record: dict) -> AgentSpec:
         restore_default=RestoreMode(record['restore_default']),
         permission_default=PermissionMode(record['permission_default']),
         queue_policy=QueuePolicy(record['queue_policy']),
+        model=record.get('model'),
         startup_args=tuple(record.get('startup_args', [])),
         env=dict(record.get('env', {})),
+        api=AgentApiSpec(**dict(record.get('api') or {})),
         provider_profile=ProviderProfileSpec(**dict(record.get('provider_profile') or {})),
         branch_template=record.get('branch_template'),
         labels=tuple(record.get('labels', [])),

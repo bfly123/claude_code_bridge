@@ -8,17 +8,22 @@ from .constants import REMOTE_TAGS_API, REPO_URL
 from .transport import fetch_json_via_curl, fetch_json_via_urllib
 
 
-def get_available_versions() -> list[str]:
+def get_available_versions(
+    *,
+    urllib_timeout: float = 10,
+    curl_timeout: float = 15,
+    git_timeout: float = 30,
+) -> list[str]:
     versions: list[str] = []
 
     try:
-        data = fetch_json_via_urllib(REMOTE_TAGS_API, timeout=10)
+        data = fetch_json_via_urllib(REMOTE_TAGS_API, timeout=float(urllib_timeout))
     except Exception:
         data = None
     if isinstance(data, list):
         versions = parse_api_response(data)
     if not versions:
-        data = fetch_json_via_curl(REMOTE_TAGS_API, timeout=15)
+        data = fetch_json_via_curl(REMOTE_TAGS_API, timeout=float(curl_timeout))
         if isinstance(data, list):
             versions = parse_api_response(data)
     if not versions and shutil.which("git"):
@@ -28,7 +33,7 @@ def get_available_versions() -> list[str]:
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=30,
+            timeout=float(git_timeout),
         )
         if result.returncode == 0:
             versions = parse_git_refs(result.stdout)

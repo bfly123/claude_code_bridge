@@ -1,13 +1,21 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 import platform
 import re
 import shutil
 import tarfile
 
-from ..install import download_tarball, pick_temp_base_dir, run_staged_unix_installer, safe_extract_tar
+from release_artifacts import release_artifact_name
+
+from ..install import (
+    download_tarball,
+    is_source_repo_root,
+    pick_temp_base_dir,
+    resolve_managed_install_dir,
+    run_staged_unix_installer,
+    safe_extract_tar,
+)
 from ..versioning import REPO_URL, format_version_info, get_available_versions, get_version_info
 from .matching import find_matching_version, latest_version
 
@@ -17,21 +25,25 @@ def cmd_update(args, *, script_root: Path) -> int:
     if not supported:
         print(reason)
         return 1
-
-    default_install_dir = Path.home() / ".local/share/codex-dual"
-    install_dir = Path(os.environ.get("CODEX_INSTALL_PREFIX") or default_install_dir).expanduser()
-    if (script_root / "install.sh").exists():
-        install_dir = script_root
+    source_repo_install = is_source_repo_root(script_root)
+    install_dir = resolve_managed_install_dir(script_root=script_root)
 
     target_version = _resolve_target_version(args)
     if target_version is False:
         return 1
 
-    old_info = get_version_info(install_dir)
+    current_install_root = script_root if source_repo_install else install_dir
+    old_info = get_version_info(current_install_root)
     if target_version:
-        print(f"🔄 Updating to v{target_version}...")
+        if source_repo_install:
+            print(f"🔄 Installing release v{target_version} from source/dev checkout...")
+        else:
+            print(f"🔄 Updating to v{target_version}...")
     else:
-        print("🔄 Checking for release updates...")
+        if source_repo_install:
+            print("🔄 Checking latest stable release for source/dev checkout...")
+        else:
+            print("🔄 Checking for release updates...")
 
     try:
         tmp_base = pick_temp_base_dir(install_dir)
@@ -42,7 +54,13 @@ def cmd_update(args, *, script_root: Path) -> int:
     if not resolved_target:
         print("❌ Could not determine latest release version")
         return 1
-    return _update_via_tarball(tmp_base, install_dir=install_dir, target_version=resolved_target, old_info=old_info)
+    code = _update_via_tarball(tmp_base, install_dir=install_dir, target_version=resolved_target, old_info=old_info)
+    if code != 0:
+        return code
+    if source_repo_install:
+        print(f"ℹ️  Global `ccb` links now target the release install at: {install_dir}")
+        print("   `./ccb` inside the source checkout still runs the live source tree.")
+    return 0
 
 
 def _resolve_target_version(args) -> str | bool | None:
@@ -70,12 +88,12 @@ def _resolve_target_version(args) -> str | bool | None:
 
 def _supported_update_platform() -> tuple[bool, str | None]:
     system_name = platform.system()
-    if system_name == "Linux":
+    if system_name in {"Linux", "Darwin"}:
         return True, None
     return (
         False,
-        "❌ `ccb update` is currently supported only on Linux/WSL.\n"
-        "   Please use a Linux/WSL runtime, or reinstall manually on this platform.",
+        "❌ `ccb update` is currently supported only on Linux/macOS/WSL.\n"
+        "   Please use a Linux, macOS, or WSL runtime, or reinstall manually on this platform.",
     )
 
 
@@ -90,7 +108,10 @@ def _update_via_tarball(tmp_base: Path, *, install_dir: Path, target_version: st
         return 1
     artifact_name = _release_artifact_name()
     if not artifact_name:
-        print(f"❌ Update failed: unsupported Linux architecture '{platform.machine()}'")
+        print(
+            "❌ Update failed: unsupported release artifact target "
+            f"for platform '{platform.system()}' architecture '{platform.machine()}'"
+        )
         return 1
     tarball_url = _release_artifact_url(target_version, artifact_name=artifact_name)
     extracted_name = artifact_name
@@ -150,10 +171,7 @@ def _release_artifact_url(version: str, *, artifact_name: str) -> str:
 
 
 def _release_artifact_name() -> str | None:
-    arch = _normalize_linux_arch(platform.machine())
-    if arch is None:
-        return None
-    return f"ccb-linux-{arch}.tar.gz"
+    return release_artifact_name(platform.system(), machine=platform.machine())
 
 
 def _release_extract_dir_name(artifact_name: str) -> str:
@@ -163,17 +181,6 @@ def _release_extract_dir_name(artifact_name: str) -> str:
     if text.endswith(".tgz"):
         return text[:-4]
     return Path(text).stem
-
-
-def _normalize_linux_arch(raw_arch: str) -> str | None:
-    text = str(raw_arch or "").strip().lower()
-    mapping = {
-        "x86_64": "x86_64",
-        "amd64": "x86_64",
-        "aarch64": "aarch64",
-        "arm64": "aarch64",
-    }
-    return mapping.get(text)
 
 
 __all__ = ['cmd_update']

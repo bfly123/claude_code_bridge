@@ -23,6 +23,7 @@ def test_codex_session_update_binding_persists_resume_fields(tmp_path: Path) -> 
         json.dumps(
             {
                 "start_cmd": "export CODEX_RUNTIME_DIR=/tmp/demo; codex -c disable_paste_burst=true",
+                "codex_provider_authority_fingerprint": "fp-1",
             },
             ensure_ascii=False,
             indent=2,
@@ -42,6 +43,7 @@ def test_codex_session_update_binding_persists_resume_fields(tmp_path: Path) -> 
     data = json.loads(session_file.read_text(encoding="utf-8"))
     assert data["codex_session_path"] == str(log_path)
     assert data["codex_session_id"] == "123e4567-e89b-12d3-a456-426614174000"
+    assert data["codex_session_authority_fingerprint"] == "fp-1"
     assert data["codex_start_cmd"] == (
         "export CODEX_RUNTIME_DIR=/tmp/demo; "
         "codex -c disable_paste_burst=true resume 123e4567-e89b-12d3-a456-426614174000"
@@ -58,6 +60,7 @@ def test_codex_comm_remember_updates_session_file_and_runtime_info(tmp_path: Pat
             {
                 "active": True,
                 "start_cmd": "export CODEX_RUNTIME_DIR=/tmp/demo; codex -c disable_paste_burst=true",
+                "codex_provider_authority_fingerprint": "fp-1",
             }
         ),
         encoding="utf-8",
@@ -93,6 +96,7 @@ def test_codex_comm_remember_updates_session_file_and_runtime_info(tmp_path: Pat
     data = json.loads(session_file.read_text(encoding="utf-8"))
     assert data["codex_session_path"] == str(log_path)
     assert data["codex_session_id"] == "123e4567-e89b-12d3-a456-426614174001"
+    assert data["codex_session_authority_fingerprint"] == "fp-1"
     assert data["codex_start_cmd"] == (
         "export CODEX_RUNTIME_DIR=/tmp/demo; "
         "codex -c disable_paste_burst=true resume 123e4567-e89b-12d3-a456-426614174001"
@@ -196,6 +200,41 @@ def test_load_project_session_migrates_legacy_root_only_binding_to_private_home(
     assert payload["codex_home"] == str(expected_home)
     assert payload["codex_session_root"] == str(expected_root)
     assert (expected_root / "2026" / "04" / "19" / "rollout-legacy-session.jsonl").is_file()
+
+
+def test_load_project_session_preserves_explicit_profile_home_layout(tmp_path: Path) -> None:
+    work_dir = tmp_path / "repo"
+    session_dir = work_dir / ".ccb"
+    codex_home = work_dir / ".ccb" / "provider-profiles" / "agent1" / "codex"
+    session_root = codex_home / "sessions"
+    log_path = session_root / "2026" / "04" / "25" / "rollout-explicit-home.jsonl"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("", encoding="utf-8")
+    session_dir.mkdir(parents=True, exist_ok=True)
+    session_file = session_dir / ".codex-agent1-session"
+    session_file.write_text(
+        json.dumps(
+            {
+                "work_dir": str(work_dir),
+                "codex_home": str(codex_home),
+                "codex_session_root": str(session_root),
+                "codex_session_path": str(log_path),
+                "codex_session_id": "explicit-home-session-id",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    session = load_project_session(work_dir, "agent1")
+
+    assert session is not None
+    assert session.codex_home == str(codex_home)
+    assert session.codex_session_root == str(session_root)
+    payload = json.loads(session_file.read_text(encoding="utf-8"))
+    assert payload["codex_home"] == str(codex_home)
+    assert payload["codex_session_root"] == str(session_root)
 
 
 def test_codex_binding_tracker_refreshes_session_from_workdir_scoped_log(

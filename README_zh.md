@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/模型皆可控-CF1322?style=for-the-badge" alt="模型皆可控">
 </p>
 
-[![Version](https://img.shields.io/badge/version-6.0.9-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-6.0.15-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 [English](README.md) | **中文**
@@ -98,6 +98,63 @@ cmd; writer:codex, reviewer:claude; qa:gemini(worktree)
 历史说明：下面较旧的发布记录里仍可能出现 `askd`、旧 flag 或已移除命令。这些内容仅作为 changelog 历史保留，不代表当前 CLI 入口。
 
 <details open>
+<summary><b>v6.0.15</b> - Codex 路由权威与前台 attach 打磨</summary>
+
+- **Codex 显式路由权威**：managed Codex home 现在会把 agent 私有 `config.toml` 与 `auth.json` 物化为显式 `key` / `url` 路由的唯一权威，使 agent 级 API 覆盖真正替代系统级 provider 路由，而不是漂回全局配置
+- **Codex 会话命名空间轮换**：managed Codex 启动现在会为显式路由生成 authority 指纹，把可复用 session 绑定也打上该 authority；当绑定路由与当前路由不一致时，会在启动前轮换旧 `sessions/` 命名空间
+- **前台 attach 体验加固**：交互式 `ccb` 启动现在会用真实终端视口初始化 tmux namespace，并在 attach 后做一次 best-effort client refresh，避免首次显示依赖手工刷新
+
+</details>
+
+<details>
+<summary><b>v6.0.14</b> - Claude logout 恢复加固</summary>
+
+- **managed Claude 登录态保留**：当全局 Claude home 已执行 logout 时，managed Claude home 现在会保留 agent 私有的本地登录态，避免项目内重新登录后重启再次掉回浏览器链接循环
+- **auth 投影语义收紧**：当 source home 仍有 auth 时，启动继续按 source 刷新；当 source auth 缺失时，不再把它解释为“必须清空 managed auth”，而 `inherit_auth = false` 仍会清理旧的复制鉴权
+- **启动链路回归覆盖补齐**：新增回归测试覆盖 projection 层、provider workspace 准备以及 Claude launcher 启动路径，锁住这条 logout 后恢复语义
+
+</details>
+
+<details>
+<summary><b>v6.0.13</b> - macOS release 路径与预览打包修复</summary>
+
+- **macOS release 路径补齐**：共享 release 产物命名和 updater 解析现在同时覆盖 macOS universal 包以及 Linux/WSL release 资产
+- **source dev 安装模式**：从 git checkout 执行安装后会继续链接到实时源码树，不参与启动自动更新提示，但仍可通过 `ccb update` 切换到托管 release 安装
+- **Agent API / Model 简写**：`.ccb/ccb.config` 现在支持 agent 级扁平 `key`、`url`、`model` 字段，让常见 provider 覆盖保持简洁
+- **预览打包加固**：preview release 导出现在会排除仓库内构建过程生成的输出路径，修复 `dist-macos-smoke` 这类目录上的递归自拷贝失败
+
+</details>
+
+<details>
+<summary><b>v6.0.12</b> - 非阻塞启动更新提示</summary>
+
+- **缓存化启动提示**：交互式前台 `ccb` 启动现在会读取安装级缓存的 release 元数据，只有本地已知存在更高稳定版时才提示升级
+- **后台刷新**：缓存缺失或过期时会用短网络预算在后台刷新，不再阻塞项目启动路径
+- **升级 / 延后 / 静默**：启动提示支持立即升级、对当前版本延后提醒，或静默当前版本
+- **启动边界保持干净**：release 更新检查仍是 advisory 逻辑，不进入项目生命周期启动事务
+
+</details>
+
+<details>
+<summary><b>v6.0.11</b> - 项目启动热修复</summary>
+
+- **冷启动 namespace 修复**：项目 tmux namespace 冷启动时，`no server running on <project socket>` 现在会被判定为“namespace 缺失，需要创建”，不再被错误打成通用 tmux inspect 失败
+- **release 回归覆盖补齐**：新增针对 namespace backend/state 的回归测试，锁住这条冷启动路径，覆盖 `ccb -> ping -> kill` 生命周期闭环
+- **契约语义补全**：startup supervision contract 现在明确把 project-socket 上的 `no server running` 定义为重建信号，而不是致命 inspect 失败
+
+</details>
+
+<details>
+<summary><b>v6.0.10</b> - 启动预算加固与 Gemini 登录继承</summary>
+
+- **Gemini 登录继承**：managed Gemini home 现在会为 `oauth-personal` 投影登录鉴权选择与 `oauth_creds.json`，并在关闭 auth 继承时清理旧的复制凭据
+- **统一 tmux 就绪预算**：项目自有 pane 的 `respawn-pane` 现在与 namespace create/reflow 共用同一套 tmux ready-retry 预算，降低启动与后台 supervision 中瞬时 `no server running` 失败
+- **后台启动兼容性加固**：后台 lifecycle 启动继续保持 supervision 兼容，同时把 readiness probe 超时与业务 RPC budget 解耦
+- **诊断包凭据脱敏**：diagnostic bundle 现在会像其他 provider 凭据一样排除 Gemini `oauth_creds.json`
+
+</details>
+
+<details>
 <summary><b>v6.0.9</b> - 跨平台生命周期与 watch 稳定性增强</summary>
 
 - **WSL 兼容性修复**：项目 runtime 现在会避开不支持 Unix socket 的 WSL 挂载盘路径，同时加固 installer staging 与 tmux namespace readiness

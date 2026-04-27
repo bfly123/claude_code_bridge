@@ -60,6 +60,8 @@ Inside that home, the managed Gemini state is:
 
 - `.ccb/agents/<agent>/provider-state/gemini/home/.gemini/settings.json`
 - `.ccb/agents/<agent>/provider-state/gemini/home/.gemini/trustedFolders.json`
+- `.ccb/agents/<agent>/provider-state/gemini/home/.gemini/oauth_creds.json`
+  - only when inherited login auth is projected into the managed home
 - `.ccb/agents/<agent>/provider-state/gemini/home/.gemini/tmp/`
 
 If the effective Gemini home is explicitly overridden by a provider profile, the
@@ -94,6 +96,15 @@ When `ccb` starts a managed Gemini agent:
   hook/trust installation and before launcher command assembly
 - managed `settings.json` projection must treat inherited system settings as the
   baseline and preserve managed runtime sections such as `hooks`
+- managed `settings.json` projection must treat `security.auth.selectedType` as
+  auth-selection state, not generic config; projection of that field must stay
+  consistent with `inherit_api` / `inherit_auth`
+- managed login-auth projection must synchronize Gemini OAuth cache artifacts
+  required for non-interactive reuse, such as `oauth_creds.json`, when login
+  auth inheritance is enabled
+- when login-auth inheritance is disabled or no longer applicable, startup must
+  remove stale copied login credential artifacts from the managed home instead
+  of silently reusing them
 - managed `trustedFolders.json` projection must merge inherited system trust
   entries with agent-local runtime trust entries
 - it must install Gemini hook/trust state only inside that managed home
@@ -186,4 +197,4 @@ Diagnostics export should include:
   home
 
 Diagnostics export must exclude copied credential files and projected auth
-state.
+state such as `oauth_creds.json`.

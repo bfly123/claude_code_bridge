@@ -33,6 +33,7 @@ from .daemon_runtime.keeper import record_shutdown_intent
 from .daemon_runtime.keeper import wait_for_keeper_exit as _wait_for_keeper_exit_runtime_impl
 from .daemon_runtime.facade import incompatible_daemon_error as _incompatible_daemon_error_impl
 from .daemon_runtime.facade import should_restart_unreachable_daemon as _should_restart_unreachable_daemon
+from .daemon_runtime.policy import CONTROL_PLANE_RPC_TIMEOUT_S
 from .daemon_runtime.processes import lease_pid as _lease_pid
 from .daemon_runtime.processes import restart_unreachable_daemon as _restart_unreachable_daemon_runtime_impl
 from .daemon_runtime.processes import wait_for_pid_exit as _wait_for_pid_exit
@@ -41,6 +42,7 @@ from .daemon_runtime import ensure_daemon_started as _ensure_daemon_started_runt
 from .daemon_runtime import shutdown_daemon as _shutdown_daemon_runtime
 
 from .daemon_runtime.facade import SHUTDOWN_TIMEOUT_S as _DEF_SHUTDOWN_TIMEOUT_S
+from .daemon_runtime.facade import STARTUP_PROGRESS_STALL_TIMEOUT_S as _DEF_STARTUP_PROGRESS_STALL_TIMEOUT_S
 from .daemon_runtime.facade import START_TIMEOUT_S as _DEF_START_TIMEOUT_S
 
 
@@ -69,6 +71,7 @@ def ensure_daemon_started(context: CliContext) -> DaemonHandle:
             restart_unreachable_daemon_fn=_restart_unreachable_daemon,
             incompatible_daemon_error_fn=_incompatible_daemon_error,
             start_timeout_s=_DEF_START_TIMEOUT_S,
+            progress_stall_timeout_s=_DEF_STARTUP_PROGRESS_STALL_TIMEOUT_S,
         )
     except CcbdServiceError as exc:
         raise _augment_start_failure(context, exc) from exc
@@ -135,6 +138,10 @@ def ping_local_state(context: CliContext) -> LocalPingSummary:
         heartbeat_fresh=inspection.heartbeat_fresh,
         takeover_allowed=inspection.takeover_allowed,
         reason=inspection.reason,
+        startup_id=getattr(inspection, 'startup_id', None),
+        startup_stage=getattr(inspection, 'startup_stage', None),
+        last_progress_at=getattr(inspection, 'last_progress_at', None),
+        startup_deadline_at=getattr(inspection, 'startup_deadline_at', None),
         last_failure_reason=inspection.last_failure_reason,
         shutdown_intent=inspection.shutdown_intent,
     )
@@ -161,7 +168,7 @@ def shutdown_daemon(context: CliContext, *, force: bool) -> KillSummary:
         record_shutdown_intent_fn=record_shutdown_intent,
         finalize_shutdown_lifecycle_fn=_finalize_shutdown_lifecycle,
         inspect_daemon_fn=inspect_daemon,
-        client_factory=lambda current: CcbdClient(current.paths.ccbd_socket_path),
+        client_factory=lambda current: _build_control_plane_client(current.paths.ccbd_socket_path),
         lease_pid_fn=_lease_pid,
         keeper_pid_fn=_keeper_pid,
         wait_for_pid_exit_fn=_wait_for_pid_exit,
@@ -182,10 +189,23 @@ def _connect_compatible_daemon(
         context,
         inspection,
         restart_on_mismatch=restart_on_mismatch,
-        client_factory=CcbdClient,
+        probe_client_factory=_build_probe_control_plane_client,
+        runtime_client_factory=_build_control_plane_client,
         daemon_matches_project_config_fn=_daemon_matches_project_config,
         shutdown_incompatible_daemon_fn=_shutdown_incompatible_daemon,
     )
+
+
+def _build_control_plane_client(socket_path):
+    return CcbdClient(socket_path)
+
+
+def _build_probe_control_plane_client(socket_path):
+    try:
+        return CcbdClient(socket_path, timeout_s=CONTROL_PLANE_RPC_TIMEOUT_S)
+    except TypeError:
+        # Some tests still patch legacy single-argument constructors.
+        return CcbdClient(socket_path)
 
 
 def _shutdown_incompatible_daemon(context: CliContext, client: CcbdClient) -> None:

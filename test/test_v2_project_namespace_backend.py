@@ -3,12 +3,17 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from ccbd.services.project_namespace_runtime.backend import (
     create_session,
     ensure_server_policy,
     list_windows,
     prepare_server,
+    session_alive,
+    wait_for_root_pane,
 )
+from terminal_runtime.tmux_readiness import TmuxTransientServerUnavailable
 
 
 class _FlakyBackend:
@@ -17,6 +22,7 @@ class _FlakyBackend:
         self._remaining_failures: dict[tuple[str, ...], int] = {}
         self.session_created = False
         self.require_session_for_server_policy = False
+        self.missing_session_stderr: str | None = None
 
     def fail_once(self, *args: str) -> None:
         self._remaining_failures[tuple(args)] = 1
@@ -48,6 +54,21 @@ class _FlakyBackend:
                 ['tmux', *key],
                 0,
                 stdout='@1\tcmd\t1\n@2\tworkspace\t0\n',
+                stderr='',
+            )
+        if key[:2] == ('has-session', '-t'):
+            missing_stderr = self.missing_session_stderr or f"can't find session: {key[2]}\n"
+            return subprocess.CompletedProcess(
+                ['tmux', *key],
+                0 if self.session_created else 1,
+                stdout='',
+                stderr='' if self.session_created else missing_stderr,
+            )
+        if key[:2] == ('list-panes', '-t'):
+            return subprocess.CompletedProcess(
+                ['tmux', *key],
+                0,
+                stdout='%7\n',
                 stderr='',
             )
         return subprocess.CompletedProcess(['tmux', *key], 0, stdout='', stderr='')
@@ -129,3 +150,80 @@ def test_list_windows_retries_transient_tmux_failures(monkeypatch) -> None:
         ('@2', 'workspace', False),
     ]
     assert backend.calls.count(('list-windows', '-t', 'ccb-proj', '-F', '#{window_id}\t#{window_name}\t#{window_active}')) == 2
+
+
+def test_session_alive_retries_transient_tmux_failures(monkeypatch) -> None:
+    monkeypatch.setenv('CCB_TMUX_OBJECT_READY_POLL_INTERVAL_S', '0')
+    backend = _FlakyBackend()
+    backend.session_created = True
+
+    original_tmux_run = backend._tmux_run
+    state = {'remaining': 1}
+
+    def _tmux_run(args, *, check=False, capture=False, timeout=None):
+        if tuple(str(item) for item in args) == ('has-session', '-t', 'ccb-proj') and state['remaining'] > 0:
+            state['remaining'] -= 1
+            backend.calls.append(tuple(str(item) for item in args))
+            return subprocess.CompletedProcess(
+                ['tmux', *args],
+                1,
+                stdout='',
+                stderr='fork failed: resource temporarily unavailable\n',
+            )
+        return original_tmux_run(args, check=check, capture=capture, timeout=timeout)
+
+    backend._tmux_run = _tmux_run  # type: ignore[method-assign]
+
+    assert session_alive(backend, 'ccb-proj') is True
+    assert backend.calls.count(('has-session', '-t', 'ccb-proj')) == 2
+
+
+def test_session_alive_treats_absent_project_server_as_missing_namespace(monkeypatch) -> None:
+    monkeypatch.setenv('CCB_TMUX_OBJECT_READY_POLL_INTERVAL_S', '0')
+    backend = _FlakyBackend()
+    backend.missing_session_stderr = 'no server running on /tmp/ccb-runtime/test.sock\n'
+
+    assert session_alive(backend, 'ccb-proj') is False
+    assert backend.calls.count(('has-session', '-t', 'ccb-proj')) == 1
+
+
+def test_wait_for_root_pane_raises_transient_unavailable_for_fast_probe(monkeypatch) -> None:
+    monkeypatch.setenv('CCB_TMUX_OBJECT_READY_POLL_INTERVAL_S', '0')
+    backend = _FlakyBackend()
+    backend.fail_once('list-panes', '-t', 'ccb-proj:workspace', '-F', '#{pane_id}')
+
+    with pytest.raises(TmuxTransientServerUnavailable):
+        wait_for_root_pane(backend, target_window='ccb-proj:workspace', timeout_s=0.0)
+
+
+def test_create_session_uses_terminal_size_hint_when_provided(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('CCB_TMUX_OBJECT_READY_POLL_INTERVAL_S', '0')
+    backend = _FlakyBackend()
+
+    create_session(
+        backend,
+        session_name='ccb-proj',
+        project_root=tmp_path,
+        window_name='cmd',
+        terminal_size=(233, 61),
+    )
+
+    assert backend.calls == [
+        (
+            'new-session',
+            '-d',
+            '-x',
+            '233',
+            '-y',
+            '61',
+            '-s',
+            'ccb-proj',
+            '-n',
+            'cmd',
+            '-c',
+            str(tmp_path),
+            'sh',
+            '-lc',
+            'while :; do sleep 3600; done',
+        )
+    ]

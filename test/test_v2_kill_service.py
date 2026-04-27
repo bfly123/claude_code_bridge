@@ -11,6 +11,7 @@ from ccbd.lifecycle_report_store import CcbdShutdownReportStore
 from ccbd.models import LeaseHealth
 from ccbd.services.start_policy import CcbdStartPolicy, CcbdStartPolicyStore
 from cli.context import CliContextBuilder
+import cli.services.daemon as daemon_service
 from cli.services.daemon import CcbdServiceError
 from cli.models import ParsedKillCommand
 from cli.services.daemon import KillSummary, shutdown_daemon
@@ -396,11 +397,12 @@ def test_shutdown_daemon_terminates_lingering_ccbd_pid(tmp_path: Path, monkeypat
         lease=lease,
     )
     client_calls: list[str] = []
+    captured: dict[str, float | None] = {}
     terminated: list[int] = []
 
     class FakeClient:
-        def __init__(self, _path):
-            pass
+        def __init__(self, _path, *, timeout_s=None):
+            captured['timeout_s'] = timeout_s
 
         def shutdown(self):
             client_calls.append('shutdown')
@@ -417,6 +419,7 @@ def test_shutdown_daemon_terminates_lingering_ccbd_pid(tmp_path: Path, monkeypat
     summary = shutdown_daemon(context, force=False)
 
     assert client_calls == ['shutdown']
+    assert captured['timeout_s'] is None
     assert terminated == [321]
     assert mark_calls == [
         {

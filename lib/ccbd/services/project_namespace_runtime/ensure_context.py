@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from .backend import build_backend, session_alive
+from .backend import build_backend, prepare_server, session_alive
 from .records import normalized_layout_signature
 
 
@@ -74,13 +74,32 @@ def load_namespace_context(
     return NamespaceEnsureContext(
         current=current,
         backend=backend,
-        session_is_alive=session_alive(backend, desired_session_name),
+        session_is_alive=False,
         desired_socket_path=desired_socket_path,
         desired_session_name=desired_session_name,
         desired_layout_signature=desired_layout_signature,
         desired_control_window_name=desired_control_window_name,
         desired_workspace_window_name=desired_workspace_window_name,
         recreate_cause=str(recreate_reason or '').strip() or None,
+    )
+
+
+def refresh_session_liveness(
+    controller,
+    context: NamespaceEnsureContext,
+    *,
+    timeout_s: float | None = None,
+) -> NamespaceEnsureContext:
+    del controller
+    if context.current is None:
+        return context.with_updates(session_is_alive=False)
+    prepare_server(context.backend)
+    return context.with_updates(
+        session_is_alive=session_alive(
+            context.backend,
+            context.desired_session_name,
+            timeout_s=timeout_s,
+        )
     )
 
 
@@ -92,5 +111,6 @@ __all__ = [
     'NamespaceEnsureContext',
     'desired_namespace_state',
     'load_namespace_context',
+    'refresh_session_liveness',
     'rebuild_namespace_backend',
 ]

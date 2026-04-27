@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import os
 import time
 from typing import Callable
 
+from terminal_runtime.tmux_readiness import (
+    TmuxTransientServerUnavailable,
+    is_tmux_absent_server_text,
+    is_tmux_missing_session_text,
+    is_tmux_transient_server_error_text,
+    tmux_object_ready_poll_interval_s,
+    tmux_object_ready_timeout_s,
+    tmux_failure_detail,
+)
+
 
 _PLACEHOLDER_CMD = 'while :; do sleep 3600; done'
-_TMUX_OBJECT_READY_TIMEOUT_S = 3.0
-_TMUX_OBJECT_READY_POLL_INTERVAL_S = 0.05
 
 
 @dataclass(frozen=True)
@@ -41,14 +48,22 @@ def ensure_server_policy(backend) -> None:
     )
 
 
-def create_session(backend, *, session_name: str, project_root, window_name: str | None = None) -> None:
+def create_session(
+    backend,
+    *,
+    session_name: str,
+    project_root,
+    window_name: str | None = None,
+    terminal_size: tuple[int, int] | None = None,
+) -> None:
+    width, height = _resolved_session_size(terminal_size)
     args = [
         'new-session',
         '-d',
         '-x',
-        '160',
+        str(width),
         '-y',
-        '48',
+        str(height),
         '-s',
         session_name,
     ]
@@ -68,6 +83,20 @@ def create_session(backend, *, session_name: str, project_root, window_name: str
         args,
         failure_message=f'failed to create tmux session {session_name!r}',
     )
+
+
+def _resolved_session_size(terminal_size: tuple[int, int] | None) -> tuple[int, int]:
+    default = (160, 48)
+    if terminal_size is None:
+        return default
+    try:
+        width = int(terminal_size[0])
+        height = int(terminal_size[1])
+    except Exception:
+        return default
+    if width <= 0 or height <= 0:
+        return default
+    return width, height
 
 
 def session_window_target(session_name: str, window_name: str | None = None) -> str:
@@ -182,22 +211,31 @@ def kill_window(backend, *, target: str) -> None:
     )
 
 
-def session_alive(backend, session_name: str) -> bool:
-    checker = getattr(backend, 'is_alive', None)
-    if not callable(checker):
-        return False
-    try:
-        return bool(checker(session_name))
-    except Exception:
-        return False
+def session_alive(backend, session_name: str, *, timeout_s: float | None = None) -> bool:
+    runner = getattr(backend, '_tmux_run', None)
+    if not callable(runner):
+        checker = getattr(backend, 'is_alive', None)
+        if not callable(checker):
+            return False
+        try:
+            return bool(checker(session_name))
+        except Exception:
+            return False
+    return bool(
+        _wait_until_ready(
+            lambda: _session_alive_once(backend, session_name),
+            failure_message=f'failed to inspect tmux session {session_name!r}',
+            timeout_s=timeout_s,
+        )
+    )
 
 
-def session_root_pane(backend, session_name: str) -> str:
-    return window_root_pane(backend, target_window=session_name)
+def session_root_pane(backend, session_name: str, *, timeout_s: float | None = None) -> str:
+    return window_root_pane(backend, target_window=session_name, timeout_s=timeout_s)
 
 
-def window_root_pane(backend, *, target_window: str) -> str:
-    pane_id = wait_for_root_pane(backend, target_window=target_window)
+def window_root_pane(backend, *, target_window: str, timeout_s: float | None = None) -> str:
+    pane_id = wait_for_root_pane(backend, target_window=target_window, timeout_s=timeout_s)
     if not pane_id.startswith('%'):
         raise RuntimeError(f'failed to resolve root pane for tmux target {target_window!r}')
     return pane_id
@@ -211,9 +249,17 @@ def kill_server(backend) -> bool:
         return False
 
 
-def wait_for_window(backend, *, session_name: str, window_name: str) -> TmuxWindowRecord | None:
+def wait_for_window(
+    backend,
+    *,
+    session_name: str,
+    window_name: str,
+    timeout_s: float | None = None,
+) -> TmuxWindowRecord | None:
     return _wait_until(
         lambda: find_window(backend, session_name=session_name, window_name=window_name),
+        timeout_s=timeout_s,
+        failure_message=f'failed to observe tmux window {window_name!r} for session {session_name!r}',
     )
 
 
@@ -229,9 +275,11 @@ def select_window(backend, *, target: str) -> None:
     )
 
 
-def wait_for_root_pane(backend, *, target_window: str) -> str:
+def wait_for_root_pane(backend, *, target_window: str, timeout_s: float | None = None) -> str:
     pane_id = _wait_until(
         lambda: _root_pane_once(backend, target_window=target_window),
+        timeout_s=timeout_s,
+        failure_message=f'failed to resolve root pane for tmux target {target_window!r}',
     )
     if pane_id is None:
         raise RuntimeError(f'failed to resolve root pane for tmux target {target_window!r}')
@@ -266,6 +314,8 @@ def _tmux_run_ready(
 def _tmux_run_once(backend, args: list[str]):
     try:
         return _tmux_run_checked(backend, args)
+    except TmuxTransientServerUnavailable:
+        raise
     except Exception:
         return None
 
@@ -274,19 +324,31 @@ def _tmux_run_checked(backend, args: list[str]):
     result = backend._tmux_run(args, check=False, capture=True)  # type: ignore[attr-defined]
     if int(getattr(result, 'returncode', 1) or 0) == 0:
         return result
-    stdout = str(getattr(result, 'stdout', '') or '').strip()
-    stderr = str(getattr(result, 'stderr', '') or '').strip()
-    detail = stderr or stdout or f'tmux command failed: {" ".join(args)}'
+    detail = tmux_failure_detail(result, args)
+    if is_tmux_transient_server_error_text(detail):
+        raise TmuxTransientServerUnavailable(detail)
     raise RuntimeError(detail)
 
 
-def _wait_until(probe: Callable[[], object | None], *, timeout_s: float | None = None):
+def _wait_until(
+    probe: Callable[[], object | None],
+    *,
+    timeout_s: float | None = None,
+    failure_message: str | None = None,
+):
     deadline = time.monotonic() + _tmux_object_ready_timeout_s(timeout_s)
+    last_transient: TmuxTransientServerUnavailable | None = None
     while True:
-        value = probe()
+        try:
+            value = probe()
+        except TmuxTransientServerUnavailable as exc:
+            last_transient = exc
+            value = None
         if value is not None:
             return value
         if time.monotonic() >= deadline:
+            if last_transient is not None and failure_message:
+                raise TmuxTransientServerUnavailable(failure_message) from last_transient
             return None
         time.sleep(_tmux_object_ready_poll_interval_s())
 
@@ -303,28 +365,38 @@ def _wait_until_ready(action: Callable[[], object], *, failure_message: str, tim
             break
         time.sleep(_tmux_object_ready_poll_interval_s())
     if last_error is not None:
+        if isinstance(last_error, TmuxTransientServerUnavailable):
+            raise TmuxTransientServerUnavailable(failure_message) from last_error
         raise RuntimeError(failure_message) from last_error
     raise RuntimeError(failure_message)
 
 
+def _session_alive_once(backend, session_name: str) -> bool:
+    result = backend._tmux_run(  # type: ignore[attr-defined]
+        ['has-session', '-t', session_name],
+        check=False,
+        capture=True,
+    )
+    if int(getattr(result, 'returncode', 1) or 0) == 0:
+        return True
+    stderr = str(getattr(result, 'stderr', '') or '').strip()
+    stdout = str(getattr(result, 'stdout', '') or '').strip()
+    detail = stderr or stdout
+    if is_tmux_absent_server_text(detail):
+        return False
+    if is_tmux_transient_server_error_text(detail):
+        raise TmuxTransientServerUnavailable(detail)
+    if not detail or is_tmux_missing_session_text(detail):
+        return False
+    raise RuntimeError(detail)
+
+
 def _tmux_object_ready_timeout_s(timeout_s: float | None = None) -> float:
-    if timeout_s is not None:
-        return max(0.0, float(timeout_s))
-    return _env_float('CCB_TMUX_OBJECT_READY_TIMEOUT_S', _TMUX_OBJECT_READY_TIMEOUT_S)
+    return tmux_object_ready_timeout_s(timeout_s)
 
 
 def _tmux_object_ready_poll_interval_s() -> float:
-    return max(0.0, _env_float('CCB_TMUX_OBJECT_READY_POLL_INTERVAL_S', _TMUX_OBJECT_READY_POLL_INTERVAL_S))
-
-
-def _env_float(name: str, default: float) -> float:
-    raw = str(os.environ.get(name) or '').strip()
-    if not raw:
-        return default
-    try:
-        return float(raw)
-    except Exception:
-        return default
+    return tmux_object_ready_poll_interval_s()
 
 
 __all__ = [
@@ -343,6 +415,7 @@ __all__ = [
     'session_root_pane',
     'session_window_target',
     'select_window',
+    'TmuxTransientServerUnavailable',
     'TmuxWindowRecord',
     'wait_for_root_pane',
     'wait_for_window',

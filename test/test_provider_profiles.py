@@ -6,6 +6,7 @@ from pathlib import Path
 from agents.models import AgentSpec, PermissionMode, ProviderProfileSpec, QueuePolicy, RestoreMode, RuntimeMode, WorkspaceMode
 from provider_backends.claude.launcher_runtime.home import materialize_claude_home_config
 from provider_backends.gemini.launcher_runtime.home import materialize_gemini_home_config
+from provider_profiles.codex_home_config import codex_provider_authority_fingerprint
 from provider_profiles import materialize_provider_profile
 from storage.paths import PathLayout
 
@@ -59,6 +60,72 @@ def test_materialize_codex_profile_copies_inherited_assets(tmp_path: Path, monke
     assert (runtime_home / 'skills' / 'demo.md').is_file()
     assert (runtime_home / 'commands' / 'demo.md').is_file()
     assert (runtime_home / 'sessions').is_dir()
+
+
+def test_materialize_codex_profile_writes_agent_local_provider_config_for_explicit_api(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    source_home = tmp_path / 'system-codex-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    (source_home / 'config.toml').write_text(
+        '\n'.join(
+            [
+                'model_provider = "stale"',
+                'model = "gpt-5.4-openai-compact"',
+                'model_reasoning_effort = "xhigh"',
+                'disable_response_storage = true',
+                '',
+                '[projects."/tmp/demo-project"]',
+                'trust_level = "trusted"',
+                '',
+                '[model_providers.stale]',
+                'name = "stale"',
+                'base_url = "https://stale.example.test/v1"',
+                'wire_api = "responses"',
+                'requires_openai_auth = true',
+                '',
+            ]
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+
+    profile = materialize_provider_profile(
+        layout=PathLayout(project_root),
+        spec=_spec(
+            'agent2',
+            provider_profile=ProviderProfileSpec(
+                mode='isolated',
+                env={
+                    'OPENAI_API_KEY': 'profile-key',
+                    'OPENAI_BASE_URL': 'https://api.rootflowai.com',
+                },
+                inherit_api=False,
+                inherit_auth=False,
+                inherit_config=False,
+            ),
+        ),
+        workspace_path=project_root,
+    )
+
+    runtime_home = Path(profile.runtime_home or '')
+    config_text = (runtime_home / 'config.toml').read_text(encoding='utf-8')
+    assert 'model_provider = "custom"' in config_text
+    assert 'model = "gpt-5.4-openai-compact"' in config_text
+    assert 'model_reasoning_effort = "xhigh"' in config_text
+    assert 'disable_response_storage = true' in config_text
+    assert '[projects."/tmp/demo-project"]' in config_text
+    assert '[model_providers.custom]' in config_text
+    assert 'base_url = "https://api.rootflowai.com"' in config_text
+    assert 'wire_api = "responses"' in config_text
+    assert 'requires_openai_auth = false' in config_text
+    assert 'https://stale.example.test/v1' not in config_text
+    assert 'env_key' not in config_text
+    assert codex_provider_authority_fingerprint(profile)
+    auth_payload = json.loads((runtime_home / 'auth.json').read_text(encoding='utf-8'))
+    assert auth_payload == {'OPENAI_API_KEY': 'profile-key'}
 
 
 def test_materialize_claude_profile_creates_runtime_home(tmp_path: Path) -> None:
@@ -148,6 +215,173 @@ def test_materialize_claude_home_config_preserves_runtime_hooks_and_permissions(
     assert payload['permissions']['allow'] == ['Bash(ls)']
 
 
+def test_materialize_claude_home_config_refreshes_inherited_skill_assets(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_claude_dir = source_home / '.claude'
+    (source_claude_dir / 'skills' / 'review').mkdir(parents=True, exist_ok=True)
+    (source_claude_dir / 'commands').mkdir(parents=True, exist_ok=True)
+    (source_claude_dir / 'skills' / 'review' / 'SKILL.md').write_text('skill-v1\n', encoding='utf-8')
+    (source_claude_dir / 'commands' / 'check.md').write_text('command-v1\n', encoding='utf-8')
+    (source_claude_dir / 'CLAUDE.md').write_text('claude-md-v1\n', encoding='utf-8')
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+
+    assert (layout.claude_dir / 'skills' / 'review' / 'SKILL.md').read_text(encoding='utf-8') == 'skill-v1\n'
+    assert (layout.claude_dir / 'commands' / 'check.md').read_text(encoding='utf-8') == 'command-v1\n'
+    assert (layout.claude_dir / 'CLAUDE.md').read_text(encoding='utf-8') == 'claude-md-v1\n'
+
+    (source_claude_dir / 'skills' / 'review' / 'SKILL.md').write_text('skill-v2\n', encoding='utf-8')
+    (source_claude_dir / 'commands' / 'check.md').write_text('command-v2\n', encoding='utf-8')
+    (source_claude_dir / 'CLAUDE.md').write_text('claude-md-v2\n', encoding='utf-8')
+
+    materialize_claude_home_config(target_home, source_home=source_home)
+
+    assert (layout.claude_dir / 'skills' / 'review' / 'SKILL.md').read_text(encoding='utf-8') == 'skill-v2\n'
+    assert (layout.claude_dir / 'commands' / 'check.md').read_text(encoding='utf-8') == 'command-v2\n'
+    assert (layout.claude_dir / 'CLAUDE.md').read_text(encoding='utf-8') == 'claude-md-v2\n'
+
+
+def test_materialize_claude_home_config_respects_inherit_skills_flag(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_claude_dir = source_home / '.claude'
+    (source_claude_dir / 'skills' / 'review').mkdir(parents=True, exist_ok=True)
+    (source_claude_dir / 'commands').mkdir(parents=True, exist_ok=True)
+    (source_claude_dir / 'skills' / 'review' / 'SKILL.md').write_text('skill\n', encoding='utf-8')
+    (source_claude_dir / 'commands' / 'check.md').write_text('command\n', encoding='utf-8')
+    (source_claude_dir / 'CLAUDE.md').write_text('claude-md\n', encoding='utf-8')
+
+    layout = materialize_claude_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_skills=False, inherit_commands=True),
+        source_home=source_home,
+    )
+
+    assert not (layout.claude_dir / 'skills').exists()
+    assert not (layout.claude_dir / 'CLAUDE.md').exists()
+    assert (layout.claude_dir / 'commands' / 'check.md').read_text(encoding='utf-8') == 'command\n'
+
+
+def test_materialize_claude_home_config_preserves_managed_auth_when_source_is_logged_out(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.claude' / 'settings.json'
+    source_settings.parent.mkdir(parents=True, exist_ok=True)
+    source_settings.write_text(
+        json.dumps(
+            {
+                'env': {
+                    'ANTHROPIC_BASE_URL': 'https://claude.example.test',
+                },
+                'theme': 'light',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    target_settings = target_home / '.claude' / 'settings.json'
+    target_settings.parent.mkdir(parents=True, exist_ok=True)
+    target_settings.write_text(
+        json.dumps(
+            {
+                'env': {
+                    'ANTHROPIC_AUTH_TOKEN': 'managed-token',
+                    'ANTHROPIC_BASE_URL': 'https://managed.example.test',
+                },
+                'theme': 'stale-theme',
+                'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': 'echo hook'}]}]},
+                'permissions': {'allow': ['Bash(ls)']},
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+
+    payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert payload['env']['ANTHROPIC_AUTH_TOKEN'] == 'managed-token'
+    assert payload['env']['ANTHROPIC_BASE_URL'] == 'https://claude.example.test'
+    assert payload['theme'] == 'light'
+    assert payload['hooks']['Stop'][0]['hooks'][0]['command'] == 'echo hook'
+    assert payload['permissions']['allow'] == ['Bash(ls)']
+
+
+def test_materialize_claude_home_config_refreshes_source_auth_over_managed_auth(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.claude' / 'settings.json'
+    source_settings.parent.mkdir(parents=True, exist_ok=True)
+    source_settings.write_text(
+        json.dumps(
+            {
+                'env': {
+                    'ANTHROPIC_AUTH_TOKEN': 'system-token',
+                    'ANTHROPIC_BASE_URL': 'https://claude.example.test',
+                },
+                'theme': 'light',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    target_settings = target_home / '.claude' / 'settings.json'
+    target_settings.parent.mkdir(parents=True, exist_ok=True)
+    target_settings.write_text(
+        json.dumps(
+            {
+                'env': {
+                    'ANTHROPIC_AUTH_TOKEN': 'managed-token',
+                    'ANTHROPIC_BASE_URL': 'https://managed.example.test',
+                },
+                'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': 'echo hook'}]}]},
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+
+    payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert payload['env']['ANTHROPIC_AUTH_TOKEN'] == 'system-token'
+    assert payload['env']['ANTHROPIC_BASE_URL'] == 'https://claude.example.test'
+    assert payload['theme'] == 'light'
+    assert payload['hooks']['Stop'][0]['hooks'][0]['command'] == 'echo hook'
+
+
+def test_materialize_claude_home_config_clears_stale_managed_auth_when_auth_is_not_inherited(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    target_settings = target_home / '.claude' / 'settings.json'
+    target_settings.parent.mkdir(parents=True, exist_ok=True)
+    target_settings.write_text(
+        json.dumps(
+            {
+                'env': {'ANTHROPIC_AUTH_TOKEN': 'managed-token'},
+                'theme': 'stale-theme',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    layout = materialize_claude_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_auth=False, inherit_api=False, inherit_config=True),
+        source_home=source_home,
+    )
+
+    payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert payload == {}
+
+
 def test_materialize_gemini_profile_keeps_runtime_home_unset_without_explicit_override(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo'
 
@@ -216,6 +450,114 @@ def test_materialize_gemini_home_config_projects_system_settings_into_managed_ho
     assert payload['env']['GEMINI_API_KEY'] == 'system-gemini-key'
     assert payload['env']['GOOGLE_API_KEY'] == 'system-google-key'
     assert payload['theme'] == 'Default'
+
+
+def test_materialize_gemini_home_config_projects_oauth_credentials_for_login_auth(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.gemini' / 'settings.json'
+    source_oauth = source_home / '.gemini' / 'oauth_creds.json'
+    source_settings.parent.mkdir(parents=True, exist_ok=True)
+    source_settings.write_text(
+        json.dumps(
+            {
+                'security': {
+                    'auth': {
+                        'selectedType': 'oauth-personal',
+                    }
+                },
+                'theme': 'Default',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    source_oauth.write_text(
+        json.dumps({'refresh_token': 'system-refresh-token'}, ensure_ascii=False, indent=2),
+        encoding='utf-8',
+    )
+
+    layout = materialize_gemini_home_config(target_home, source_home=source_home)
+
+    payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert payload['security']['auth']['selectedType'] == 'oauth-personal'
+    assert json.loads((layout.gemini_dir / 'oauth_creds.json').read_text(encoding='utf-8'))['refresh_token'] == 'system-refresh-token'
+
+
+def test_materialize_gemini_home_config_strips_oauth_selection_and_credentials_when_auth_not_inherited(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.gemini' / 'settings.json'
+    source_oauth = source_home / '.gemini' / 'oauth_creds.json'
+    source_settings.parent.mkdir(parents=True, exist_ok=True)
+    source_settings.write_text(
+        json.dumps(
+            {
+                'security': {
+                    'auth': {
+                        'selectedType': 'oauth-personal',
+                    }
+                },
+                'theme': 'Default',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    source_oauth.write_text(
+        json.dumps({'refresh_token': 'system-refresh-token'}, ensure_ascii=False, indent=2),
+        encoding='utf-8',
+    )
+    target_oauth = target_home / '.gemini' / 'oauth_creds.json'
+    target_oauth.parent.mkdir(parents=True, exist_ok=True)
+    target_oauth.write_text('{"refresh_token":"stale-token"}\n', encoding='utf-8')
+
+    layout = materialize_gemini_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_auth=False, inherit_config=True),
+        source_home=source_home,
+    )
+
+    payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert payload['theme'] == 'Default'
+    assert payload.get('security', {}).get('auth', {}).get('selectedType') is None
+    assert not (layout.gemini_dir / 'oauth_creds.json').exists()
+
+
+def test_materialize_gemini_home_config_strips_api_auth_selection_when_api_not_inherited(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.gemini' / 'settings.json'
+    source_settings.parent.mkdir(parents=True, exist_ok=True)
+    source_settings.write_text(
+        json.dumps(
+            {
+                'env': {'GEMINI_API_KEY': 'system-gemini-key'},
+                'security': {
+                    'auth': {
+                        'selectedType': 'gemini-api-key',
+                    }
+                },
+                'theme': 'Default',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    layout = materialize_gemini_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_api=False, inherit_config=True),
+        source_home=source_home,
+    )
+
+    payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert payload['theme'] == 'Default'
+    assert payload.get('env') is None
+    assert payload.get('security', {}).get('auth', {}).get('selectedType') is None
 
 
 def test_materialize_gemini_home_config_preserves_runtime_hooks(tmp_path: Path) -> None:

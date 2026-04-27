@@ -19,6 +19,10 @@ class ProjectDaemonInspection:
     desired_state: str
     last_failure_reason: str | None = None
     shutdown_intent: str | None = None
+    startup_id: str | None = None
+    startup_stage: str | None = None
+    last_progress_at: str | None = None
+    startup_deadline_at: str | None = None
     lifecycle: object | None = None
 
     @property
@@ -73,6 +77,10 @@ def build_project_daemon_inspection(lease_inspection, *, lifecycle) -> ProjectDa
         desired_state=desired_state,
         last_failure_reason=str(getattr(lifecycle, 'last_failure_reason', '') or '').strip() or None,
         shutdown_intent=str(getattr(lifecycle, 'shutdown_intent', '') or '').strip() or None,
+        startup_id=str(getattr(lifecycle, 'startup_id', '') or '').strip() or None,
+        startup_stage=str(getattr(lifecycle, 'startup_stage', '') or '').strip() or None,
+        last_progress_at=str(getattr(lifecycle, 'last_progress_at', '') or '').strip() or None,
+        startup_deadline_at=str(getattr(lifecycle, 'startup_deadline_at', '') or '').strip() or None,
         lifecycle=lifecycle,
     )
 

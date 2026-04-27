@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .api_shortcuts import provider_api_shortcut_env, supported_provider_api_shortcuts
 from .models import ProviderProfileSpec, ResolvedProviderProfile
 
 
@@ -30,4 +31,6 @@ __all__ = [
     'load_resolved_provider_profile',
     'materialize_provider_profile',
     'provider_api_env_keys',
+    'provider_api_shortcut_env',
+    'supported_provider_api_shortcuts',
 ]

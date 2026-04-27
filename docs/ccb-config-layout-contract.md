@@ -58,6 +58,117 @@ Examples:
 - Compact config leaf order defines `default_agents`.
 - Rich `ccb.config` formats may define agents separately, but must still provide a `layout` compatible with the same leaf rules.
 
+### 4.1 Compact Header With Agent Overlay
+
+`ccb.config` may combine a compact layout header with trailing TOML agent
+overlays.
+
+Example:
+
+```toml
+cmd, agent1:codex; agent2:claude
+
+[agents.agent1]
+key = "..."
+url = "..."
+```
+
+Contract:
+
+- The first compact block is the authority for:
+  - `layout`
+  - `default_agents`
+  - `cmd_enabled`
+  - agent `provider`
+  - agent `workspace_mode`
+- The trailing TOML overlay may define only `agents.<name>...` tables.
+- Hybrid overlays must not redefine compact-header-owned agent fields such as:
+  - `provider`
+  - `workspace_mode`
+- Hybrid overlays must not introduce agents that do not already exist in the
+  compact layout header.
+- Config rendering should prefer:
+  - pure compact when no per-agent overlay is needed
+  - compact header + TOML overlay when agent-local overrides are needed
+  - expanding simple overlay cases into full-document TOML is not the preferred
+    canonical output
+
+### 4.2 Agent API Shortcut
+
+For the common case where an agent only needs its own API key or base URL, rich
+or hybrid `ccb.config` may use agent-local shortcut fields in the agent table:
+
+```toml
+[agents.agent1]
+key = "..."
+url = "..."
+```
+
+Contract:
+
+- `key` and `url` are supported only for known API-backed providers with
+  first-class
+  mappings:
+  - `codex`
+  - `claude`
+  - `gemini`
+- `key` and `url` are the only canonical shortcut fields.
+- `key/url` is user-facing sugar only. The loader must compile it to the existing
+  provider-profile API env authority for that provider and force
+  `provider_profile.inherit_api = false`.
+- For Codex, compiling the `url` shortcut must normalize a bare origin such as
+  `https://example.test` to the OpenAI-compatible API root
+  `https://example.test/v1`.
+- Explicit `key/url` authority must also suppress inherited provider state that
+  would silently redefine that API authority.
+  For all shortcut-backed providers, compiling `key/url` must also disable
+  inherited auth projection so managed startup does not retain a second
+  credential authority beside the explicit agent-local API route.
+  For Codex, `key/url` disables inherited global `config.toml` routing
+  projection, replaces it with an agent-local managed `config.toml`
+  `model_provider` / `model_providers.<id>` authority derived from that
+  explicit API route. That managed Codex route must use the standard custom
+  provider shape with `requires_openai_auth = false`, and explicit base-url env
+  exports must be suppressed so the managed `config.toml` remains the single
+  route authority. An explicit `key` also disables inherited global `auth.json`
+  credential projection.
+- When `key` or `url` is present, provider API env must not also be declared in:
+  - `agents.<name>.env`
+  - `agents.<name>.provider_profile.env`
+- Advanced API env not expressible as `key` or `url` remains a
+  `provider_profile.env` concern. Do not invent a second runtime path for that
+  advanced case.
+- Legacy nested syntax under `agents.<name>.api` remains accepted for backward
+  compatibility, but it is non-canonical.
+- Config rendering and recovery must preserve the user-facing `key/url` shortcut
+  instead of expanding it back into verbose provider-profile API env or nested
+  `api` tables.
+
+### 4.3 Agent Model Shortcut
+
+For the common case where an agent only needs a provider model override, rich or
+hybrid `ccb.config` may use an agent-local model shortcut:
+
+```toml
+[agents.agent1]
+model = "gpt-5"
+```
+
+Contract:
+
+- `model` is supported only for providers with first-class CLI model flags:
+  - `codex`
+  - `claude`
+  - `gemini`
+  - `opencode`
+- `model` is user-facing sugar only. The loader/runtime model must compile it
+  onto the existing provider startup-argument path instead of introducing a
+  second launch authority.
+- `model` may coexist with unrelated `startup_args`, but must not be combined
+  with provider model flags already present in `startup_args`.
+- Config rendering and recovery must preserve the user-facing `model` field
+  instead of expanding it into provider-specific `startup_args`.
+
 ## 5. Default Layout Contract
 
 Bootstrap must generate a balanced two-column layout over all visible panes.

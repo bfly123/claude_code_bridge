@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
-import shutil
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from agents.models import AgentSpec
 from provider_profiles.models import ProviderProfileSpec, ResolvedProviderProfile
+from provider_profiles.codex_home_config import materialize_codex_home_config
 from storage.atomic import atomic_write_json
 from storage.paths import PathLayout
 
@@ -105,19 +104,7 @@ def _materialize_codex_profile(
     runtime_home = None
     if needs_runtime_home:
         runtime_home = profile_root
-        runtime_home.mkdir(parents=True, exist_ok=True)
-        (runtime_home / 'sessions').mkdir(parents=True, exist_ok=True)
-        source_home = _system_codex_home()
-        if profile_spec.inherit_config:
-            _copy_if_missing(source_home / 'config.toml', runtime_home / 'config.toml')
-        elif not (runtime_home / 'config.toml').exists():
-            (runtime_home / 'config.toml').write_text('# ccb agent-local codex config\n', encoding='utf-8')
-        if profile_spec.inherit_auth:
-            _copy_if_missing(source_home / 'auth.json', runtime_home / 'auth.json')
-        if profile_spec.inherit_skills:
-            _copytree_if_missing(source_home / 'skills', runtime_home / 'skills')
-        if profile_spec.inherit_commands:
-            _copytree_if_missing(source_home / 'commands', runtime_home / 'commands')
+        materialize_codex_home_config(runtime_home, profile=profile_spec)
 
     return ResolvedProviderProfile(
         provider=spec.provider,
@@ -206,24 +193,6 @@ def _write_profile_record(runtime_dir: Path, profile: ResolvedProviderProfile) -
     path = Path(runtime_dir) / 'provider-profile.json'
     atomic_write_json(path, profile.to_record())
     return path
-
-
-def _system_codex_home() -> Path:
-    return Path(os.environ.get('CODEX_HOME') or (Path.home() / '.codex')).expanduser()
-
-
-def _copy_if_missing(source: Path, target: Path) -> None:
-    if target.exists() or not source.is_file():
-        return
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, target)
-
-
-def _copytree_if_missing(source: Path, target: Path) -> None:
-    if target.exists() or not source.is_dir():
-        return
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(source, target)
 
 
 __all__ = ['load_resolved_provider_profile', 'materialize_provider_profile', 'provider_api_env_keys']

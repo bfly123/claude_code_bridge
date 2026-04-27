@@ -12,6 +12,7 @@ from ccbd.supervision import RuntimeSupervisionLoop, SupervisionEventStore
 from project.resolver import bootstrap_project
 from provider_core.contracts import ProviderSessionBinding
 from storage.paths import PathLayout
+from terminal_runtime.tmux_readiness import TmuxTransientServerUnavailable
 
 
 def _runtime(agent_name: str, *, project_id: str, layout: PathLayout, pid: int, health: str) -> AgentRuntime:
@@ -592,6 +593,52 @@ def test_runtime_supervision_loop_keeps_healthy_cmd_slot_stable(tmp_path: Path, 
     assert remount_calls == []
 
 
+def test_runtime_supervision_loop_defers_cmd_recovery_on_transient_tmux_unavailable(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-supervision-cmd-deferred'
+    project_root.mkdir()
+    ctx = bootstrap_project(project_root)
+    layout = PathLayout(project_root)
+    config = replace(_provider_config('codex'), cmd_enabled=True, layout_spec='cmd; codex')
+    registry = AgentRegistry(layout, config)
+    runtime_service = RuntimeService(layout, registry, ctx.project_id, clock=lambda: '2026-03-18T00:00:00Z')
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101, health='healthy'))
+    remount_calls: list[str] = []
+
+    class _NamespaceController:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self._backend_factory = lambda socket_path=None: object()
+
+        def load(self):
+            return SimpleNamespace(
+                ui_attachable=True,
+                tmux_socket_path=str(layout.ccbd_tmux_socket_path),
+                tmux_session_name=layout.ccbd_tmux_session_name,
+                workspace_window_id='@2',
+            )
+
+        def root_pane_id(self, namespace=None, *, timeout_s=None) -> str:
+            del namespace, timeout_s
+            raise TmuxTransientServerUnavailable('no server running on /tmp/ccb-runtime/test.sock')
+
+    monkeypatch.setattr('ccbd.supervision.cmd_slot.ProjectNamespaceController', _NamespaceController)
+
+    loop = RuntimeSupervisionLoop(
+        project_id=ctx.project_id,
+        layout=layout,
+        config=config,
+        registry=registry,
+        runtime_service=runtime_service,
+        remount_project_fn=lambda reason: remount_calls.append(reason),
+        clock=lambda: '2026-03-18T00:00:10Z',
+        generation_getter=lambda: 46,
+    )
+
+    statuses = loop.reconcile_once()
+
+    assert statuses == {'codex': 'healthy'}
+    assert remount_calls == []
+
+
 def test_runtime_supervision_loop_reflows_when_cmd_slot_is_missing(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / 'repo-supervision-cmd-missing'
     project_root.mkdir()
@@ -981,6 +1028,49 @@ def test_runtime_supervision_loop_persists_mount_failure(tmp_path: Path) -> None
     events = SupervisionEventStore(layout).read_all()
     assert [event.event_kind for event in events] == ['mount_started', 'mount_failed']
     assert events[1].details == {'reason': 'RuntimeError: launch boom'}
+
+
+def test_runtime_supervision_loop_defers_transient_mount_failure(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-supervision-mount-transient'
+    project_root.mkdir()
+    ctx = bootstrap_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex')
+    registry = AgentRegistry(layout, config)
+    runtime_service = RuntimeService(layout, registry, ctx.project_id, clock=lambda: '2026-03-18T00:00:00Z')
+
+    def _mount(agent_name: str) -> None:
+        del agent_name
+        raise TmuxTransientServerUnavailable('no server running on /tmp/ccb-runtime/test.sock')
+
+    loop = RuntimeSupervisionLoop(
+        project_id=ctx.project_id,
+        layout=layout,
+        config=config,
+        registry=registry,
+        runtime_service=runtime_service,
+        mount_agent_fn=_mount,
+        clock=lambda: '2026-03-18T00:00:10Z',
+        generation_getter=lambda: 22,
+    )
+
+    statuses = loop.reconcile_once()
+
+    assert statuses == {'codex': 'start-deferred'}
+    runtime = registry.get('codex')
+    assert runtime is not None
+    assert runtime.state is AgentState.FAILED
+    assert runtime.health == 'start-deferred'
+    assert runtime.reconcile_state == 'deferred'
+    assert runtime.restart_count == 1
+    assert runtime.last_failure_reason == (
+        'TmuxTransientServerUnavailable: no server running on /tmp/ccb-runtime/test.sock'
+    )
+    events = SupervisionEventStore(layout).read_all()
+    assert [event.event_kind for event in events] == ['mount_started', 'mount_failed']
+    assert events[1].details == {
+        'reason': 'TmuxTransientServerUnavailable: no server running on /tmp/ccb-runtime/test.sock'
+    }
 
 
 def test_runtime_supervision_loop_applies_failure_backoff(tmp_path: Path, monkeypatch) -> None:

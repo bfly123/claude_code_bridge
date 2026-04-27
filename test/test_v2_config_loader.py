@@ -4,15 +4,17 @@ from pathlib import Path
 
 import pytest
 
+import agents.config_loader_runtime.io_runtime.documents as config_documents
 from agents.config_loader import (
     ConfigValidationError,
     build_default_project_config,
     ensure_bootstrap_project_config,
     ensure_default_project_config,
     load_project_config,
+    render_project_config_text,
     render_default_project_config_text,
 )
-from agents.models import AgentSpec, PermissionMode, QueuePolicy, RestoreMode, RuntimeMode, WorkspaceMode
+from agents.models import AgentApiSpec, AgentSpec, PermissionMode, QueuePolicy, RestoreMode, RuntimeMode, WorkspaceMode
 from agents.store import AgentSpecStore
 from storage.paths import PathLayout
 
@@ -267,6 +269,721 @@ OPENAI_API_KEY = "sk-test"
     assert spec.provider_profile.env == {'OPENAI_API_KEY': 'sk-test'}
 
 
+@pytest.mark.parametrize(
+    ('provider', 'api_block', 'expected_key', 'expected_url', 'expected_env', 'expected_inherit_config'),
+    [
+        (
+            'codex',
+            'key = "sk-test"\nurl = "https://openai.example.test/v1"\n',
+            'sk-test',
+            'https://openai.example.test/v1',
+            {
+                'OPENAI_API_KEY': 'sk-test',
+                'OPENAI_BASE_URL': 'https://openai.example.test/v1',
+            },
+            False,
+        ),
+        (
+            'claude',
+            'key = "claude-key"\nurl = "https://claude.example.test"\n',
+            'claude-key',
+            'https://claude.example.test',
+            {
+                'ANTHROPIC_API_KEY': 'claude-key',
+                'ANTHROPIC_BASE_URL': 'https://claude.example.test',
+            },
+            True,
+        ),
+        (
+            'gemini',
+            'key = "gemini-key"\nurl = "https://gemini.example.test"\n',
+            'gemini-key',
+            'https://gemini.example.test',
+            {
+                'GEMINI_API_KEY': 'gemini-key',
+                'GOOGLE_API_BASE': 'https://gemini.example.test',
+            },
+            True,
+        ),
+    ],
+)
+def test_load_project_config_supports_toml_agent_api_shortcut(
+    tmp_path: Path,
+    provider: str,
+    api_block: str,
+    expected_key: str,
+    expected_url: str,
+    expected_env: dict[str, str],
+    expected_inherit_config: bool,
+) -> None:
+    project_root = tmp_path / f'repo-{provider}-api'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        f"""version = 2
+default_agents = ["agent1"]
+layout = "cmd; agent1"
+cmd_enabled = true
+
+[agents.agent1]
+provider = "{provider}"
+target = "."
+workspace_mode = "git-worktree"
+restore = "auto"
+permission = "manual"
+
+{api_block}""",
+    )
+
+    result = load_project_config(project_root)
+    spec = result.config.agents['agent1']
+
+    assert spec.api.key == expected_key
+    assert spec.api.url == expected_url
+    assert spec.provider_profile.inherit_api is False
+    assert spec.provider_profile.inherit_auth is False
+    assert spec.provider_profile.inherit_config is expected_inherit_config
+    assert spec.provider_profile.env == expected_env
+
+
+def test_load_project_config_supports_legacy_nested_agent_api_shortcut(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-legacy-nested-api'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        """version = 2
+default_agents = ["agent1"]
+layout = "cmd; agent1"
+cmd_enabled = true
+
+[agents.agent1]
+provider = "codex"
+target = "."
+workspace_mode = "git-worktree"
+restore = "auto"
+permission = "manual"
+
+[agents.agent1.api]
+key = "sk-legacy"
+url = "https://legacy.example.test/v1"
+""",
+    )
+
+    result = load_project_config(project_root)
+    spec = result.config.agents['agent1']
+
+    assert spec.api.key == 'sk-legacy'
+    assert spec.api.url == 'https://legacy.example.test/v1'
+    assert spec.provider_profile.inherit_api is False
+    assert spec.provider_profile.env == {
+        'OPENAI_API_KEY': 'sk-legacy',
+        'OPENAI_BASE_URL': 'https://legacy.example.test/v1',
+    }
+    assert spec.provider_profile.inherit_config is False
+    assert spec.provider_profile.inherit_auth is False
+
+
+def test_load_project_config_codex_api_shortcut_disables_conflicting_global_projection(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-codex-shortcut-flags'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        """version = 2
+default_agents = ["agent1"]
+layout = "cmd; agent1"
+cmd_enabled = true
+
+[agents.agent1]
+provider = "codex"
+target = "."
+workspace_mode = "git-worktree"
+restore = "auto"
+permission = "manual"
+key = "sk-shortcut"
+url = "https://api.example.test/v1"
+""",
+    )
+
+    result = load_project_config(project_root)
+    spec = result.config.agents['agent1']
+
+    assert spec.provider_profile.inherit_api is False
+    assert spec.provider_profile.inherit_config is False
+    assert spec.provider_profile.inherit_auth is False
+
+
+def test_load_project_config_supports_uppercase_agent_api_keys(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-uppercase-api'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        """version = 2
+default_agents = ["agent1"]
+layout = "cmd; agent1"
+cmd_enabled = true
+
+[agents.agent1]
+provider = "codex"
+target = "."
+workspace_mode = "git-worktree"
+restore = "auto"
+permission = "manual"
+
+[agents.agent1.api]
+KEY = "sk-upper"
+URL = "https://upper.example.test/v1"
+""",
+    )
+
+    result = load_project_config(project_root)
+    spec = result.config.agents['agent1']
+
+    assert spec.api.key == 'sk-upper'
+    assert spec.api.url == 'https://upper.example.test/v1'
+    assert spec.provider_profile.env == {
+        'OPENAI_API_KEY': 'sk-upper',
+        'OPENAI_BASE_URL': 'https://upper.example.test/v1',
+    }
+
+
+def test_load_project_config_normalizes_bare_codex_api_origin_to_v1_env(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-codex-origin-api'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        """version = 2
+default_agents = ["agent1"]
+layout = "cmd; agent1"
+cmd_enabled = true
+
+[agents.agent1]
+provider = "codex"
+target = "."
+workspace_mode = "git-worktree"
+restore = "auto"
+permission = "manual"
+key = "sk-origin"
+url = "https://api.example.test"
+""",
+    )
+
+    result = load_project_config(project_root)
+    spec = result.config.agents['agent1']
+
+    assert spec.api.key == 'sk-origin'
+    assert spec.api.url == 'https://api.example.test'
+    assert spec.provider_profile.env == {
+        'OPENAI_API_KEY': 'sk-origin',
+        'OPENAI_BASE_URL': 'https://api.example.test/v1',
+    }
+
+
+def test_load_project_config_supports_compact_header_with_agent_api_overlay(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-hybrid-api'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        """cmd, agent1:codex; agent2:claude
+
+[agents.agent1]
+key = "sk-hybrid"
+url = "https://api.example.test/v1"
+""",
+    )
+
+    result = load_project_config(project_root)
+
+    assert result.config.layout_spec == 'cmd, agent1:codex; agent2:claude'
+    assert result.config.default_agents == ('agent1', 'agent2')
+    assert result.config.agents['agent1'].api == AgentApiSpec(
+        key='sk-hybrid',
+        url='https://api.example.test/v1',
+    )
+    assert result.config.agents['agent2'].provider == 'claude'
+
+
+def test_load_project_config_rejects_mixed_flat_and_nested_agent_api_shortcuts(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-mixed-api-shortcuts'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        """cmd; agent1:codex
+
+[agents.agent1]
+key = "sk-flat"
+
+[agents.agent1.api]
+url = "https://api.example.test/v1"
+""",
+    )
+
+    with pytest.raises(ConfigValidationError, match='key/url cannot be combined with agents\\.agent1\\.api'):
+        load_project_config(project_root)
+
+
+@pytest.mark.parametrize(
+    ('provider', 'model_name', 'expected_startup_args'),
+    [
+        ('codex', 'gpt-5', ('-m', 'gpt-5')),
+        ('claude', 'opus', ('--model', 'opus')),
+        ('gemini', 'gemini-2.5-pro', ('-m', 'gemini-2.5-pro')),
+        ('opencode', 'openai/gpt-5', ('-m', 'openai/gpt-5')),
+    ],
+)
+def test_load_project_config_supports_agent_model_shortcut(
+    tmp_path: Path,
+    provider: str,
+    model_name: str,
+    expected_startup_args: tuple[str, ...],
+) -> None:
+    project_root = tmp_path / f'repo-{provider}-model'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        f"""cmd; agent1:{provider}
+
+[agents.agent1]
+model = "{model_name}"
+""",
+    )
+
+    result = load_project_config(project_root)
+    spec = result.config.agents['agent1']
+
+    assert spec.model == model_name
+    assert spec.startup_args == expected_startup_args
+
+
+def test_load_project_config_supports_agent_model_shortcut_with_extra_startup_args(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-model-extra-startup-args'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        """cmd; agent1:codex
+
+[agents.agent1]
+model = "gpt-5"
+startup_args = ["--search"]
+""",
+    )
+
+    result = load_project_config(project_root)
+    spec = result.config.agents['agent1']
+
+    assert spec.model == 'gpt-5'
+    assert spec.startup_args == ('-m', 'gpt-5', '--search')
+
+
+def test_load_project_config_rejects_agent_model_shortcut_for_unsupported_provider(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-model-unsupported-provider'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        """cmd; agent1:droid
+
+[agents.agent1]
+model = "droid-pro"
+""",
+    )
+
+    with pytest.raises(ConfigValidationError, match='model shortcut is supported only for providers'):
+        load_project_config(project_root)
+
+
+def test_load_project_config_rejects_agent_model_shortcut_mixed_with_startup_arg_model_flag(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-model-startup-conflict'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        """cmd; agent1:codex
+
+[agents.agent1]
+model = "gpt-5"
+startup_args = ["--model", "gpt-4.1"]
+""",
+    )
+
+    with pytest.raises(ConfigValidationError, match='model cannot be combined with startup_args model flags'):
+        load_project_config(project_root)
+
+
+def test_load_project_config_rejects_hybrid_overlay_redefining_compact_provider(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-hybrid-provider-conflict'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        """cmd; agent1:codex
+
+[agents.agent1]
+provider = "claude"
+""",
+    )
+
+    with pytest.raises(ConfigValidationError, match='cannot redefine compact-header fields'):
+        load_project_config(project_root)
+
+
+def test_load_project_config_rejects_hybrid_overlay_for_unknown_agent(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-hybrid-unknown-agent'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        """cmd; agent1:codex
+
+[agents.agent2]
+key = "sk-extra"
+""",
+    )
+
+    with pytest.raises(ConfigValidationError, match="cannot define agent 'agent2' outside the compact layout"):
+        load_project_config(project_root)
+
+
+def test_load_project_config_rejects_hybrid_overlay_top_level_fields(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-hybrid-top-level'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        """cmd; agent1:codex
+
+version = 2
+""",
+    )
+
+    with pytest.raises(ConfigValidationError, match='hybrid overlay contains unsupported top-level fields: version'):
+        load_project_config(project_root)
+
+
+def test_load_project_config_rejects_agent_api_shortcut_mixed_with_agent_env(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-agent-api-env-conflict'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        """version = 2
+default_agents = ["agent1"]
+layout = "cmd; agent1"
+cmd_enabled = true
+
+[agents.agent1]
+provider = "codex"
+target = "."
+workspace_mode = "git-worktree"
+restore = "auto"
+permission = "manual"
+key = "sk-shortcut"
+
+[agents.agent1.env]
+OPENAI_API_KEY = "sk-conflict"
+""",
+    )
+
+    with pytest.raises(ConfigValidationError, match='key/url cannot be mixed with provider API env in agents\\.agent1\\.env'):
+        load_project_config(project_root)
+
+
+def test_load_project_config_rejects_agent_api_shortcut_mixed_with_provider_profile_env(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-provider-api-env-conflict'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        """version = 2
+default_agents = ["agent1"]
+layout = "cmd; agent1"
+cmd_enabled = true
+
+[agents.agent1]
+provider = "codex"
+target = "."
+workspace_mode = "git-worktree"
+restore = "auto"
+permission = "manual"
+key = "sk-shortcut"
+
+[agents.agent1.provider_profile.env]
+OPENAI_API_KEY = "sk-conflict"
+""",
+    )
+
+    with pytest.raises(
+        ConfigValidationError,
+        match='key/url cannot be mixed with provider API env in agents\\.agent1\\.provider_profile\\.env',
+    ):
+        load_project_config(project_root)
+
+
+def test_load_project_config_rejects_agent_api_shortcut_with_explicit_inherit_api_true(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-provider-inherit-api-conflict'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        """version = 2
+default_agents = ["agent1"]
+layout = "cmd; agent1"
+cmd_enabled = true
+
+[agents.agent1]
+provider = "codex"
+target = "."
+workspace_mode = "git-worktree"
+restore = "auto"
+permission = "manual"
+key = "sk-shortcut"
+
+[agents.agent1.provider_profile]
+inherit_api = true
+""",
+    )
+
+    with pytest.raises(
+        ConfigValidationError,
+        match='key/url cannot be combined with agents\\.agent1\\.provider_profile\\.inherit_api = true',
+    ):
+        load_project_config(project_root)
+
+
+def test_load_project_config_rejects_codex_api_shortcut_with_explicit_inherit_config_true(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-provider-inherit-config-conflict'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        """version = 2
+default_agents = ["agent1"]
+layout = "cmd; agent1"
+cmd_enabled = true
+
+[agents.agent1]
+provider = "codex"
+target = "."
+workspace_mode = "git-worktree"
+restore = "auto"
+permission = "manual"
+url = "https://api.example.test/v1"
+
+[agents.agent1.provider_profile]
+inherit_config = true
+""",
+    )
+
+    with pytest.raises(
+        ConfigValidationError,
+        match='key/url cannot be combined with agents\\.agent1\\.provider_profile\\.inherit_config = true for codex',
+    ):
+        load_project_config(project_root)
+
+
+@pytest.mark.parametrize('provider,key_field', [('codex', 'sk-shortcut'), ('claude', 'claude-key'), ('gemini', 'gemini-key')])
+def test_load_project_config_rejects_agent_api_shortcut_with_explicit_inherit_auth_true(
+    tmp_path: Path,
+    provider: str,
+    key_field: str,
+) -> None:
+    project_root = tmp_path / f'repo-provider-inherit-auth-conflict-{provider}'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        f"""version = 2
+default_agents = ["agent1"]
+layout = "cmd; agent1"
+cmd_enabled = true
+
+[agents.agent1]
+provider = "{provider}"
+target = "."
+workspace_mode = "git-worktree"
+restore = "auto"
+permission = "manual"
+key = "{key_field}"
+
+[agents.agent1.provider_profile]
+inherit_auth = true
+""",
+    )
+
+    with pytest.raises(
+        ConfigValidationError,
+        match='key/url cannot be combined with agents\\.agent1\\.provider_profile\\.inherit_auth = true',
+    ):
+        load_project_config(project_root)
+
+
+def test_render_project_config_text_round_trips_agent_api_shortcut(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-render-api'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        """version = 2
+default_agents = ["agent1"]
+layout = "cmd; agent1"
+cmd_enabled = true
+
+[agents.agent1]
+provider = "codex"
+target = "."
+workspace_mode = "git-worktree"
+restore = "auto"
+permission = "manual"
+key = "sk-test"
+url = "https://api.example.test/v1"
+
+[agents.agent1.provider_profile]
+mode = "isolated"
+inherit_skills = false
+""",
+    )
+
+    loaded = load_project_config(project_root)
+    rendered = render_project_config_text(loaded.config)
+
+    assert rendered.startswith('cmd; agent1:codex(worktree)\n')
+    assert '[agents.agent1]' in rendered
+    assert 'key = "sk-test"' in rendered
+    assert 'url = "https://api.example.test/v1"' in rendered
+    assert '[agents.agent1.api]' not in rendered
+    assert 'OPENAI_API_KEY' not in rendered
+    assert 'inherit_api = false' not in rendered
+
+    rewritten_path = tmp_path / 'repo-render-api-roundtrip' / '.ccb' / 'ccb.config'
+    _write(rewritten_path, rendered)
+
+    round_tripped = load_project_config(rewritten_path.parents[1])
+    spec = round_tripped.config.agents['agent1']
+
+    assert spec.api == AgentApiSpec(key='sk-test', url='https://api.example.test/v1')
+    assert spec.provider_profile.mode == 'isolated'
+    assert spec.provider_profile.inherit_api is False
+    assert spec.provider_profile.inherit_skills is False
+    assert spec.provider_profile.env == {
+        'OPENAI_API_KEY': 'sk-test',
+        'OPENAI_BASE_URL': 'https://api.example.test/v1',
+    }
+
+
+def test_render_project_config_text_migrates_legacy_nested_agent_api_shortcut_to_flat_fields(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-render-legacy-api'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        """version = 2
+default_agents = ["agent1"]
+layout = "cmd; agent1"
+cmd_enabled = true
+
+[agents.agent1]
+provider = "codex"
+target = "."
+workspace_mode = "git-worktree"
+restore = "auto"
+permission = "manual"
+
+[agents.agent1.api]
+key = "sk-legacy"
+url = "https://legacy.example.test/v1"
+""",
+    )
+
+    loaded = load_project_config(project_root)
+    rendered = render_project_config_text(loaded.config)
+
+    assert '[agents.agent1.api]' not in rendered
+    assert '[agents.agent1]' in rendered
+    assert 'key = "sk-legacy"' in rendered
+    assert 'url = "https://legacy.example.test/v1"' in rendered
+
+
+def test_render_project_config_text_round_trips_agent_model_shortcut(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-render-model'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        """version = 2
+default_agents = ["agent1"]
+layout = "cmd; agent1"
+cmd_enabled = true
+
+[agents.agent1]
+provider = "codex"
+target = "."
+workspace_mode = "git-worktree"
+restore = "auto"
+permission = "manual"
+model = "gpt-5"
+startup_args = ["--search"]
+key = "sk-test"
+url = "https://api.example.test/v1"
+""",
+    )
+
+    loaded = load_project_config(project_root)
+    rendered = render_project_config_text(loaded.config)
+
+    assert rendered.startswith('cmd; agent1:codex(worktree)\n')
+    assert '[agents.agent1]' in rendered
+    assert 'model = "gpt-5"' in rendered
+    assert 'startup_args = ["--search"]' in rendered
+    assert 'startup_args = ["-m", "gpt-5", "--search"]' not in rendered
+
+    rewritten_path = tmp_path / 'repo-render-model-roundtrip' / '.ccb' / 'ccb.config'
+    _write(rewritten_path, rendered)
+
+    round_tripped = load_project_config(rewritten_path.parents[1])
+    spec = round_tripped.config.agents['agent1']
+
+    assert spec.model == 'gpt-5'
+    assert spec.startup_args == ('-m', 'gpt-5', '--search')
+    assert spec.api == AgentApiSpec(key='sk-test', url='https://api.example.test/v1')
+
+
+def test_render_project_config_text_round_trips_noncompact_provider_profile(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-render-provider-profile'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        """version = 2
+default_agents = ["agent1"]
+layout = "cmd; agent1"
+cmd_enabled = true
+
+[agents.agent1]
+provider = "claude"
+target = "."
+workspace_mode = "git-worktree"
+restore = "auto"
+permission = "manual"
+
+[agents.agent1.provider_profile]
+mode = "isolated"
+inherit_api = false
+inherit_auth = false
+
+[agents.agent1.provider_profile.env]
+ANTHROPIC_API_KEY = "claude-key"
+ANTHROPIC_BASE_URL = "https://claude.example.test"
+""",
+    )
+
+    loaded = load_project_config(project_root)
+    rendered = render_project_config_text(loaded.config)
+
+    assert rendered.startswith('cmd; agent1:claude(worktree)\n')
+    assert '[agents.agent1.provider_profile]' in rendered
+    assert '[agents.agent1.provider_profile.env]' in rendered
+    assert 'ANTHROPIC_API_KEY = "claude-key"' in rendered
+
+    rewritten_path = tmp_path / 'repo-render-provider-profile-roundtrip' / '.ccb' / 'ccb.config'
+    _write(rewritten_path, rendered)
+
+    round_tripped = load_project_config(rewritten_path.parents[1])
+    spec = round_tripped.config.agents['agent1']
+
+    assert spec.provider_profile.mode == 'isolated'
+    assert spec.provider_profile.inherit_api is False
+    assert spec.provider_profile.inherit_auth is False
+    assert spec.provider_profile.env == {
+        'ANTHROPIC_API_KEY': 'claude-key',
+        'ANTHROPIC_BASE_URL': 'https://claude.example.test',
+    }
+
+
 def test_load_project_config_reads_project_ccb_config_path(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-layout-path'
     config_path = project_root / '.ccb' / 'ccb.config'
@@ -276,3 +993,64 @@ def test_load_project_config_reads_project_ccb_config_path(tmp_path: Path) -> No
 
     assert result.source_path == config_path
     assert result.config.layout_spec == 'cmd; agent1:codex'
+
+
+def test_load_project_config_compact_format_does_not_require_toml_reader(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo-compact-no-toml'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(config_path, 'cmd; agent1:codex\n')
+
+    def _unexpected_reader(path: Path):
+        raise AssertionError(f'compact config unexpectedly requested TOML reader for {path}')
+
+    monkeypatch.setattr(config_documents, '_load_toml_reader', _unexpected_reader)
+
+    result = load_project_config(project_root)
+
+    assert result.config.layout_spec == 'cmd; agent1:codex'
+
+
+def test_load_project_config_reports_actionable_error_when_rich_toml_parser_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo-rich-no-toml'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        'version = 2\n'
+        'default_agents = ["agent1"]\n'
+        'layout = "agent1"\n'
+        '\n'
+        '[agents.agent1]\n'
+        'provider = "codex"\n'
+        'target = "."\n',
+    )
+
+    monkeypatch.setattr(config_documents, '_import_optional_toml_reader', lambda: None)
+
+    with pytest.raises(ConfigValidationError, match='rich TOML config requires Python 3.11\\+'):
+        load_project_config(project_root)
+
+
+def test_load_project_config_reports_actionable_error_when_hybrid_overlay_parser_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo-hybrid-no-toml'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        'cmd; agent1:codex\n'
+        '\n'
+        '[agents.agent1]\n'
+        'key = "sk-test"\n',
+    )
+
+    monkeypatch.setattr(config_documents, '_import_optional_toml_reader', lambda: None)
+
+    with pytest.raises(ConfigValidationError, match='rich TOML config requires Python 3.11\\+'):
+        load_project_config(project_root)

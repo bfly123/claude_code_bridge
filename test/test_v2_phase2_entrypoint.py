@@ -265,6 +265,41 @@ def test_phase2_interactive_start_attaches_namespace(monkeypatch, tmp_path: Path
     assert 'start_status: ok' not in stdout.getvalue()
 
 
+def test_phase2_interactive_start_passes_terminal_size_to_start_service(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-attach-terminal-size'
+    project_root.mkdir()
+    seen: dict[str, object] = {}
+
+    def _fake_start(context, command, *, terminal_size=None):
+        del context, command
+        seen['terminal_size'] = terminal_size
+        return SimpleNamespace(
+            project_root=str(project_root),
+            project_id='proj-tty',
+            started=('agent1',),
+            daemon_started=True,
+            socket_path=str(project_root / '.ccb' / 'ccbd' / 'ccbd.sock'),
+        )
+
+    monkeypatch.setattr(phase2_module, 'start_agents', _fake_start)
+    monkeypatch.setattr(
+        'cli.phase2_runtime.handlers_start.attach_started_project_namespace',
+        lambda context: SimpleNamespace(project_id='proj-tty', tmux_socket_path='sock', tmux_session_name='sess'),
+    )
+    monkeypatch.setattr(
+        'cli.phase2_runtime.handlers_start._terminal_size_for_streams',
+        lambda *streams: (240, 72),
+    )
+    monkeypatch.setattr(sys.stdin, 'isatty', lambda: True)
+
+    stdout = _TtyStringIO()
+    stderr = StringIO()
+    code = maybe_handle_phase2([], cwd=project_root, stdout=stdout, stderr=stderr)
+
+    assert code == 0, stderr.getvalue()
+    assert seen['terminal_size'] == (240, 72)
+
+
 def test_phase2_noninteractive_start_keeps_start_output(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-no-auto-open'
     project_root.mkdir()

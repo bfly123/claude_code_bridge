@@ -18,6 +18,7 @@ def prepare_namespace_root_pane(
     context,
     *,
     epoch: int,
+    terminal_size: tuple[int, int] | None = None,
 ) -> None:
     prepare_server(context.backend)
     if not context.session_is_alive:
@@ -26,6 +27,7 @@ def prepare_namespace_root_pane(
             session_name=context.desired_session_name,
             project_root=controller._layout.project_root,
             window_name=context.desired_control_window_name,
+            terminal_size=terminal_size,
         )
     ensure_server_policy(context.backend)
     ensure_window(

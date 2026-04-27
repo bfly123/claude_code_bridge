@@ -7,11 +7,10 @@ from .backend import (
     kill_window,
     rename_window,
     select_window,
-    session_alive,
     session_window_target,
     window_root_pane,
 )
-from .ensure_context import load_namespace_context
+from .ensure_context import load_namespace_context, refresh_session_liveness
 from .ensure_identity import apply_namespace_identity
 from .models import ProjectNamespace
 from .records import build_active_state, namespace_from_state
@@ -23,6 +22,7 @@ def reflow_project_workspace(
     *,
     layout_signature: str | None = None,
     reason: str | None = None,
+    session_probe_timeout_s: float | None = None,
 ) -> ProjectNamespace:
     controller._layout.ccbd_dir.mkdir(parents=True, exist_ok=True)
     context = load_namespace_context(
@@ -30,8 +30,13 @@ def reflow_project_workspace(
         layout_signature=layout_signature,
         recreate_reason=reason,
     )
+    context = refresh_session_liveness(
+        controller,
+        context,
+        timeout_s=session_probe_timeout_s,
+    )
     current = context.current
-    if current is None or not session_alive(context.backend, context.desired_session_name):
+    if current is None or not context.session_is_alive:
         return controller.ensure(
             layout_signature=layout_signature,
             force_recreate=False,

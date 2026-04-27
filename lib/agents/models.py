@@ -4,6 +4,7 @@ from .models_runtime import (
     AGENT_NAME_PATTERN,
     RESERVED_AGENT_NAMES,
     SCHEMA_VERSION,
+    AgentApiSpec,
     AgentRestoreState,
     AgentRuntime,
     AgentSpec,
@@ -37,6 +38,7 @@ from .models_runtime import (
 
 __all__ = [
     'AGENT_NAME_PATTERN',
+    'AgentApiSpec',
     'AgentRestoreState',
     'AgentRuntime',
     'AgentSpec',

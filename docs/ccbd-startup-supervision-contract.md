@@ -171,6 +171,16 @@ Managed Codex session authority rules:
 - absent an explicit validated provider-profile runtime home, the default managed Codex home is `.ccb/agents/<agent>/provider-state/codex/home/`
 - the effective managed Codex session root is derived from that home as `<codex_home>/sessions`
 - startup must set and persist both `CODEX_HOME` and `CODEX_SESSION_ROOT`; `CODEX_SESSION_ROOT` alone is not sufficient managed-provider authority
+- startup must also persist Codex provider-route authority for managed explicit
+  routes, and a bound Codex session under such a route is reusable only after
+  that concrete binding is stamped with matching bound-session authority
+- startup must treat the active managed Codex `sessions/` directory as
+  reusable authority, not mere residue, because Codex may auto-continue the
+  newest conversation found there even without explicit `resume`
+- when the managed Codex session namespace authority is missing or incompatible
+  with the current route authority, startup must rotate that `sessions/`
+  directory out of the active namespace before launch and scrub stale bound
+  session fields from project authority
 - provider-base workspace files such as `.codex-session` remain unscoped evidence only unless no explicit configured-agent binding exists
 - startup and restore must persist and reuse the effective managed `codex_home` and derived `codex_session_root` when available
 - restore must not scan or adopt global `~/.codex/sessions` merely because a manual Codex conversation shares the same `work_dir`
@@ -231,7 +241,26 @@ Startup must be a single project-scoped transaction:
 11. commit startup actions
 12. emit startup result and persist startup report
 
-`start_status: ok` is valid only when:
+Startup waiter rules:
+
+- lifecycle `phase=mounted` publishes backend control-plane readiness only
+- control-plane readiness means:
+  - the current authoritative generation bound the project socket
+  - the current authoritative generation answers the minimal control-plane readiness probe for that socket
+  - the current authoritative generation published the matching current lease authority
+- commands that only need control-plane RPC, including `ccb ask`, `ping`, `pend`, `watch`, `queue`, and similar daemon callers, must stop waiting at control-plane readiness
+- those non-foreground callers must not wait for project-namespace attachability or full desired-agent recovery before submitting work
+- interactive `ccb` may continue waiting past control-plane readiness for project-namespace/UI readiness and desired-agent recovery
+- CLI callers must not own an independent direct-spawn startup path or a separate local "daemon must be ready in N seconds" authority
+- instead, CLI callers express desired lifecycle state, observe the keeper-owned `startup_id` / generation transaction, and return as soon as that transaction reaches success or failure
+- `startup_transaction_timeout_s` is the maximum budget ceiling for one keeper-owned cold-start transaction:
+  - it is not a fixed sleep
+  - it is not a generic per-RPC timeout
+  - it must return immediately when the relevant transaction reaches success or failure
+  - it must not delay ordinary hot-path calls against an already mounted backend
+  - stalled startup should also be bounded by a shorter progress-stall policy based on lifecycle startup progress
+
+`ccb` foreground `start_status: ok` is valid only when:
 
 - the project backend is healthy and authoritative
 - the project lifecycle phase is `mounted`
@@ -267,12 +296,20 @@ Foreground command split:
   - ensures the project tmux namespace
   - ensures desired agents are mounted
   - plain `ccb` is the default interactive start path and implicitly includes `-a -r`
+  - release-update advisory checks may read install-scoped cached metadata and schedule background refresh, but they must not join or block the project startup transaction
+  - when `ccb` is running in an interactive terminal and will foreground-attach after startup, it should treat that terminal viewport as authoritative startup input and pass the current terminal size into the startup transaction
   - in an interactive terminal, attaches the foreground to the project namespace after the start transaction succeeds
   - foreground attach must tolerate short tmux visibility lag after namespace create/reflow:
     - persisted namespace state may become visible slightly before tmux session/window targets are selectable
     - `ccb` must therefore perform a bounded readiness wait for the authoritative session and workspace window before declaring foreground attach failure
+  - once the tmux client is observed attached, `ccb` should issue a best-effort tmux client refresh so the first attached frame does not depend on a manual user redraw
   - in a non-interactive terminal, reports the start transaction without attaching to tmux
   - startup success and foreground attach success are distinct outcomes; foreground attach failure must not rewrite a successful startup report as failed
+- ask-family and other non-foreground daemon commands
+  - reuse the same keeper-owned backend startup transaction
+  - stop waiting at control-plane readiness
+  - must not enter namespace attach waits
+  - must not reinterpret a namespace/UI delay as backend startup failure
 - `ccb -n`
   - is an explicit destructive project reset before start
   - must require interactive confirmation
@@ -294,10 +331,13 @@ Project namespace compatibility:
 - when stored namespace `layout_version` differs from the current code contract, startup must recreate the project namespace rather than trying to mutate a stale session in place
 - when the stored visible layout signature differs from the desired visible layout signature for the current foreground start, startup must recreate the project namespace rather than incrementally splitting an old pane tree
 - when startup creates a fresh project namespace session, the root pane must begin as a silent placeholder process rather than an interactive shell
+- when startup creates a fresh project namespace session for an interactive foreground `ccb`, the initial tmux session size should come from that foreground terminal-size hint rather than a detached fixed-size default
 - for a fresh namespace, the `cmd` pane bootstrap happens only after layout finalization and must replace that silent placeholder in place
 - project-namespace bootstrap must treat tmux server warmup and tmux server-policy persistence as separate steps:
   - `prepare_server` warms the server boundary only
   - server-global options that require a live session, such as `destroy-unattached off`, must be applied only after the authoritative project session exists
+- project-owned pane mutation commands, including `respawn-pane` used by `cmd` bootstrap and pane-backed runtime launch/relaunch, must use the same shared tmux ready-retry budget as namespace create/reflow rather than a separate shorter timeout
+- namespace session liveness on the project-owned tmux socket must treat both `can't find session` and `no server running on <project socket>` as "namespace absent" for create/recreate decisions; startup must not fail that path as a generic tmux inspect error
 - startup must not rely on "real shell first, respawn later" behavior for the `cmd` pane, because that leaves stale prompt residue and can surface zsh no-newline `%` markers
 - `cmd`-anchored projects must treat exact project-namespace pane membership as the reuse gate for pane-backed bindings
 - provider-specific live runtime identity proof may further narrow that reuse gate
@@ -308,6 +348,8 @@ Project namespace compatibility:
   - same current authoritative workspace `window_id`
 - for managed Codex agents with a bound `codex_session_id`, exact namespace membership is still not sufficient:
   - startup must also prove that the live pane process is running the bound `resume <codex_session_id>` conversation
+  - for explicit managed Codex routes, the persisted bound-session authority
+    must also match the current route authority before `resume` is allowed
   - if that proof is unavailable or negative, startup must reject pane reuse and relaunch through the managed start command
 - agent-only legacy layouts with `cmd` disabled may reuse instance-scoped provider session evidence when that session file does not explicitly declare a conflicting tmux socket
 - that legacy reuse exception is narrow:
@@ -370,6 +412,8 @@ Important rule:
 - if pane recovery is done by project-namespace reflow, pane position must return to the canonical layout derived from `.ccb/ccb.config`, not whichever slot tmux happens to assign during local recovery
 - workspace reflow must preserve the tmux server and tmux session; only the workspace window may be replaced
 - transient tmux/server-readiness failures during heartbeat-driven supervision must degrade or retry background maintenance, but must not by themselves crash or unmount the current authoritative `ccbd`
+- heartbeat-driven namespace liveness probes must use a short non-blocking readiness budget; if the project tmux server/socket is transiently unavailable, the daemon must defer that maintenance pass instead of spending the full foreground startup timeout inside `has-session` / `list-panes`
+- heartbeat-driven mount/reflow attempts that hit transient tmux/server unavailability must preserve current authority, record retry/backoff evidence, and retry later; they must not immediately reinterpret that transient as a stable missing-session signal
 - recovery must always use restore semantics even if the original foreground `ccb` invocation did not pass `-r`
 - recovery must inherit `auto_permission` from the persisted project start policy rather than falling back to hardcoded defaults
 

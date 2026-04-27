@@ -30,11 +30,42 @@ def cmd_version(args, *, script_root: Path) -> int:
         )
 
     print("\nChecking for updates...")
-    if (install_dir / ".git").exists():
+    if _is_source_install(local_info=local_info, install_dir=install_dir):
+        _print_source_update_status(local_info)
+    elif (install_dir / ".git").exists():
         _print_git_update_status(local_info)
     else:
         _print_release_update_status(local_info)
     return 0
+
+
+def _is_source_install(*, local_info: dict[str, object], install_dir: Path) -> bool:
+    if str(local_info.get("install_mode") or "").strip() == "source":
+        return True
+    if str(local_info.get("source_kind") or "").strip() == "source":
+        return True
+    return (install_dir / ".git").exists()
+
+
+def _print_source_update_status(local_info: dict[str, object]) -> None:
+    remote_info = get_remote_version_info()
+    if remote_info is None:
+        print("⚠️  Unable to check source updates (network error)")
+        print("   Run: ccb update  to install the latest stable release")
+        return
+    if local_info.get("commit") and remote_info.get("commit"):
+        if local_info["commit"] == remote_info["commit"]:
+            print("✅ Up to date")
+            print("   Run: ccb update  to switch this install to the latest stable release")
+            return
+        remote_str = f"{remote_info['commit']} {remote_info.get('date', '')}".strip()
+        print(f"📦 Source update available: {remote_str}")
+        print("   Use: git pull  (or switch commits in your checkout)")
+        print("   Rerun: ./install.sh install  if you want the global install to stay in source/dev mode")
+        print("   Run: ccb update  to switch the global install to the latest stable release")
+        return
+    print("⚠️  Unable to compare source revisions")
+    print("   Run: ccb update  to install the latest stable release")
 
 
 def _print_git_update_status(local_info: dict[str, object]) -> None:

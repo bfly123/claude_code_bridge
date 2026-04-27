@@ -4,6 +4,7 @@ import json
 import time
 from pathlib import Path
 
+from provider_backends.codex.session_authority import resume_authority_matches
 from provider_core.pathing import session_filename_for_agent
 from project.identity import normalize_work_dir
 from provider_core.runtime_shared import pane_title_marker as build_pane_title_marker
@@ -49,8 +50,8 @@ def write_session_file(
         payload["tmux_socket_name"] = str(tmux_socket_name)
     if tmux_socket_path:
         payload["tmux_socket_path"] = str(Path(tmux_socket_path).expanduser())
-    _merge_existing_session_binding(payload, existing_payload)
     payload.update(provider_payload)
+    _merge_existing_session_binding(payload, existing_payload, provider=str(spec.provider or '').strip().lower())
     ok, error = safe_write_session(session_path, json.dumps(payload, ensure_ascii=False, indent=2))
     if not ok:
         raise RuntimeError(error or f"failed to write session file: {session_path}")
@@ -84,24 +85,59 @@ def _read_existing_session_payload(session_path: Path) -> dict[str, object]:
     return data if isinstance(data, dict) else {}
 
 
-def _merge_existing_session_binding(payload: dict[str, object], existing_payload: dict[str, object]) -> None:
-    for key in (
-        'codex_home',
-        'codex_session_root',
-        'codex_session_id',
-        'codex_session_path',
-        'old_codex_session_id',
-        'old_codex_session_path',
-        'old_updated_at',
-        'updated_at',
-        'claude_home',
-        'claude_projects_root',
-        'claude_session_env_root',
-        'claude_session_id',
-        'claude_session_path',
-        'old_claude_session_id',
-        'old_claude_session_path',
-    ):
+def _merge_existing_session_binding(
+    payload: dict[str, object],
+    existing_payload: dict[str, object],
+    *,
+    provider: str,
+) -> None:
+    if provider == 'codex':
+        _merge_codex_session_binding(payload, existing_payload)
+    elif provider == 'claude':
+        _merge_keys(
+            payload,
+            existing_payload,
+            keys=(
+                'claude_home',
+                'claude_projects_root',
+                'claude_session_env_root',
+                'claude_session_id',
+                'claude_session_path',
+                'old_claude_session_id',
+                'old_claude_session_path',
+            ),
+        )
+
+
+def _merge_codex_session_binding(payload: dict[str, object], existing_payload: dict[str, object]) -> None:
+    _merge_keys(
+        payload,
+        existing_payload,
+        keys=(
+            'codex_home',
+            'codex_session_root',
+            'old_codex_session_id',
+            'old_codex_session_path',
+            'old_updated_at',
+        ),
+    )
+    current_fingerprint = str(payload.get('codex_provider_authority_fingerprint') or '').strip()
+    if not resume_authority_matches(existing_payload, current_fingerprint=current_fingerprint):
+        return
+    _merge_keys(
+        payload,
+        existing_payload,
+        keys=(
+            'codex_session_id',
+            'codex_session_path',
+            'codex_session_authority_fingerprint',
+            'updated_at',
+        ),
+    )
+
+
+def _merge_keys(payload: dict[str, object], existing_payload: dict[str, object], *, keys: tuple[str, ...]) -> None:
+    for key in keys:
         value = existing_payload.get(key)
         if value is None:
             continue

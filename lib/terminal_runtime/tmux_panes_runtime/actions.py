@@ -38,7 +38,7 @@ def split_pane(service, parent_pane_id: str, *, direction: str, percent: int) ->
 
 def set_pane_title(service, pane_id: str, title: str) -> None:
     if pane_id:
-        service.tmux_run_fn(["select-pane", "-t", pane_id, "-T", title or ""], check=False)
+        service.tmux_run_fn(["select-pane", "-t", pane_id, "-T", title or ""], check=False, capture=True)
 
 
 def set_pane_user_option(service, pane_id: str, name: str, value: str) -> None:
@@ -47,7 +47,7 @@ def set_pane_user_option(service, pane_id: str, name: str, value: str) -> None:
     opt = service.normalize_user_option_fn(name)
     if not opt:
         return
-    service.tmux_run_fn(["set-option", "-p", "-t", pane_id, opt, value or ""], check=False)
+    service.tmux_run_fn(["set-option", "-p", "-t", pane_id, opt, value or ""], check=False, capture=True)
 
 
 def set_pane_style(
@@ -116,7 +116,7 @@ def split_window_error_text(
 def set_pane_option(service, pane_id: str, option: str, value: str | None) -> None:
     if not value:
         return
-    service.tmux_run_fn(["set-option", "-p", "-t", pane_id, option, value], check=False)
+    service.tmux_run_fn(["set-option", "-p", "-t", pane_id, option, value], check=False, capture=True)
 
 
 def pane_zoomed(service, parent_pane_id: str) -> bool:

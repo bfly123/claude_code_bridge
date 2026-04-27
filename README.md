@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Every_Model_Controllable-CF1322?style=for-the-badge" alt="Every Model Controllable">
 </p>
 
-[![Version](https://img.shields.io/badge/version-6.0.9-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-6.0.15-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 **English** | [Chinese](README_zh.md)
@@ -92,6 +92,63 @@ This layout means:
 Historical note: older release notes below may mention `askd`, legacy flags, or removed commands. Those references are kept only as changelog history and do not redefine the current CLI surface.
 
 <details open>
+<summary><b>v6.0.15</b> - Codex Route Authority & Foreground Attach Polish</summary>
+
+- **Codex Explicit Route Authority**: managed Codex homes now materialize agent-local `config.toml` and `auth.json` as the sole authority for explicit `key` / `url` routes, so agent-scoped API overrides replace inherited global provider routes instead of drifting back to system config
+- **Codex Session Namespace Rotation**: managed Codex startup now fingerprints explicit route authority, stamps reusable session bindings with that authority, and rotates stale `sessions/` namespaces before launch when the bound route no longer matches
+- **Foreground Attach UX Hardening**: interactive `ccb` startup now seeds tmux namespace creation from the real terminal viewport and issues a best-effort client refresh after attach so first paint matches the current terminal size without manual redraw
+
+</details>
+
+<details>
+<summary><b>v6.0.14</b> - Claude Logout Recovery Hardening</summary>
+
+- **Managed Claude Auth Preservation**: managed Claude homes now preserve agent-local login auth when the global Claude home has been logged out, so a project-scoped re-login survives restart instead of re-entering a browser-link loop
+- **Auth Projection Semantics Tightened**: Claude startup still refreshes source auth when it exists, but no longer treats missing source auth as an instruction to blank managed auth; disabled auth inheritance still clears stale copied auth state
+- **Startup Regression Coverage Expanded**: targeted regressions now lock this behavior at the projection layer, provider workspace preparation, and Claude launcher startup path
+
+</details>
+
+<details>
+<summary><b>v6.0.13</b> - macOS Release Path & Preview Packaging Fix</summary>
+
+- **macOS Release Path**: shared release artifact naming and updater resolution now cover the macOS universal bundle alongside Linux/WSL release assets
+- **Source Dev Install Mode**: installs from a git checkout now stay linked to the live source tree, skip startup auto-update prompts, and can switch to a managed release install through `ccb update`
+- **Agent API / Model Shortcuts**: `.ccb/ccb.config` now accepts flat per-agent `key`, `url`, and `model` shortcuts so common provider overrides stay concise
+- **Preview Packaging Hardening**: preview release exports now exclude generated output paths inside the repo, fixing recursive self-copy failures such as `dist-macos-smoke`
+
+</details>
+
+<details>
+<summary><b>v6.0.12</b> - Non-Blocking Startup Update Prompt</summary>
+
+- **Cached Startup Prompt**: interactive foreground `ccb` start now reads install-scoped cached release metadata and only prompts when a newer stable release is already known locally
+- **Background Refresh**: missing or stale update cache now refreshes in the background with short network budgets instead of delaying the project startup path
+- **Upgrade / Defer / Silence**: startup prompt supports upgrade now, defer for the current version, or silence that exact version
+- **Startup Boundary Preserved**: release-update checks remain advisory and outside the project lifecycle startup transaction
+
+</details>
+
+<details>
+<summary><b>v6.0.11</b> - Project Startup Hotfix</summary>
+
+- **Cold Start Namespace Fix**: project tmux namespace startup now treats `no server running on <project socket>` as an absent namespace that must be created, instead of failing startup as a generic tmux inspect error
+- **Release Regression Coverage**: targeted namespace backend/state regression tests now lock this cold-start path so `ccb -> ping -> kill` blackbox lifecycle stays covered
+- **Contract Clarification**: the startup supervision contract now explicitly defines project-socket `no server running` as a recreate signal rather than a fatal inspect failure
+
+</details>
+
+<details>
+<summary><b>v6.0.10</b> - Startup Budget Hardening & Gemini Login Inheritance</summary>
+
+- **Gemini Login Inheritance**: managed Gemini homes now project login-auth selection and `oauth_creds.json` for `oauth-personal` reuse, and remove stale copied credentials when auth inheritance is disabled
+- **Shared Tmux Ready Budget**: project-owned `respawn-pane` now uses the same tmux ready-retry budget as namespace create/reflow, reducing transient `no server running` failures during startup and supervision
+- **Background Startup Compatibility**: background lifecycle startup keeps supervision compatibility while separating readiness-probe timeouts from operational RPC budgets
+- **Diagnostics Secret Redaction**: diagnostic bundles now exclude Gemini `oauth_creds.json` alongside other provider credential artifacts
+
+</details>
+
+<details>
 <summary><b>v6.0.9</b> - Cross-Platform Lifecycle & Watch Stability</summary>
 
 - **WSL Compatibility Fixed**: project runtime now avoids binding Unix sockets onto unsupported WSL mounted-drive filesystems and hardens installer staging plus tmux namespace readiness
@@ -183,7 +240,7 @@ Historical note: older release notes below may mention `askd`, legacy flags, or 
 - **Worktree Safety Guard**: Dirty or unmerged CCB-managed worktrees still block destructive rebuilds until the user resolves them
 
 **🔄 Upgrade Policy:**
-- **Linux/WSL Only**: `ccb update` is now available only on Linux/WSL for the 6.x line
+- **Linux/macOS/WSL**: `ccb update` is available on Linux, macOS, and WSL for the 6.x line
 - **Release-Only Upgrades**: Source tags are still published with each version, but `ccb update` for 6.x installs the GitHub release asset, not the source archive
 - **Stable Release Targeting**: Default upgrades now resolve to the latest stable release instead of the moving `main` branch
 - **Major Upgrade Confirmation**: Upgrading into `6.0.0` requires explicit confirmation before replacing the installed runtime
@@ -601,7 +658,15 @@ Rules:
 - Cmd pane participates in the layout as the first extra pane and does not change which AI runs in the current pane.
 
 ### Update
-CCB v6 currently supports `ccb update` only on Linux/WSL. A major upgrade fully replaces the installed runtime. On the first `ccb` inside an older project, CCB preserves `.ccb/ccb.config`, clears the rest of the old `.ccb` state, and rebuilds locally.
+CCB v6 currently supports `ccb update` on Linux, macOS, and WSL. A major upgrade fully replaces the installed runtime. On the first `ccb` inside an older project, CCB preserves `.ccb/ccb.config`, clears the rest of the old `.ccb` state, and rebuilds locally.
+
+If you installed from a git checkout with `./install.sh install`, that install now runs in source dev mode:
+
+- Global `ccb` and `ask` link back to the checkout instead of using a copied snapshot
+- CCB-owned skills and helper scripts also follow the live source tree
+- Source installs do not participate in startup auto-update prompts
+- Stay on the source/dev track with `git pull` or by switching commits, then rerun `./install.sh install`
+- Or run `ccb update` to install the latest stable release and repoint global `ccb` links to the managed release install
 
 ```bash
 ccb update              # Update to the latest stable release

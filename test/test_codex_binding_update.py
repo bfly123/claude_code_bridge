@@ -18,6 +18,7 @@ def test_update_project_session_binding_records_old_binding_and_resumes(tmp_path
                 "work_dir": str(tmp_path),
                 "codex_session_path": str(tmp_path / "old.jsonl"),
                 "codex_session_id": "old-session-id",
+                "codex_provider_authority_fingerprint": "fp-1",
                 "start_cmd": "export CODEX_RUNTIME_DIR=/tmp/demo; codex -c disable_paste_burst=true",
             },
             ensure_ascii=False,
@@ -53,6 +54,7 @@ def test_update_project_session_binding_records_old_binding_and_resumes(tmp_path
     assert data["active"] is True
     assert data["old_codex_session_id"] == "old-session-id"
     assert data["old_codex_session_path"] == str(tmp_path / "old.jsonl")
+    assert data["codex_session_authority_fingerprint"] == "fp-1"
     assert data["ccb_project_id"] == f"proj:{tmp_path.name}"
     assert transfers == [
         {

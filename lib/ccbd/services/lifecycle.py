@@ -40,6 +40,9 @@ class CcbdLifecycle:
     generation: int
     phase_started_at: str
     startup_id: str | None = None
+    startup_stage: str | None = None
+    last_progress_at: str | None = None
+    startup_deadline_at: str | None = None
     keeper_pid: int | None = None
     owner_pid: int | None = None
     owner_daemon_instance_id: str | None = None
@@ -86,6 +89,9 @@ class CcbdLifecycle:
             'generation': self.generation,
             'phase_started_at': self.phase_started_at,
             'startup_id': self.startup_id,
+            'startup_stage': self.startup_stage,
+            'last_progress_at': self.last_progress_at,
+            'startup_deadline_at': self.startup_deadline_at,
             'keeper_pid': self.keeper_pid,
             'owner_pid': self.owner_pid,
             'owner_daemon_instance_id': self.owner_daemon_instance_id,
@@ -110,6 +116,9 @@ class CcbdLifecycle:
             generation=int(payload.get('generation', 0)),
             phase_started_at=str(payload['phase_started_at']),
             startup_id=_clean_text(payload.get('startup_id')),
+            startup_stage=_clean_text(payload.get('startup_stage')),
+            last_progress_at=_clean_text(payload.get('last_progress_at')),
+            startup_deadline_at=_clean_text(payload.get('startup_deadline_at')),
             keeper_pid=_clean_positive_int(payload.get('keeper_pid')),
             owner_pid=_clean_positive_int(payload.get('owner_pid')),
             owner_daemon_instance_id=_clean_text(payload.get('owner_daemon_instance_id')),
@@ -145,6 +154,9 @@ def build_lifecycle(
     phase: str,
     generation: int,
     startup_id: str | None = None,
+    startup_stage: str | None = None,
+    last_progress_at: str | None = None,
+    startup_deadline_at: str | None = None,
     keeper_pid: int | None = None,
     owner_pid: int | None = None,
     owner_daemon_instance_id: str | None = None,
@@ -162,6 +174,9 @@ def build_lifecycle(
         generation=int(generation),
         phase_started_at=str(occurred_at),
         startup_id=_clean_text(startup_id),
+        startup_stage=_clean_text(startup_stage),
+        last_progress_at=_clean_text(last_progress_at),
+        startup_deadline_at=_clean_text(startup_deadline_at),
         keeper_pid=_clean_positive_int(keeper_pid),
         owner_pid=_clean_positive_int(owner_pid),
         owner_daemon_instance_id=_clean_text(owner_daemon_instance_id),

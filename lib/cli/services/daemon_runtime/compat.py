@@ -31,25 +31,38 @@ def connect_compatible_daemon(
     inspection,
     *,
     restart_on_mismatch: bool,
-    client_factory=CcbdClient,
+    probe_client_factory=CcbdClient,
+    runtime_client_factory=None,
     daemon_matches_project_config_fn=daemon_matches_project_config,
     shutdown_incompatible_daemon_fn=None,
 ) -> DaemonHandle | None:
     if not inspection.socket_connectable:
         return None
-    client = client_factory(context.paths.ccbd_socket_path)
+    runtime_client_factory = runtime_client_factory or probe_client_factory
+    probe_client = probe_client_factory(context.paths.ccbd_socket_path)
     try:
-        matches_config = daemon_matches_project_config_fn(context, client)
+        matches_config = daemon_matches_project_config_fn(context, probe_client)
     except CcbdClientError:
         # A transient ping failure is not evidence of config drift.
-        return DaemonHandle(client=client, inspection=inspection, started=False)
+        return DaemonHandle(
+            client=runtime_client_factory(context.paths.ccbd_socket_path),
+            inspection=inspection,
+            started=False,
+        )
     if matches_config:
-        return DaemonHandle(client=client, inspection=inspection, started=False)
+        return DaemonHandle(
+            client=runtime_client_factory(context.paths.ccbd_socket_path),
+            inspection=inspection,
+            started=False,
+        )
     if not restart_on_mismatch:
         return None
     if shutdown_incompatible_daemon_fn is None:
         raise ValueError('shutdown_incompatible_daemon_fn is required when restart_on_mismatch')
-    shutdown_incompatible_daemon_fn(context, client)
+    shutdown_incompatible_daemon_fn(
+        context,
+        runtime_client_factory(context.paths.ccbd_socket_path),
+    )
     return None
 
 

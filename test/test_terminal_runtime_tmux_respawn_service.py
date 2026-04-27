@@ -107,6 +107,49 @@ def test_tmux_respawn_service_retries_transient_tmux_failures(
     assert ['respawn-pane', '-k', '-t', '%9', '/bin/bash -lc "echo hi"'] in calls
 
 
+def test_tmux_respawn_service_uses_shared_ready_budget_for_transient_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    respawn_attempts = 0
+
+    def _tmux_run(args, **kwargs):
+        nonlocal respawn_attempts
+        if args == ['show-option', '-gqv', 'default-shell']:
+            return _cp(stdout='/bin/bash\n')
+        if args[:1] == ['respawn-pane']:
+            respawn_attempts += 1
+            if respawn_attempts < 15:
+                return _cp(returncode=1, stderr='no server running on /tmp/ccb-runtime/test.sock\n')
+        return _cp()
+
+    tick = {'value': 0.0}
+
+    def _monotonic() -> float:
+        current = tick['value']
+        tick['value'] += 0.1
+        return current
+
+    monkeypatch.setenv('CCB_TMUX_OBJECT_READY_TIMEOUT_S', '1.5')
+    monkeypatch.setattr('terminal_runtime.tmux_respawn_service.time.sleep', lambda _: None)
+    monkeypatch.setattr('terminal_runtime.tmux_respawn_service.time.monotonic', _monotonic)
+    service = TmuxRespawnService(
+        tmux_run_fn=_tmux_run,
+        ensure_pane_log_fn=lambda pane_id: None,
+        normalize_start_dir_fn=lambda cwd: cwd,
+        append_stderr_redirection_fn=lambda cmd, path: (cmd, path),
+        resolve_shell_fn=lambda **kwargs: '/bin/bash',
+        resolve_shell_flags_fn=lambda **kwargs: ['-lc'],
+        build_shell_command_fn=lambda **kwargs: '/bin/bash -lc "echo hi"',
+        build_respawn_tmux_args_fn=lambda **kwargs: ['respawn-pane', '-k', '-t', kwargs['pane_id'], '/bin/bash -lc "echo hi"'],
+        default_shell_fn=lambda: ('bash', '-c'),
+        env={'SHELL': '/bin/bash'},
+    )
+
+    service.respawn_pane('%9', cmd='echo hi')
+
+    assert respawn_attempts == 15
+
+
 def test_tmux_respawn_service_does_not_retry_non_transient_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[list[str]] = []
     respawn_attempts = 0

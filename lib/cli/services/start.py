@@ -11,10 +11,16 @@ from .tmux_project_cleanup import ProjectTmuxCleanupSummary
 from workspace.reconcile import format_workspace_blockers, reconcile_start_workspaces
 
 
-def start_agents(context, command) -> StartSummary:
+def start_agents(
+    context,
+    command,
+    *,
+    terminal_size: tuple[int, int] | None = None,
+) -> StartSummary:
     return _start_agents_impl(
         context,
         command,
+        terminal_size=terminal_size,
         ensure_daemon_started_fn=ensure_daemon_started,
         startup_report_store_cls=CcbdStartupReportStore,
         cleanup_summary_cls=ProjectTmuxCleanupSummary,

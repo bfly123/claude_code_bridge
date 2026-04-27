@@ -22,6 +22,7 @@
 
 - 同项目不存在双 keeper / 双 backend generation
 - `mounted` 不会早于 readiness 发布
+- 冷启动事务预算不会被误实现为“每次都固定等待到 timeout”
 - 显式 `kill` 永远能收口到 `unmounted`
 - helper/bridge 数量对 slot 数有上界，不会随 ask 次数无界增长
 - 旧 generation 与 orphan residue 不会破坏当前 authority
@@ -35,6 +36,8 @@
 - lifecycle phase 转移
 - keeper 持锁与并发等待
 - readiness 前后 mounted 语义
+- startup stage / progress / deadline 语义
+- startup transaction timeout 与 generic RPC timeout 分层
 - generation fence 拒绝旧实例写 authority
 - helper manifest 序列化与回收策略
 
@@ -45,6 +48,8 @@
 - `lifecycle.json` 初始创建、读写、迁移、schema 校验
 - `desired_state` 与 `phase` 的合法转移矩阵
 - `startup_id` / `generation` 不匹配时的拒绝逻辑
+- `startup_transaction_timeout_s` 作为 ceiling 时的提前返回逻辑
+- `startup_progress_stall_timeout_s` 对卡死阶段的提前失败逻辑
 - old generation 对 `lease`、socket cleanup、namespace cleanup 的写保护
 - helper manifest 与 runtime generation 的一致性校验
 - 普通 runtime state write 试图改写 authority 字段时必须被拒绝
@@ -67,6 +72,7 @@
 
 - 同项目双终端并发 `ccb` / `ccb ask`
 - `kill` 与 `start` / `ask` 并发
+- 冷启动 `ask` 与交互式 `ccb` 的 readiness 分层
 - lifecycle migration from old lease-only project
 - config drift 导致的 orderly restart
 - stop transaction 中 socket 不可连但 pid 活着
@@ -79,6 +85,9 @@
 
 - 同项目两个 CLI 几乎同时发起 `ccb`，最终只产生一个 keeper 和一个 mounted generation
 - 同项目两个 CLI 几乎同时发起 `ccb ask`，第二个请求必须等待已存在的 `starting` 事务
+- 冷启动事务耗时超过旧 5 秒预算但小于 `startup_transaction_timeout_s` 时，`ccb ask` 仍能成功提交
+- 已 mounted 热路径下的 `ccb ask` / `ping` 不得接近 `startup_transaction_timeout_s`
+- namespace/UI readiness 故意延迟时，`ccb ask` 仍可在 control-plane mounted 后成功；交互式 `ccb` 才继续等待 attach
 - `phase=starting` 时 child 启动失败，系统稳定落到 `phase=failed`
 - `phase=mounted` 时 config 改动，keeper 通过 orderly restart 完成 generation 切换
 - socket 不可连但 pid 仍存活时，普通 `ccb kill` 能经 keeper 收口，而不是被 degraded 拒绝
@@ -185,11 +194,13 @@ CI 接入要求：
 - child 在 bind 前退出
 - child 在 bind 后、readiness 前退出
 - child readiness ping 超时
+- child `startup_stage` 长时间不推进
 
 3. `mounted` 中注入
 - socket accept 阻塞或超时
 - backend heartbeat 正常但 socket 不可连
 - config-check ping timeout
+- namespace UI readiness 延迟，但 control-plane 仍可服务 `ask`
 
 4. `stopping` 中注入
 - stop_all 卡住
@@ -214,10 +225,13 @@ CI 接入要求：
 - 单元测试全部通过
 - 同项目并发启动不会产生双 keeper / 双 backend generation
 - `lifecycle.json` 迁移覆盖旧 lease-only 项目
+- 冷启动等待逻辑未通过放大全局 RPC timeout 实现
 
 ### 7.2 Phase 2 门禁
 
 - readiness gate 生效，`mounted` 不会早发
+- `startup_transaction_timeout_s` 被验证为最大预算上限而非固定等待
+- `ccb ask` 与交互式 `ccb` 已验证等待不同 readiness 层
 - 普通 `ccb kill` 覆盖 degraded/socket_unreachable 场景
 - socket ownership 测试覆盖 inode fence
 

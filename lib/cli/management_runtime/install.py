@@ -25,15 +25,19 @@ def _env_install_prefix() -> Path | None:
     return Path(env_prefix).expanduser() if env_prefix else None
 
 
-def _install_dir_candidates() -> list[Path]:
-    candidates: list[Path] = []
+def _default_install_dir() -> Path:
     env_prefix = _env_install_prefix()
     if env_prefix is not None:
-        candidates.append(env_prefix)
+        return env_prefix
     if platform.system() == "Windows":
-        candidates.extend(_windows_install_dir_candidates())
-    else:
-        candidates.append(Path.home() / ".local/share/codex-dual")
+        return _windows_install_dir_candidates()[0]
+    return Path.home() / ".local/share/codex-dual"
+
+
+def _install_dir_candidates() -> list[Path]:
+    candidates: list[Path] = [_default_install_dir()]
+    if platform.system() == "Windows":
+        candidates.extend(candidate for candidate in _windows_install_dir_candidates() if candidate not in candidates)
     return candidates
 
 
@@ -51,6 +55,11 @@ def _installed_candidate(candidate: Path) -> bool:
     return bool(candidate and (candidate / "ccb").exists())
 
 
+def is_source_repo_root(script_root: Path) -> bool:
+    root = Path(script_root).expanduser()
+    return (root / "install.sh").exists() and (root / ".git").exists()
+
+
 def find_install_dir(script_root: Path) -> Path:
     if (script_root / "install.sh").exists() or (script_root / "install.ps1").exists():
         return script_root
@@ -66,8 +75,8 @@ def _missing_installer_message(script_name: str, install_dir: Path) -> int:
     return 1
 
 
-def _windows_installer_command(install_dir: Path, action: str) -> tuple[list[str], Path]:
-    script = install_dir / "install.ps1"
+def _windows_installer_command(source_dir: Path, install_dir: Path, action: str) -> tuple[list[str], Path]:
+    script = source_dir / "install.ps1"
     cmd = [
         "powershell",
         "-NoProfile",
@@ -139,6 +148,8 @@ def _build_unix_installer_env(
         env.update(extra_env)
     if not env.get("CCB_SOURCE_KIND") and (source_dir / ".git").exists():
         env["CCB_SOURCE_KIND"] = "source"
+    if not env.get("CCB_SOURCE_ROOT") and (source_dir / ".git").exists():
+        env["CCB_SOURCE_ROOT"] = str(source_dir)
     if not env.get("CCB_GIT_COMMIT"):
         git_commit, git_date = _detect_git_head(source_dir)
         if git_commit:
@@ -202,15 +213,39 @@ def run_staged_unix_installer(
         shutil.rmtree(staging_root, ignore_errors=True)
 
 
+def resolve_installer_paths(action: str, *, script_root: Path) -> tuple[Path, Path]:
+    del action
+    root = Path(script_root).expanduser()
+    if is_source_repo_root(root):
+        return root, _default_install_dir()
+    install_dir = find_install_dir(root)
+    return install_dir, install_dir
+
+
+def resolve_managed_install_dir(*, script_root: Path) -> Path:
+    root = Path(script_root).expanduser()
+    if is_source_repo_root(root):
+        return _default_install_dir()
+    if (root / "install.sh").exists() or (root / "install.ps1").exists():
+        return root
+    env_prefix = _env_install_prefix()
+    if env_prefix is not None:
+        return env_prefix
+    for candidate in _install_dir_candidates():
+        if _installed_candidate(candidate):
+            return candidate
+    return root
+
+
 def run_installer(action: str, *, script_root: Path) -> int:
-    install_dir = find_install_dir(script_root)
+    source_dir, install_dir = resolve_installer_paths(action, script_root=script_root)
     if platform.system() == "Windows":
-        cmd, script = _windows_installer_command(install_dir, action)
+        cmd, script = _windows_installer_command(source_dir, install_dir, action)
         if not script.exists():
-            return _missing_installer_message("install.ps1", install_dir)
+            return _missing_installer_message("install.ps1", source_dir)
         return subprocess.run(cmd).returncode
 
-    return run_staged_unix_installer(action, source_dir=install_dir, install_dir=install_dir)
+    return run_staged_unix_installer(action, source_dir=source_dir, install_dir=install_dir)
 
 
 def _temp_base_candidates(install_dir: Path) -> list[Path]:

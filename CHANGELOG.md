@@ -2,6 +2,57 @@
 
 ## Unreleased
 
+## v6.0.15 (2026-04-27)
+
+### Codex Route Authority & Foreground Attach Polish
+
+- **Codex Explicit Route Authority**: managed Codex homes now materialize agent-local `config.toml` and `auth.json` as the sole authority for explicit `key` / `url` routes, so agent-scoped API overrides replace inherited global provider routes instead of drifting back to system config
+- **Codex Session Namespace Rotation**: managed Codex startup now fingerprints explicit route authority, stamps reusable session bindings with that authority, and rotates stale `sessions/` namespaces before launch when the bound route no longer matches
+- **Foreground Attach UX Hardening**: interactive `ccb` startup now seeds tmux namespace creation from the real terminal viewport and issues a best-effort client refresh after attach so first paint matches the current terminal size without manual redraw
+
+## v6.0.14 (2026-04-26)
+
+### Claude Logout Recovery Hardening
+
+- **Managed Claude Auth Preservation**: managed Claude homes now preserve agent-local login auth when the global Claude home has been logged out, so a project-scoped re-login survives restart instead of re-entering a browser-link loop
+- **Auth Projection Semantics Tightened**: Claude startup still refreshes source auth when it exists, but stops treating missing source auth as an instruction to blank managed auth; disabled auth inheritance continues to clear stale copied auth state
+- **Startup Regression Coverage Expanded**: targeted tests now lock this behavior at the projection layer, provider workspace preparation, and Claude launcher startup path
+
+## v6.0.13 (2026-04-25)
+
+### macOS Release Path & Preview Packaging Fix
+
+- **macOS Release Path**: shared release artifact naming and updater resolution now cover the macOS universal bundle alongside Linux/WSL release assets
+- **Source Dev Install Mode**: installs from a git checkout now stay linked to the live source tree, skip startup auto-update prompts, and can switch to a managed release install through `ccb update`
+- **Agent API / Model Shortcuts**: `.ccb/ccb.config` now accepts flat per-agent `key`, `url`, and `model` shortcuts so common provider overrides stay concise
+- **Preview Packaging Hardening**: preview release exports now exclude generated output paths inside the repo, fixing recursive self-copy failures such as `dist-macos-smoke`
+
+## v6.0.12 (2026-04-24)
+
+### Non-Blocking Startup Update Prompt
+
+- **Cached Startup Update Prompt**: interactive foreground `ccb` start can now read install-scoped cached release metadata and offer an upgrade prompt only when a newer stable release is already known locally
+- **Background Refresh Without Startup Stall**: cache misses or stale cache now schedule a background refresh with short network budgets instead of joining the project startup transaction
+- **Prompt Deferral And Silence Controls**: users can upgrade immediately, continue and defer the prompt for the current version, or silence that exact version
+- **Startup Contract Boundary Preserved**: startup supervision now explicitly treats release-update checks as advisory logic outside the lifecycle startup transaction
+
+## v6.0.11 (2026-04-24)
+
+### Project Startup Hotfix
+
+- **Cold-Start Namespace Classification Fix**: project tmux namespace liveness now treats `no server running on <project socket>` as an absent namespace that should be created or recreated, instead of surfacing a false `failed to inspect tmux session` startup failure
+- **Project Lifecycle Regression Coverage**: added backend/state regression tests for the absent-server cold-start path so real `ccb -> ping -> kill` lifecycle flows remain covered
+- **Startup Contract Clarified**: the startup supervision contract now explicitly defines project-socket `no server running` as a namespace-absent signal during create/recreate decisions
+
+## v6.0.10 (2026-04-24)
+
+### Startup Budget Hardening & Gemini Login Inheritance
+
+- **Gemini Login Auth Inheritance**: managed Gemini startup now projects `security.auth.selectedType` and `oauth_creds.json` for login-backed `oauth-personal` reuse, while stale copied credentials are removed whenever auth inheritance is disabled
+- **Shared Tmux Ready Budget**: project-owned pane respawn now uses the same tmux object readiness retry budget as namespace create/reflow instead of a separate shorter timeout, reducing transient `no server running` failures during startup and supervision
+- **Background Startup Compatibility**: background lifecycle startup preserves supervisor compatibility and keeps readiness-probe budgets separated from operational RPC timeouts
+- **Diagnostics Credential Redaction**: support bundles now exclude Gemini `oauth_creds.json` together with other provider credential artifacts
+
 ## v6.0.9 (2026-04-23)
 
 ### Cross-Platform Lifecycle & Watch Stability

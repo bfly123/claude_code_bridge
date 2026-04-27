@@ -21,11 +21,45 @@ def build_resume_start_cmd(command: object, session_id: object) -> str:
     return rebuilt_segment
 
 
+def strip_resume_start_cmd(command: object) -> str:
+    raw = str(command or '').strip()
+    if not raw:
+        return ''
+    shell_prefix, codex_segment = split_last_shell_segment(raw)
+    stripped_segment = strip_resume_from_codex_segment(codex_segment)
+    if stripped_segment is None:
+        stripped_segment = codex_segment
+    if shell_prefix:
+        return f'{shell_prefix}; {stripped_segment}'
+    return stripped_segment
+
+
 def split_last_shell_segment(command: str) -> tuple[str, str]:
     prefix, separator, tail = str(command or '').rpartition(';')
     if not separator:
         return '', str(command or '').strip()
     return prefix.strip(), tail.strip()
+
+
+def strip_resume_from_codex_segment(segment: str) -> str | None:
+    try:
+        tokens = shlex.split(segment)
+    except Exception:
+        return None
+    if not tokens:
+        return None
+    codex_index = find_codex_token_index(tokens)
+    if codex_index is None:
+        return None
+    resume_index = None
+    for index in range(codex_index + 1, len(tokens)):
+        if tokens[index] == 'resume':
+            resume_index = index
+            break
+    base_tokens = tokens[:resume_index] if resume_index is not None else list(tokens)
+    if not base_tokens:
+        return None
+    return ' '.join(shlex.quote(str(token)) for token in base_tokens)
 
 
 def rewrite_codex_segment(segment: str, session_id: str) -> str | None:
@@ -48,4 +82,10 @@ def rewrite_codex_segment(segment: str, session_id: str) -> str | None:
     return ' '.join(shlex.quote(str(token)) for token in base_tokens)
 
 
-__all__ = ['build_resume_start_cmd', 'rewrite_codex_segment', 'split_last_shell_segment']
+__all__ = [
+    'build_resume_start_cmd',
+    'rewrite_codex_segment',
+    'split_last_shell_segment',
+    'strip_resume_from_codex_segment',
+    'strip_resume_start_cmd',
+]

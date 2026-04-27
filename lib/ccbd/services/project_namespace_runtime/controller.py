@@ -55,12 +55,16 @@ class ProjectNamespaceController(ProjectNamespaceControllerStateMixin):
         layout_signature: str | None = None,
         force_recreate: bool = False,
         recreate_reason: str | None = None,
+        session_probe_timeout_s: float | None = None,
+        terminal_size: tuple[int, int] | None = None,
     ) -> ProjectNamespace:
         return ensure_project_namespace(
             self,
             layout_signature=layout_signature,
             force_recreate=force_recreate,
             recreate_reason=recreate_reason,
+            session_probe_timeout_s=session_probe_timeout_s,
+            terminal_size=terminal_size,
         )
 
     def destroy(self, *, reason: str, force: bool = False):
@@ -72,14 +76,21 @@ class ProjectNamespaceController(ProjectNamespaceControllerStateMixin):
         *,
         layout_signature: str | None = None,
         reason: str | None = None,
+        session_probe_timeout_s: float | None = None,
     ) -> ProjectNamespace:
         return reflow_project_workspace(
             self,
             layout_signature=layout_signature,
             reason=reason,
+            session_probe_timeout_s=session_probe_timeout_s,
         )
 
-    def root_pane_id(self, namespace: ProjectNamespace | None = None) -> str:
+    def root_pane_id(
+        self,
+        namespace: ProjectNamespace | None = None,
+        *,
+        timeout_s: float | None = None,
+    ) -> str:
         current = namespace or self.load()
         if current is None:
             raise RuntimeError('project namespace is not available')
@@ -89,8 +100,9 @@ class ProjectNamespaceController(ProjectNamespaceControllerStateMixin):
             return window_root_pane(
                 backend,
                 target_window=session_window_target(current.tmux_session_name, workspace_window_name),
+                timeout_s=timeout_s,
             )
-        return session_root_pane(backend, current.tmux_session_name)
+        return session_root_pane(backend, current.tmux_session_name, timeout_s=timeout_s)
 
 
 __all__ = ['ProjectNamespaceController']

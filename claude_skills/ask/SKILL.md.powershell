@@ -1,13 +1,11 @@
 ---
 name: ask
-description: Async via `ccb ask` by default; use wait only when the user explicitly asks for the reply in the same turn.
+description: Async via `ask` by default; use wait only when the user explicitly asks for the reply in the same turn.
 metadata:
   short-description: Ask agent
 ---
 
-# Ask Agent (Async)
-
-Send the user's request to a specified CCB agent asynchronously.
+Use this only for `/ask`.
 
 ## Usage
 
@@ -18,23 +16,23 @@ Parse only once:
 - `MESSAGE` = exact raw remainder after `TARGET`
 
 Everything after `TARGET` belongs to `MESSAGE` and must be forwarded verbatim.
-This skill does not accept a sender argument.
+Sender is inferred from the current CCB workspace.
 
 ## Execution (MANDATORY)
 
 ```powershell
-Start-Process -NoNewWindow -FilePath "ccb" -ArgumentList @("ask", "$TARGET") -RedirectStandardInput (New-TemporaryFile | ForEach-Object { $MESSAGE | Set-Content $_; $_.FullName })
+Start-Process -NoNewWindow -FilePath "ask" -ArgumentList @("$TARGET") -RedirectStandardInput (New-TemporaryFile | ForEach-Object { $MESSAGE | Set-Content $_; $_.FullName })
 ```
 
 This returns only an acceptance receipt in the current turn.
 The reply is not echoed into the same command stdout.
-Use `ccb ask --wait "$TARGET"` only when the user explicitly wants the reply now.
+Use `ask --wait "$TARGET"` only when the user explicitly wants the reply now.
 
 ## Rules
 
 - After running the command, end your turn immediately.
 - Use `--wait` only when the user explicitly wants the reply in the same turn.
-- Prefer implicit sender inference; use `from system` only for deliberate overrides.
+- Do not run `pend`, `ping`, `watch`, retries, or follow-up commands unless the user explicitly asks.
 
 ## Examples
 

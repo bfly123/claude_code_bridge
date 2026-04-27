@@ -483,6 +483,23 @@ resolve_install_mode() {
   fi
 }
 
+install_uses_live_source() {
+  [[ "$(resolve_install_mode)" == "source" ]]
+}
+
+resolve_live_source_root() {
+  local root="${CCB_SOURCE_ROOT:-$REPO_ROOT}"
+  echo "$root"
+}
+
+resolve_install_asset_root() {
+  if install_uses_live_source; then
+    resolve_live_source_root
+  else
+    echo "$INSTALL_PREFIX"
+  fi
+}
+
 read_simple_json_string_field() {
   local file="$1"
   local key="$2"
@@ -847,24 +864,129 @@ copy_project() {
   fi
 }
 
+prepare_install_tree() {
+  if install_uses_live_source; then
+    local live_root
+    live_root="$(resolve_live_source_root)"
+    if [[ ! -f "$live_root/ccb" ]]; then
+      echo "ERROR: Live source root missing ccb entrypoint: $live_root"
+      exit 1
+    fi
+    echo "Using live source tree: $live_root"
+    return 0
+  fi
+  copy_project
+}
+
+write_live_source_wrapper() {
+  local target="$1"
+  local wrapper_path="$2"
+  local quoted_target
+  printf -v quoted_target '%q' "$target"
+  cat > "$wrapper_path" <<EOF
+#!/usr/bin/env bash
+exec ${quoted_target} "\$@"
+EOF
+  chmod +x "$wrapper_path" 2>/dev/null || true
+}
+
+clear_installed_path() {
+  local path="$1"
+  if [[ -L "$path" || -f "$path" ]]; then
+    rm -f "$path"
+    return 0
+  fi
+  if [[ -d "$path" ]]; then
+    rm -rf "$path"
+  fi
+}
+
+install_owned_file() {
+  local source_path="$1"
+  local destination_path="$2"
+  local file_mode="${3:-}"
+
+  if [[ ! -f "$source_path" ]]; then
+    echo "WARN: File not found $source_path, skipping"
+    return 1
+  fi
+
+  mkdir -p "$(dirname "$destination_path")"
+  clear_installed_path "$destination_path"
+
+  if install_uses_live_source; then
+    if ! ln -s "$source_path" "$destination_path" 2>/dev/null; then
+      echo "ERROR: source dev install requires symlink support for $destination_path"
+      exit 1
+    fi
+    return 0
+  fi
+
+  cp -f "$source_path" "$destination_path"
+  if [[ -n "$file_mode" ]]; then
+    chmod "$file_mode" "$destination_path" 2>/dev/null || true
+  fi
+}
+
+install_owned_directory() {
+  local source_path="$1"
+  local destination_path="$2"
+
+  if [[ ! -d "$source_path" ]]; then
+    echo "WARN: Directory not found $source_path, skipping"
+    return 1
+  fi
+
+  mkdir -p "$(dirname "$destination_path")"
+  clear_installed_path "$destination_path"
+
+  if install_uses_live_source; then
+    if ! ln -s "$source_path" "$destination_path" 2>/dev/null; then
+      echo "ERROR: source dev install requires symlink support for $destination_path"
+      exit 1
+    fi
+    return 0
+  fi
+
+  cp -rf "$source_path" "$destination_path"
+}
+
+install_owned_executable() {
+  local source_path="$1"
+  local destination_path="$2"
+
+  if [[ ! -f "$source_path" ]]; then
+    echo "WARN: Script not found $source_path, skipping"
+    return 1
+  fi
+
+  mkdir -p "$(dirname "$destination_path")"
+  chmod +x "$source_path" 2>/dev/null || true
+  clear_installed_path "$destination_path"
+
+  if ln -s "$source_path" "$destination_path" 2>/dev/null; then
+    return 0
+  fi
+
+  if install_uses_live_source; then
+    write_live_source_wrapper "$source_path" "$destination_path"
+    return 0
+  fi
+
+  cp -f "$source_path" "$destination_path"
+  chmod +x "$destination_path" 2>/dev/null || true
+}
+
 install_bin_links() {
   mkdir -p "$BIN_DIR"
+  local target_root
+  target_root="$(resolve_install_asset_root)"
 
   for path in "${SCRIPTS_TO_LINK[@]}"; do
     local name
     name="$(basename "$path")"
-    if [[ ! -f "$INSTALL_PREFIX/$path" ]]; then
-      echo "WARN: Script not found $INSTALL_PREFIX/$path, skipping link creation"
-      continue
-    fi
-    chmod +x "$INSTALL_PREFIX/$path"
-    if ln -sf "$INSTALL_PREFIX/$path" "$BIN_DIR/$name" 2>/dev/null; then
-      :
-    else
-      # Windows (Git Bash) / restricted environments may not allow symlinks. Fall back to copying.
-      cp -f "$INSTALL_PREFIX/$path" "$BIN_DIR/$name"
-      chmod +x "$BIN_DIR/$name" 2>/dev/null || true
-    fi
+    local target_path="$target_root/$path"
+    install_owned_executable "$target_path" "$BIN_DIR/$name"
   done
 
   for legacy in "${LEGACY_SCRIPTS[@]}"; do
@@ -916,6 +1038,8 @@ install_claude_commands() {
   local claude_dir
   claude_dir="$(detect_claude_dir)"
   mkdir -p "$claude_dir"
+  local asset_root
+  asset_root="$(resolve_install_asset_root)"
 
   # Clean up obsolete CCB commands (replaced by unified ask/ping/pend)
   local obsolete_cmds="bask.md bpend.md bping.md cask.md cpend.md cping.md dask.md dpend.md dping.md gask.md gpend.md gping.md hask.md hpend.md hping.md lask.md lpend.md lping.md oask.md opend.md oping.md qask.md qpend.md qping.md"
@@ -927,15 +1051,49 @@ install_claude_commands() {
   done
 
   for doc in "${CLAUDE_MARKDOWN[@]+"${CLAUDE_MARKDOWN[@]}"}"; do
-    cp -f "$REPO_ROOT/commands/$doc" "$claude_dir/$doc"
-    chmod 0644 "$claude_dir/$doc" 2>/dev/null || true
+    install_owned_file "$asset_root/commands/$doc" "$claude_dir/$doc" 0644
   done
 
   echo "Updated Claude commands directory: $claude_dir"
 }
 
+install_skill_entry() {
+  local skill_dir="$1"
+  local destination_dir="$2"
+  local src_skill_md=""
+
+  if [[ -f "$skill_dir/SKILL.md.bash" ]]; then
+    src_skill_md="$skill_dir/SKILL.md.bash"
+  elif [[ -f "$skill_dir/SKILL.md" ]]; then
+    src_skill_md="$skill_dir/SKILL.md"
+  else
+    return 1
+  fi
+
+  clear_installed_path "$destination_dir"
+  mkdir -p "$destination_dir"
+  install_owned_file "$src_skill_md" "$destination_dir/SKILL.md" 0644
+
+  local child
+  for child in "$skill_dir"/*; do
+    [[ -e "$child" ]] || continue
+    local child_name
+    child_name="$(basename "$child")"
+    if [[ "$child_name" == "SKILL.md" || "$child_name" == "SKILL.md.bash" ]]; then
+      continue
+    fi
+    if [[ -d "$child" ]]; then
+      install_owned_directory "$child" "$destination_dir/$child_name"
+    elif [[ -f "$child" ]]; then
+      install_owned_file "$child" "$destination_dir/$child_name" 0644
+    fi
+  done
+}
+
 install_claude_skills() {
-  local skills_src="$REPO_ROOT/claude_skills"
+  local asset_root
+  asset_root="$(resolve_install_asset_root)"
+  local skills_src="$asset_root/claude_skills"
   local skills_dst="$HOME/.claude/skills"
 
   if [[ ! -d "$skills_src" ]]; then
@@ -960,36 +1118,19 @@ install_claude_skills() {
     skill_name=$(basename "$skill_dir")
     [[ "$skill_name" == "docs" ]] && continue
 
-    local src_skill_md=""
-    if [[ -f "$skill_dir/SKILL.md.bash" ]]; then
-      src_skill_md="$skill_dir/SKILL.md.bash"
-    elif [[ -f "$skill_dir/SKILL.md" ]]; then
-      src_skill_md="$skill_dir/SKILL.md"
-    else
+    if [[ ! -f "$skill_dir/SKILL.md.bash" && ! -f "$skill_dir/SKILL.md" ]]; then
       continue
     fi
 
     local dst_dir="$skills_dst/$skill_name"
-    local dst_skill_md="$dst_dir/SKILL.md"
-    mkdir -p "$dst_dir"
-    cp -f "$src_skill_md" "$dst_skill_md"
-
-    # Copy additional subdirectories (e.g., references/) if they exist
-    for subdir in "$skill_dir"*/; do
-      if [[ -d "$subdir" ]]; then
-        local subdir_name
-        subdir_name=$(basename "$subdir")
-        cp -rf "$subdir" "$dst_dir/$subdir_name"
-      fi
-    done
+    install_skill_entry "${skill_dir%/}" "$dst_dir"
 
     echo "  Updated skill: $skill_name"
   done
 
   # Shared docs live at skills/docs but are not a "skill directory". Install them as well.
   if [[ -d "$skills_src/docs" ]]; then
-    rm -rf "$skills_dst/docs"
-    cp -r "$skills_src/docs" "$skills_dst/docs"
+    install_owned_directory "$skills_src/docs" "$skills_dst/docs"
     echo "  Installed skills docs: docs/"
   fi
 
@@ -997,7 +1138,9 @@ install_claude_skills() {
 }
 
 install_codex_skills() {
-  local skills_src="$REPO_ROOT/codex_skills"
+  local asset_root
+  asset_root="$(resolve_install_asset_root)"
+  local skills_src="$asset_root/codex_skills"
   local skills_dst="${CODEX_HOME:-$HOME/.codex}/skills"
 
   if [[ ! -d "$skills_src" ]]; then
@@ -1021,28 +1164,12 @@ install_codex_skills() {
     local skill_name
     skill_name=$(basename "$skill_dir")
 
-    local src_skill_md=""
-    if [[ -f "$skill_dir/SKILL.md.bash" ]]; then
-      src_skill_md="$skill_dir/SKILL.md.bash"
-    elif [[ -f "$skill_dir/SKILL.md" ]]; then
-      src_skill_md="$skill_dir/SKILL.md"
-    else
+    if [[ ! -f "$skill_dir/SKILL.md.bash" && ! -f "$skill_dir/SKILL.md" ]]; then
       continue
     fi
 
     local dst_dir="$skills_dst/$skill_name"
-    local dst_skill_md="$dst_dir/SKILL.md"
-    mkdir -p "$dst_dir"
-    cp -f "$src_skill_md" "$dst_skill_md"
-
-    # Copy additional subdirectories (e.g., references/) if they exist
-    for subdir in "$skill_dir"*/; do
-      if [[ -d "$subdir" ]]; then
-        local subdir_name
-        subdir_name=$(basename "$subdir")
-        cp -rf "$subdir" "$dst_dir/$subdir_name"
-      fi
-    done
+    install_skill_entry "${skill_dir%/}" "$dst_dir"
 
     echo "  Updated Codex skill: $skill_name"
   done
@@ -1050,7 +1177,9 @@ install_codex_skills() {
 }
 
 install_droid_skills() {
-  local skills_src="$REPO_ROOT/droid_skills"
+  local asset_root
+  asset_root="$(resolve_install_asset_root)"
+  local skills_src="$asset_root/droid_skills"
   local skills_dst="${FACTORY_HOME:-$HOME/.factory}/skills"
 
   if [[ ! -d "$skills_src" ]]; then
@@ -1078,26 +1207,12 @@ install_droid_skills() {
     local skill_name
     skill_name=$(basename "$skill_dir")
 
-    local src_skill_md=""
-    if [[ -f "$skill_dir/SKILL.md" ]]; then
-      src_skill_md="$skill_dir/SKILL.md"
-    else
+    if [[ ! -f "$skill_dir/SKILL.md" ]]; then
       continue
     fi
 
     local dst_dir="$skills_dst/$skill_name"
-    local dst_skill_md="$dst_dir/SKILL.md"
-    mkdir -p "$dst_dir"
-    cp -f "$src_skill_md" "$dst_skill_md"
-
-    # Copy additional subdirectories (e.g., references/) if they exist
-    for subdir in "$skill_dir"*/; do
-      if [[ -d "$subdir" ]]; then
-        local subdir_name
-        subdir_name=$(basename "$subdir")
-        cp -rf "$subdir" "$dst_dir/$subdir_name"
-      fi
-    done
+    install_skill_entry "${skill_dir%/}" "$dst_dir"
 
     echo "  Updated Factory skill: $skill_name"
   done
@@ -1117,7 +1232,9 @@ install_droid_delegation() {
     echo "WARN: python required for Droid MCP setup; skipping"
     return
   fi
-  local server="$INSTALL_PREFIX/mcp/ccb-delegation/server.py"
+  local asset_root
+  asset_root="$(resolve_install_asset_root)"
+  local server="$asset_root/mcp/ccb-delegation/server.py"
   if [[ ! -f "$server" ]]; then
     echo "WARN: Droid MCP server not found at $server; skipping"
     return
@@ -1214,8 +1331,10 @@ except Exception as e:
 install_claude_md_config() {
   local claude_md="$HOME/.claude/CLAUDE.md"
   local md_mode="${CCB_CLAUDE_MD_MODE:-inline}"
-  local full_template="$INSTALL_PREFIX/config/claude-md-ccb.md"
-  local route_template="$INSTALL_PREFIX/config/claude-md-ccb-route.md"
+  local asset_root
+  asset_root="$(resolve_install_asset_root)"
+  local full_template="$asset_root/config/claude-md-ccb.md"
+  local route_template="$asset_root/config/claude-md-ccb-route.md"
   local external_config="$HOME/.claude/rules/ccb-config.md"
 
   # Select template based on mode
@@ -1301,6 +1420,10 @@ CCB_RUBRICS_START_MARKER="<!-- REVIEW_RUBRICS_START -->"
 CCB_RUBRICS_END_MARKER="<!-- REVIEW_RUBRICS_END -->"
 
 install_agents_md_config() {
+  if install_uses_live_source; then
+    echo "Skipping AGENTS.md injection for source dev install (avoid mutating live repo)."
+    return 0
+  fi
   local agents_md="$INSTALL_PREFIX/AGENTS.md"
   local template="$INSTALL_PREFIX/config/agents-md-ccb.md"
 
@@ -1353,6 +1476,10 @@ with open(sys.argv[1], 'w', encoding='utf-8') as f:
 }
 
 install_clinerules_config() {
+  if install_uses_live_source; then
+    echo "Skipping .clinerules injection for source dev install (avoid mutating live repo)."
+    return 0
+  fi
   local clinerules="$INSTALL_PREFIX/.clinerules"
   local template="$INSTALL_PREFIX/config/clinerules-ccb.md"
 
@@ -1515,8 +1642,10 @@ install_tmux_config() {
   local tmux_conf_local="$HOME/.tmux.conf.local"
   local tmux_conf="$tmux_conf_main"
   local reload_conf="$tmux_conf_main"
-  local ccb_tmux_conf="$REPO_ROOT/config/tmux-ccb.conf"
-  local ccb_status_script="$REPO_ROOT/config/ccb-status.sh"
+  local asset_root
+  asset_root="$(resolve_install_asset_root)"
+  local ccb_tmux_conf="$asset_root/config/tmux-ccb.conf"
+  local ccb_status_script="$asset_root/config/ccb-status.sh"
   local status_install_path="$BIN_DIR/ccb-status.sh"
 
   if [[ ! -f "$ccb_tmux_conf" ]]; then
@@ -1527,40 +1656,35 @@ install_tmux_config() {
 
   # Install ccb-status.sh script
   if [[ -f "$ccb_status_script" ]]; then
-    cp "$ccb_status_script" "$status_install_path"
-    chmod +x "$status_install_path"
+    install_owned_executable "$ccb_status_script" "$status_install_path"
     echo "Installed: $status_install_path"
   fi
 
   # Install ccb-border.sh script (dynamic pane border colors)
-  local ccb_border_script="$REPO_ROOT/config/ccb-border.sh"
+  local ccb_border_script="$asset_root/config/ccb-border.sh"
   local border_install_path="$BIN_DIR/ccb-border.sh"
   if [[ -f "$ccb_border_script" ]]; then
-    cp "$ccb_border_script" "$border_install_path"
-    chmod +x "$border_install_path"
+    install_owned_executable "$ccb_border_script" "$border_install_path"
     echo "Installed: $border_install_path"
   fi
 
   # Install ccb-git.sh script (cached git status for tmux status line)
-  local ccb_git_script="$REPO_ROOT/config/ccb-git.sh"
+  local ccb_git_script="$asset_root/config/ccb-git.sh"
   local git_install_path="$BIN_DIR/ccb-git.sh"
   if [[ -f "$ccb_git_script" ]]; then
-    cp "$ccb_git_script" "$git_install_path"
-    chmod +x "$git_install_path"
+    install_owned_executable "$ccb_git_script" "$git_install_path"
     echo "Installed: $git_install_path"
   fi
 
   # Install tmux UI toggle scripts (enable/disable CCB theming per-session)
-  local ccb_tmux_on_script="$REPO_ROOT/config/ccb-tmux-on.sh"
-  local ccb_tmux_off_script="$REPO_ROOT/config/ccb-tmux-off.sh"
+  local ccb_tmux_on_script="$asset_root/config/ccb-tmux-on.sh"
+  local ccb_tmux_off_script="$asset_root/config/ccb-tmux-off.sh"
   if [[ -f "$ccb_tmux_on_script" ]]; then
-    cp "$ccb_tmux_on_script" "$BIN_DIR/ccb-tmux-on.sh"
-    chmod +x "$BIN_DIR/ccb-tmux-on.sh"
+    install_owned_executable "$ccb_tmux_on_script" "$BIN_DIR/ccb-tmux-on.sh"
     echo "Installed: $BIN_DIR/ccb-tmux-on.sh"
   fi
   if [[ -f "$ccb_tmux_off_script" ]]; then
-    cp "$ccb_tmux_off_script" "$BIN_DIR/ccb-tmux-off.sh"
-    chmod +x "$BIN_DIR/ccb-tmux-off.sh"
+    install_owned_executable "$ccb_tmux_off_script" "$BIN_DIR/ccb-tmux-off.sh"
     echo "Installed: $BIN_DIR/ccb-tmux-off.sh"
   fi
 
@@ -1747,8 +1871,10 @@ install_all() {
   install_requirements
   remove_codex_mcp
   cleanup_legacy_files
-  copy_project
-  write_install_metadata
+  prepare_install_tree
+  if ! install_uses_live_source; then
+    write_install_metadata
+  fi
   install_bin_links
   ensure_path_configured
   install_claude_commands
@@ -1762,8 +1888,13 @@ install_all() {
   install_settings_permissions
   install_tmux_config
   echo "OK: Installation complete"
-  echo "   Project dir    : $INSTALL_PREFIX"
   echo "   Executable dir : $BIN_DIR"
+  if install_uses_live_source; then
+    echo "   Live source dir: $(resolve_live_source_root)"
+    echo "   Managed dir    : $INSTALL_PREFIX"
+  else
+    echo "   Project dir    : $INSTALL_PREFIX"
+  fi
   print_install_identity_summary
   echo "   Claude commands updated"
   local md_mode="${CCB_CLAUDE_MD_MODE:-inline}"
@@ -1772,8 +1903,12 @@ install_all() {
   else
     echo "   Global CLAUDE.md configured with CCB collaboration rules (inline)"
   fi
-  echo "   AGENTS.md configured with review rubrics"
-  echo "   .clinerules configured with role assignments"
+  if install_uses_live_source; then
+    echo "   Repo AGENTS.md/.clinerules left untouched (source dev mode)"
+  else
+    echo "   AGENTS.md configured with review rubrics"
+    echo "   .clinerules configured with role assignments"
+  fi
   echo "   Global settings.json permissions added"
   print_install_identity_notice
 }

@@ -9,6 +9,7 @@ from typing import Any
 
 from project.identity import compute_ccb_project_id
 
+from ...session_authority import remember_bound_session_authority
 from ..binding import extract_session_id
 from ...start_cmd import persist_resume_start_cmd_fields
 from .history_transfer import apply_old_binding_metadata
@@ -147,6 +148,11 @@ def _apply_binding_updates(
         data["codex_session_id"] = session_id
         updated = True
         binding_changed = True
+    if path_str or session_id:
+        before = str(data.get("codex_session_authority_fingerprint") or "").strip()
+        remember_bound_session_authority(data)
+        if str(data.get("codex_session_authority_fingerprint") or "").strip() != before:
+            updated = True
     if ccb_project_id and data.get("ccb_project_id") != ccb_project_id:
         data["ccb_project_id"] = ccb_project_id
         updated = True

@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import TextIO
 
 from cli.ask_usage import write_ask_usage
 from cli.auxiliary import cmd_droid_subcommand
 from cli.management import cmd_reinstall, cmd_uninstall, cmd_update, cmd_version
+from cli.management_runtime.startup_update import (
+    maybe_handle_background_update_refresh_command,
+    maybe_handle_startup_release_update,
+)
 from cli.phase2 import maybe_handle_phase2
 from cli.parser_runtime.constants import SUBCOMMANDS
 from cli.router import dispatch_auxiliary_command, dispatch_management_command, print_command_help, print_kill_help, print_start_help
@@ -131,6 +136,9 @@ def run_cli_entrypoint(
     if _should_print_version(tokens):
         print(f"v{version}", file=stdout)
         return 0
+    internal_result = maybe_handle_background_update_refresh_command(tokens, script_root=script_root)
+    if internal_result is not None:
+        return internal_result
 
     help_result = _handle_help(tokens, stdout=stdout)
     if help_result is not None:
@@ -149,6 +157,17 @@ def run_cli_entrypoint(
     management_result = _dispatch_management(tokens, script_root=script_root)
     if management_result is not None:
         return management_result
+
+    startup_update_result = maybe_handle_startup_release_update(
+        tokens,
+        script_root=script_root,
+        cwd=cwd,
+        stdout=stdout,
+        stderr=stderr,
+        stdin=sys.stdin,
+    )
+    if startup_update_result is not None:
+        return startup_update_result
 
     return maybe_handle_phase2(tokens, cwd=cwd, stdout=stdout, stderr=stderr)
 __all__ = ["run_cli_entrypoint"]

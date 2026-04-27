@@ -209,6 +209,75 @@ def test_prepare_provider_workspace_repairs_existing_claude_hook_only_settings(t
     assert 'echo legacy-hook' in commands
 
 
+def test_prepare_provider_workspace_preserves_managed_claude_auth_when_system_home_logged_out(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    workspace = project_root / 'workspace'
+    system_home = tmp_path / 'system-home'
+    system_settings = system_home / '.claude' / 'settings.json'
+    system_settings.parent.mkdir(parents=True, exist_ok=True)
+    system_settings.write_text(
+        json.dumps(
+            {
+                'env': {
+                    'ANTHROPIC_BASE_URL': 'https://claude.example.test',
+                },
+                'theme': 'light',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('HOME', str(system_home))
+
+    managed_settings = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-state' / 'claude' / 'home' / '.claude' / 'settings.json'
+    managed_settings.parent.mkdir(parents=True, exist_ok=True)
+    managed_settings.write_text(
+        json.dumps(
+            {
+                'env': {
+                    'ANTHROPIC_AUTH_TOKEN': 'managed-token',
+                    'ANTHROPIC_BASE_URL': 'https://managed.example.test',
+                },
+                'hooks': {
+                    'Stop': [
+                        {
+                            'hooks': [
+                                {
+                                    'type': 'command',
+                                    'command': 'echo legacy-hook',
+                                }
+                            ]
+                        }
+                    ]
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    prepare_provider_workspace(
+        layout=PathLayout(project_root),
+        spec=_spec('agent1'),
+        workspace_path=workspace,
+        completion_dir=project_root / '.ccb' / 'agents' / 'agent1' / 'provider-runtime' / 'claude' / 'completion',
+        agent_name='agent1',
+        refresh_profile=True,
+    )
+
+    payload = json.loads(managed_settings.read_text(encoding='utf-8'))
+    assert payload['env']['ANTHROPIC_AUTH_TOKEN'] == 'managed-token'
+    assert payload['env']['ANTHROPIC_BASE_URL'] == 'https://claude.example.test'
+    assert payload['theme'] == 'light'
+    commands = [hook['command'] for group in payload['hooks']['Stop'] for hook in group.get('hooks', []) if isinstance(hook, dict)]
+    assert 'echo legacy-hook' in commands
+
+
 def test_install_gemini_hooks_writes_managed_home_settings_only(tmp_path: Path) -> None:
     workspace = tmp_path / 'workspace'
     home_root = tmp_path / 'gemini-home'
@@ -284,6 +353,51 @@ def test_prepare_provider_workspace_materializes_gemini_settings_before_hooks(tm
     assert payload['theme'] == 'Default'
     assert payload['hooks']['AfterAgent'][0]['hooks'][0]['command']
     assert not (workspace / '.gemini').exists()
+
+
+def test_prepare_provider_workspace_materializes_gemini_oauth_credentials_when_login_auth_selected(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root = tmp_path / 'repo'
+    workspace = project_root / 'workspace'
+    system_home = tmp_path / 'system-home'
+    system_settings = system_home / '.gemini' / 'settings.json'
+    system_oauth = system_home / '.gemini' / 'oauth_creds.json'
+    system_settings.parent.mkdir(parents=True, exist_ok=True)
+    system_settings.write_text(
+        json.dumps(
+            {
+                'security': {
+                    'auth': {
+                        'selectedType': 'oauth-personal',
+                    }
+                }
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    system_oauth.write_text(
+        json.dumps({'refresh_token': 'system-refresh-token'}, ensure_ascii=False, indent=2),
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('HOME', str(system_home))
+
+    prepare_provider_workspace(
+        layout=PathLayout(project_root),
+        spec=_spec('agent1', provider='gemini'),
+        workspace_path=workspace,
+        completion_dir=project_root / '.ccb' / 'agents' / 'agent1' / 'provider-runtime' / 'gemini' / 'completion',
+        agent_name='agent1',
+        refresh_profile=True,
+    )
+
+    managed_settings = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-state' / 'gemini' / 'home' / '.gemini' / 'settings.json'
+    managed_oauth = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-state' / 'gemini' / 'home' / '.gemini' / 'oauth_creds.json'
+    payload = json.loads(managed_settings.read_text(encoding='utf-8'))
+    assert payload['security']['auth']['selectedType'] == 'oauth-personal'
+    assert json.loads(managed_oauth.read_text(encoding='utf-8'))['refresh_token'] == 'system-refresh-token'
 
 
 def test_prepare_provider_workspace_repairs_existing_gemini_hook_only_settings(tmp_path: Path, monkeypatch) -> None:

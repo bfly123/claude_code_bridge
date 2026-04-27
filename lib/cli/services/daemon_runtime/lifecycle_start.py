@@ -129,6 +129,9 @@ def finalize_daemon_start(
         if inspection.socket_connectable:
             raise CcbdServiceError(incompatible_daemon_error_fn())
     if phase == 'starting':
+        stage = str(getattr(inspection, 'startup_stage', '') or '').strip()
+        if stage:
+            raise CcbdServiceError(f'ccbd is unavailable: lifecycle_starting(stage={stage})')
         raise CcbdServiceError('ccbd is unavailable: lifecycle_starting')
     if phase == 'stopping':
         raise CcbdServiceError('ccbd is unavailable: lifecycle_stopping')
