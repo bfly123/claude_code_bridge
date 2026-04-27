@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v6.0.15 (2026-04-27)
+
+### Codex Route Authority & Foreground Attach Polish
+
+- **Codex Explicit Route Authority**: managed Codex homes now materialize agent-local `config.toml` and `auth.json` as the sole authority for explicit `key` / `url` routes, so agent-scoped API overrides replace inherited global provider routes instead of drifting back to system config
+- **Codex Session Namespace Rotation**: managed Codex startup now fingerprints explicit route authority, stamps reusable session bindings with that authority, and rotates stale `sessions/` namespaces before launch when the bound route no longer matches
+- **Foreground Attach UX Hardening**: interactive `ccb` startup now seeds tmux namespace creation from the real terminal viewport and issues a best-effort client refresh after attach so first paint matches the current terminal size without manual redraw
+
 ## v6.0.14 (2026-04-26)
 
 ### Claude Logout Recovery Hardening

@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/模型皆可控-CF1322?style=for-the-badge" alt="模型皆可控">
 </p>
 
-[![Version](https://img.shields.io/badge/version-6.0.14-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-6.0.15-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 [English](README.md) | **中文**
@@ -98,6 +98,15 @@ cmd; writer:codex, reviewer:claude; qa:gemini(worktree)
 历史说明：下面较旧的发布记录里仍可能出现 `askd`、旧 flag 或已移除命令。这些内容仅作为 changelog 历史保留，不代表当前 CLI 入口。
 
 <details open>
+<summary><b>v6.0.15</b> - Codex 路由权威与前台 attach 打磨</summary>
+
+- **Codex 显式路由权威**：managed Codex home 现在会把 agent 私有 `config.toml` 与 `auth.json` 物化为显式 `key` / `url` 路由的唯一权威，使 agent 级 API 覆盖真正替代系统级 provider 路由，而不是漂回全局配置
+- **Codex 会话命名空间轮换**：managed Codex 启动现在会为显式路由生成 authority 指纹，把可复用 session 绑定也打上该 authority；当绑定路由与当前路由不一致时，会在启动前轮换旧 `sessions/` 命名空间
+- **前台 attach 体验加固**：交互式 `ccb` 启动现在会用真实终端视口初始化 tmux namespace，并在 attach 后做一次 best-effort client refresh，避免首次显示依赖手工刷新
+
+</details>
+
+<details>
 <summary><b>v6.0.14</b> - Claude logout 恢复加固</summary>
 
 - **managed Claude 登录态保留**：当全局 Claude home 已执行 logout 时，managed Claude home 现在会保留 agent 私有的本地登录态，避免项目内重新登录后重启再次掉回浏览器链接循环
