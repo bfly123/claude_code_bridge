@@ -102,6 +102,41 @@ def test_scan_latest_session_reads_sidechain_flag_after_summary_prelude(tmp_path
     assert reader._scan_latest_session() == session
 
 
+def test_session_is_sidechain_skips_file_history_snapshot_preamble(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / 'claude-root'
+    work_dir = tmp_path / 'project-a'
+    work_dir.mkdir()
+    monkeypatch.setenv('PWD', str(work_dir))
+
+    live = root / _project_key(work_dir) / 'live.jsonl'
+    stale = root / _project_key(work_dir) / 'stale.jsonl'
+    live.parent.mkdir(parents=True, exist_ok=True)
+    preamble = '\n'.join(
+        [
+            '{"type":"ai-title","title":"demo"}',
+            '{"type":"agent-name","name":"claude"}',
+            '{"type":"mode","mode":"default"}',
+            '{"type":"permission-mode","mode":"default"}',
+            *[
+                f'{{"type":"file-history-snapshot","messageId":"snap-{index}"}}'
+                for index in range(30)
+            ],
+            '{"type":"user","isSidechain":false,"message":{"role":"user","content":"live"}}',
+        ]
+    ) + '\n'
+    live.write_text(preamble, encoding='utf-8')
+    stale.write_text(
+        '{"type":"user","isSidechain":false,"message":{"role":"user","content":"stale"}}\n',
+        encoding='utf-8',
+    )
+    os.utime(live, (live.stat().st_atime, live.stat().st_mtime + 20))
+
+    reader = ClaudeLogReader(root=root, work_dir=work_dir, use_sessions_index=False)
+
+    assert reader._session_is_sidechain(live) is False
+    assert reader._scan_latest_session() == live
+
+
 def test_latest_session_ignores_env_pwd_project_namespace_for_workspace_reader(
     tmp_path: Path,
     monkeypatch,
