@@ -378,7 +378,7 @@ def run_smoke(
             _write_json(report_path, failure)
         if not keep_running and cleanup_result is None:
             try:
-                _run_logged(
+                cleanup_result = _run_logged(
                     command_log,
                     'failure_cleanup',
                     [str(ccb_test), '--project', str(project_root), 'kill', '-f'],
@@ -388,8 +388,18 @@ def run_smoke(
                     timeout_s=command_timeout_s,
                     allow_failure=True,
                 )
-            except Exception:
-                pass
+            except Exception as cleanup_exc:
+                failure['cleanup_error'] = str(cleanup_exc)
+            failure['external_cleanup'] = (
+                _compact_command(cleanup_result) if cleanup_result is not None else None
+            )
+            failure['command_log'] = [_compact_command(item) for item in command_log]
+            try:
+                failure['post_cleanup'] = _post_cleanup_evidence(project_root)
+            except Exception as cleanup_exc:
+                failure['cleanup_evidence_error'] = str(cleanup_exc)
+            if preserved.get('schema') != REPORT_SCHEMA or 'checks' not in preserved:
+                _write_json(report_path, failure)
         raise
 
 

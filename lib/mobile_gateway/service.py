@@ -2427,7 +2427,14 @@ class MobileGatewayService:
 
     def _project_list_health(self, project: MobileGatewayProject) -> dict[str, object]:
         try:
-            return self._ping_or_unavailable(project)
+            payload = self._ping_or_unavailable(project)
+            if payload.get('project_id') and payload['project_id'] != project.project_id:
+                return {
+                    'health': 'unreachable',
+                    'mount_state': 'unavailable',
+                    'error': 'project identity mismatch',
+                }
+            return payload
         except MobileGatewayError:
             return {
                 'health': 'unreachable',

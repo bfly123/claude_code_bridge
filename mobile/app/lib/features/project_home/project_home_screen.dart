@@ -268,6 +268,12 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
   /// discarded instead of overwriting fresher catalogs.
   int _hostCatalogsRevision = 0;
 
+  /// Host ids that answered a probe with a catalog in the current round. Used
+  /// to keep the aggregated view stable across refreshes: re-probing does not
+  /// demote a computer that was just online back to "connecting", so a pull-to-
+  /// refresh cannot collapse the multi-host list mid-round.
+  final Set<String> _settledOnlineHostIds = {};
+
   late final MobileSnapshotStore _snapshotStore = MobileSnapshotStore();
   late final GatewayInvalidationCursorStore _invalidationCursorStore;
   GatewayInvalidationConnectionState _gatewayConnectionState =
@@ -912,6 +918,9 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
     }
     setState(() {
       _serverProjectsFuture = _loadServerProjects();
+      // A stored pairing that was offline may have come back; only a fresh
+      // probe of every stored host can notice it and re-aggregate.
+      _refreshMultiHostProjects();
     });
   }
 
@@ -972,11 +981,11 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
     );
   }
 
-  /// True when more than one distinct computer is paired, which is the only case
-  /// where the aggregated catalog adds anything over the active-host list. Two
-  /// profiles that share a host id are the same computer paired from different
-  /// devices or routes, so they keep the single active-host list.
-  bool get _shouldAggregateHosts {
+  /// True when more than one distinct computer is paired, which is the only
+  /// case where probing every host adds anything. Two profiles that share a
+  /// host id are the same computer paired from different devices or routes, so
+  /// they never count as two computers.
+  bool get _hasMultipleDistinctStoredHosts {
     if (_profiles.length < 2) {
       return false;
     }
@@ -984,6 +993,33 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
       for (final profile in _profiles) profile.profile.hostId,
     };
     return hostIds.length > 1;
+  }
+
+  /// True when the aggregated multi-host list should replace the single-host
+  /// project list. Only hosts that actually answered a probe count: an offline
+  /// pairing kept in the secure store must not occupy the home screen by
+  /// itself, so a phone with one reachable computer stays on the simple list.
+  /// The settled results are intersected with the currently stored pairings so
+  /// an unpaired computer cannot linger in the count, and a fresh probe round
+  /// never collapses an already-aggregated view mid-round.
+  bool get _shouldAggregateHosts {
+    if (!_hasMultipleDistinctStoredHosts) {
+      return false;
+    }
+    final storedHostIds = {
+      for (final profile in _profiles) profile.profile.hostId,
+    };
+    return _settledOnlineHostIds.where(storedHostIds.contains).length > 1;
+  }
+
+  /// Catalogs of hosts that are online or still being probed. An offline
+  /// computer is deliberately excluded from the aggregated view; it stays
+  /// paired and manageable from settings and the terminal host picker.
+  Iterable<ProjectHomeHostCatalog> get _availableHostCatalogs {
+    return _distinctHostProfiles
+        .map((profile) => _hostCatalogs[projectHomeGatewayProfileKey(profile)])
+        .nonNulls
+        .where((catalog) => !catalog.offline);
   }
 
   /// One profile per paired computer, so a host reachable by several routes or
@@ -1030,12 +1066,15 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
     return aAt.isAfter(bAt);
   }
 
-  /// Reloads every paired computer. Safe to call when only one host is paired;
-  /// the aggregated list is simply not rendered in that case.
+  /// Reloads every paired computer whenever more than one distinct host is
+  /// stored, even if all but one are offline: only a live probe can notice a
+  /// second computer coming online, so the fan-out must keep running for
+  /// stored hosts that are currently unreachable.
   void _refreshMultiHostProjects() {
     _hostCatalogsRevision += 1;
-    if (!_shouldAggregateHosts) {
+    if (!_hasMultipleDistinctStoredHosts) {
       _hostCatalogs.clear();
+      _settledOnlineHostIds.clear();
       return;
     }
     final revision = _hostCatalogsRevision;
@@ -1095,7 +1134,9 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
     setState(() {
       for (final entry in seeded.entries) {
         final catalog = _hostCatalogs[entry.key];
-        if (catalog == null || !catalog.pending || catalog.projects.isNotEmpty) {
+        if (catalog == null ||
+            !catalog.pending ||
+            catalog.projects.isNotEmpty) {
           continue;
         }
         _hostCatalogs[entry.key] = ProjectHomeHostCatalog(
@@ -1122,7 +1163,97 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
     }
     setState(() {
       _hostCatalogs[projectHomeGatewayProfileKey(profile)] = catalog;
+      if (catalog.online) {
+        _settledOnlineHostIds.add(profile.profile.hostId);
+      } else {
+        _settledOnlineHostIds.remove(profile.profile.hostId);
+      }
+      _syncSingleHostProjectsFromSelectedCatalog();
     });
+    _maybeFailoverToSoleOnlineHost();
+  }
+
+  /// Keeps the hidden single-host future aligned with the current probe round.
+  /// It is only replaced after the active profile has completed activation and
+  /// the UI has actually fallen back from aggregation, so a catalog-only probe
+  /// cannot bypass gateway verification during initial activation.
+  void _syncSingleHostProjectsFromSelectedCatalog() {
+    if (_mode != AppRuntimeMode.pairedGateway ||
+        !_gatewayProfileActivationSucceeded ||
+        _shouldAggregateHosts) {
+      return;
+    }
+    final selected = _selectedProfile;
+    if (selected == null) {
+      return;
+    }
+    final catalog = _hostCatalogs[projectHomeGatewayProfileKey(selected)];
+    if (catalog == null || catalog.pending) {
+      return;
+    }
+    if (catalog.online) {
+      _serverProjectsFuture = SynchronousFuture(catalog.projects);
+      return;
+    }
+    final error = catalog.error!;
+    final projectsFuture = _deferredBuilderFuture<List<CcbProject>>(
+      () async => throw error,
+    );
+    // This can be created from a post-frame probe callback, before the rebuild
+    // that attaches FutureBuilder. Keep that brief gap from surfacing as an
+    // unhandled zone error; FutureBuilder still receives the same error.
+    projectsFuture.ignore();
+    _serverProjectsFuture = projectsFuture;
+  }
+
+  /// Switches the runtime to the only reachable computer when the activated
+  /// host cannot be reached. This covers a phone that wakes up with a stored
+  /// preference for a computer that went away while another paired computer is
+  /// still online: instead of an error screen, the single-host list of the
+  /// reachable computer takes over. Only runs while the failed activation has
+  /// not produced any successful gateway session yet, so an established
+  /// session is never yanked away by a single failed refresh.
+  void _maybeFailoverToSoleOnlineHost() {
+    if (_mode != AppRuntimeMode.pairedGateway ||
+        _gatewayProfileActivationSucceeded) {
+      return;
+    }
+    final selected = _selectedProfile;
+    if (selected == null) {
+      return;
+    }
+    final selectedCatalog =
+        _hostCatalogs[projectHomeGatewayProfileKey(selected)];
+    if (selectedCatalog == null || !selectedCatalog.offline) {
+      return;
+    }
+    if (_settledOnlineHostIds.length != 1) {
+      return;
+    }
+    final soleHostId = _settledOnlineHostIds.single;
+    GatewayPairedHost? target;
+    for (final profile in _distinctHostProfiles) {
+      if (profile.profile.hostId == soleHostId) {
+        target = profile;
+        break;
+      }
+    }
+    if (target == null) {
+      return;
+    }
+    _activateGatewayProfile(target);
+  }
+
+  /// Records the active host as reachable, so a phone whose stored pairings
+  /// include a second, offline computer still aggregates as soon as the active
+  /// gateway answers. Without this, activation with a single usable host would
+  /// leave the settled set empty and the aggregated view could never appear
+  /// until a full multi-host refresh happened to run.
+  void _markActiveHostSettledOnline() {
+    final profile = _selectedProfile;
+    if (profile != null) {
+      _settledOnlineHostIds.add(profile.profile.hostId);
+    }
   }
 
   /// Mirrors a freshly listed catalog of the active host into the aggregated
@@ -1130,22 +1261,24 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
   /// Must be called inside a `setState` block.
   void _publishActiveHostCatalog(List<CcbProject> projects) {
     final profile = _selectedProfile;
-    if (profile == null || !_shouldAggregateHosts) {
+    if (profile == null || !_hasMultipleDistinctStoredHosts) {
       return;
     }
-    _hostCatalogs[projectHomeGatewayProfileKey(profile)] =
-        ProjectHomeHostCatalog(profile: profile, projects: projects);
+    _hostCatalogs[projectHomeGatewayProfileKey(
+      profile,
+    )] = ProjectHomeHostCatalog(profile: profile, projects: projects);
+    _settledOnlineHostIds.add(profile.profile.hostId);
   }
 
-  /// Aggregated view of the current per-host catalogs, ordered by paired host so
-  /// rows keep a stable position while the remaining computers are still loading.
+  /// Aggregated view of the reachable hosts only, ordered by paired host so
+  /// rows keep a stable position while the remaining computers are still
+  /// loading. Offline pairings stay in the secure store but do not own a
+  /// section here, so they cannot occupy the home screen.
   ProjectHomeMultiHostProjectsResult get _multiHostProjectsResult {
-    return ProjectHomeMultiHostProjectsResult.fromCatalogs([
-      for (final profile in _distinctHostProfiles)
-        if (_hostCatalogs[projectHomeGatewayProfileKey(profile)]
-            case final catalog?)
-          catalog,
-    ], optimisticActivityAt: _optimisticProjectActivityAt);
+    return ProjectHomeMultiHostProjectsResult.fromCatalogs(
+      _availableHostCatalogs.toList(growable: false),
+      optimisticActivityAt: _optimisticProjectActivityAt,
+    );
   }
 
   Widget _buildMultiHostProjectList() {
@@ -1620,8 +1753,9 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
       }
     });
     if (_shouldAggregateHosts) {
-      // The aggregated list is what gets rendered with several paired hosts, and
-      // it already refreshes this host, so a second reload here is dead work.
+      // The aggregated list is what gets rendered while several hosts are
+      // reachable, and the catalog fan-out already refreshes this host, so a
+      // second reload here is dead work.
       return;
     }
     // The cached list is only a startup frame. Authoritative data replaces it
@@ -1900,6 +2034,11 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
     }
     _connectionSupervisor.reportSuccess();
     _gatewayProfileActivationSucceeded = true;
+    if (mounted) {
+      setState(() {
+        _markActiveHostSettledOnline();
+      });
+    }
     _requestBackgroundConnectionReconcile();
     await widget.profileStore.markSuccessful(profile);
   }
@@ -1944,6 +2083,7 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
       return;
     }
     setState(() {
+      _settledOnlineHostIds.remove(profile.profile.hostId);
       _profiles = _profiles
           .where(
             (candidate) =>

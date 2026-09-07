@@ -32,6 +32,49 @@ requires_af_unix = pytest.mark.skipif(
 )
 
 
+def test_registry_replaces_same_root_but_preserves_same_name(tmp_path, monkeypatch):
+    registry_path = tmp_path / 'projects.json'
+    first = tmp_path / 'one' / 'project'
+    second = tmp_path / 'two' / 'project'
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    monkeypatch.setattr(project_registry, '_control_plane_endpoint_is_structurally_valid', lambda _: True)
+    for project_id, root in [('old', first), ('other', second), ('new', first / '..' / 'project')]:
+        publish_mobile_gateway_project(project_id=project_id, project_root=root,
+                                       ccbd_socket_path=root / 'socket', registry_path=registry_path)
+    records = json.loads(registry_path.read_text())['projects']
+    assert {record['project_id'] for record in records} == {'new', 'other'}
+
+
+def test_registry_rejects_stale_identity_on_load_and_publish(tmp_path, monkeypatch):
+    from project.identity_store import ensure_project_identity
+
+    root = tmp_path / 'project'
+    root.mkdir()
+    registry_path = tmp_path / 'projects.json'
+    publish_mobile_gateway_project(project_id='old', project_root=root,
+                                   ccbd_socket_path=root / 'socket', registry_path=registry_path)
+    (root / '.ccb').mkdir()
+    identity = ensure_project_identity(root)
+    monkeypatch.setattr(project_registry, '_control_plane_endpoint_is_structurally_valid', lambda _: True)
+    with pytest.raises(ValueError, match='cannot be empty'):
+        load_mobile_gateway_project_registry(registry_path=registry_path)
+    publish_mobile_gateway_project(project_id=identity.project_id, project_root=root,
+                                   ccbd_socket_path=root / 'socket', registry_path=registry_path)
+    publish_mobile_gateway_project(project_id='old', project_root=root,
+                                   ccbd_socket_path=root / 'socket', registry_path=registry_path)
+    assert [p.project_id for p in load_mobile_gateway_project_registry(registry_path=registry_path).projects()] == [identity.project_id]
+
+
+def test_project_health_rejects_foreign_identity(tmp_path):
+    from mobile_gateway.service import MobileGatewayService
+
+    project = MobileGatewayProject(project_id='old', project_root=tmp_path,
+        ccbd_client_factory=lambda: _FakeCcbdClient(project_id='current', project_root=str(tmp_path), display_name='project'))
+    service = object.__new__(MobileGatewayService)
+    assert service._project_list_health(project)['health'] == 'unreachable'
+
+
 def _windows_tcp_loopback_endpoint(*, token_ref: str, **overrides) -> dict:
     endpoint = {
         'kind': 'tcp_loopback',

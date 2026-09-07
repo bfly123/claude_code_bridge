@@ -9,6 +9,8 @@ from typing import Callable
 from ccbd.socket_client import CcbdClient
 from ccbd.control_plane_transport.endpoint_store import read_endpoint
 from storage.atomic import atomic_write_json
+from project.ids import normalize_project_path
+from project.identity_store import load_project_identity
 
 
 @dataclass(frozen=True)
@@ -114,6 +116,14 @@ def publish_mobile_gateway_project(
         ccbd_client_factory=lambda: None,
         display_name=display_name,
     )
+    identity = load_project_identity(normalized.project_root)
+    if identity is not None and identity.project_id != normalized.project_id:
+        return
+    root_key = normalize_project_path(normalized.project_root)
+    projects = {
+        key: record for key, record in projects.items()
+        if normalize_project_path(str(record.get('project_root') or '')) != root_key
+    }
     projects[normalized.project_id] = {
         'project_id': normalized.project_id,
         'display_name': normalized.public_display_name,
@@ -215,6 +225,9 @@ def _project_from_record(record: dict[str, object]) -> MobileGatewayProject | No
     if not project_root.is_absolute() or not socket_path.is_absolute():
         return None
     if not project_root.exists() or not _control_plane_endpoint_is_structurally_valid(socket_path):
+        return None
+    identity = load_project_identity(project_root)
+    if identity is not None and identity.project_id != project_id:
         return None
     display_name = str(record.get('display_name') or '').strip() or None
     return MobileGatewayProject(
