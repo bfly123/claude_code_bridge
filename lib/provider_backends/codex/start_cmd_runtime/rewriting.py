@@ -5,6 +5,11 @@ import re
 
 from .parsing import find_codex_token_index
 
+# `build_resume_start_cmd` means "make this command resume <session_id>".
+# Both `resume` and `fork` are continuation subcommands; keeping an existing
+# `fork <A>` and appending `resume <B>` produces an unparseable CLI.
+_CONTINUATION_SUBCOMMANDS = frozenset({'resume', 'fork'})
+
 
 def build_resume_start_cmd(command: object, session_id: object) -> str:
     normalized_session_id = str(session_id or '').strip()
@@ -56,12 +61,8 @@ def strip_resume_from_codex_segment(segment: str) -> str | None:
     codex_index = find_codex_token_index(tokens)
     if codex_index is None:
         return None
-    resume_index = None
-    for index in range(codex_index + 1, len(tokens)):
-        if tokens[index] == 'resume':
-            resume_index = index
-            break
-    base_tokens = tokens[:resume_index] if resume_index is not None else list(tokens)
+    continuation_index = _continuation_subcommand_index(tokens, codex_index)
+    base_tokens = tokens[:continuation_index] if continuation_index is not None else list(tokens)
     if not base_tokens:
         return None
     return ' '.join(shlex.quote(str(token)) for token in base_tokens)
@@ -77,14 +78,17 @@ def rewrite_codex_segment(segment: str, session_id: str) -> str | None:
     codex_index = find_codex_token_index(tokens)
     if codex_index is None:
         return None
-    resume_index = None
-    for index in range(codex_index + 1, len(tokens)):
-        if tokens[index] == 'resume':
-            resume_index = index
-            break
-    base_tokens = tokens[:resume_index] if resume_index is not None else list(tokens)
+    continuation_index = _continuation_subcommand_index(tokens, codex_index)
+    base_tokens = tokens[:continuation_index] if continuation_index is not None else list(tokens)
     base_tokens.extend(['resume', session_id])
     return ' '.join(shlex.quote(str(token)) for token in base_tokens)
+
+
+def _continuation_subcommand_index(tokens: list[str], codex_index: int) -> int | None:
+    for index in range(codex_index + 1, len(tokens)):
+        if tokens[index] in _CONTINUATION_SUBCOMMANDS:
+            return index
+    return None
 
 
 _MANAGED_RESUME_ASSIGNMENT_RE = re.compile(
