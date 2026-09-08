@@ -160,6 +160,16 @@ def prepare_server(backend, *, timeout_s: float | None = None) -> None:
         failure_message='failed to prepare tmux server',
         timeout_s=timeout_s,
     )
+    # Bare `start-server` creates a session-less server. With tmux `exit-empty on`
+    # (default), that server can exit before the first window/pane materializes —
+    # especially with ≥5 agents. Disable exit-empty immediately so the server
+    # stays alive until create_session / layout work finishes.
+    _tmux_run_ready(
+        backend,
+        ['set-option', '-g', 'exit-empty', 'off'],
+        failure_message='failed to disable tmux exit-empty during server prepare',
+        timeout_s=timeout_s,
+    )
 
 
 def ensure_server_policy(backend, *, timeout_s: float | None = None) -> None:
@@ -173,6 +183,12 @@ def ensure_server_policy(backend, *, timeout_s: float | None = None) -> None:
         backend,
         ['set-option', '-g', 'destroy-unattached', 'off'],
         failure_message='failed to persist tmux destroy-unattached policy',
+        timeout_s=timeout_s,
+    )
+    _tmux_run_ready(
+        backend,
+        ['set-option', '-g', 'exit-empty', 'off'],
+        failure_message='failed to persist tmux exit-empty policy',
         timeout_s=timeout_s,
     )
     _apply_optional_server_policy(backend, option='mouse', value='on', timeout_s=timeout_s)
