@@ -527,8 +527,13 @@ def test_prepare_server_then_create_session_and_server_policy_retry_transient_tm
     ensure_server_policy(backend)
 
     assert backend.calls.count(('start-server',)) == 2
+    # prepare_server disables exit-empty immediately after start-server so an
+    # empty server cannot vanish before the first session is created.
+    assert backend.calls.count(('set-option', '-g', 'exit-empty', 'off')) >= 2
     assert backend.calls.count(('set-option', '-g', 'destroy-unattached', 'off')) == 2
     assert backend.calls.count(('set-option', '-g', 'mouse', 'on')) == 1
+    start_indexes = [index for index, call in enumerate(backend.calls) if call == ('start-server',)]
+    assert backend.calls[start_indexes[-1] + 1] == ('set-option', '-g', 'exit-empty', 'off')
     assert backend.calls.count(('set-option', '-g', 'history-limit', '10000')) == 1
     assert backend.calls.count(('set-option', '-g', 'set-clipboard', 'on')) == 1
     assert backend.calls.count(('set-option', '-g', 'focus-events', 'on')) == 1
@@ -582,7 +587,22 @@ def test_prepare_server_accepts_fast_probe_timeout(monkeypatch) -> None:
 
     prepare_server(backend, timeout_s=0.0)
 
-    assert backend.calls == [('start-server',)]
+    assert backend.calls == [
+        ('start-server',),
+        ('set-option', '-g', 'exit-empty', 'off'),
+    ]
+
+
+def test_prepare_server_disables_exit_empty_before_returning(monkeypatch) -> None:
+    monkeypatch.setenv('CCB_TMUX_OBJECT_READY_POLL_INTERVAL_S', '0')
+    backend = _FlakyBackend()
+
+    prepare_server(backend)
+
+    assert backend.calls[:2] == [
+        ('start-server',),
+        ('set-option', '-g', 'exit-empty', 'off'),
+    ]
 
 
 def test_fresh_namespace_creates_session_before_server_policy(monkeypatch, tmp_path: Path) -> None:
@@ -639,6 +659,7 @@ def test_fresh_namespace_creates_session_before_server_policy(monkeypatch, tmp_p
     assert ('set-option', '-g', 'escape-time', '10') not in backend.calls[:1]
     expected_policy_calls = [
         ('set-option', '-g', 'destroy-unattached', 'off'),
+        ('set-option', '-g', 'exit-empty', 'off'),
         ('set-option', '-g', 'mouse', 'on'),
         ('set-option', '-g', 'history-limit', '10000'),
         ('set-option', '-g', 'set-clipboard', 'on'),
@@ -889,8 +910,9 @@ def test_ensure_server_policy_accepts_fast_probe_timeout(monkeypatch) -> None:
 
     ensure_server_policy(backend, timeout_s=0.0)
 
-    assert backend.calls[:7] == [
+    assert backend.calls[:8] == [
         ('set-option', '-g', 'destroy-unattached', 'off'),
+        ('set-option', '-g', 'exit-empty', 'off'),
         ('set-option', '-g', 'mouse', 'on'),
         ('set-option', '-g', 'history-limit', '10000'),
         ('set-option', '-g', 'set-clipboard', 'on'),
