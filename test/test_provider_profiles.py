@@ -3453,26 +3453,41 @@ def test_materialize_claude_home_config_private_keychain_inspection_error_fails_
     assert not any(call[1] == 'add-generic-password' for call in calls)
 
 
-def test_materialize_claude_home_config_does_not_project_macos_keychain_preferences(
+def test_materialize_claude_home_config_writes_ccb_owned_default_keychain_preference(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    import plistlib
+
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
     source_plist = source_home / 'Library' / 'Preferences' / 'com.apple.security.plist'
+    source_keychains = source_home / 'Library' / 'Keychains'
     source_plist.parent.mkdir(parents=True, exist_ok=True)
+    source_keychains.mkdir(parents=True, exist_ok=True)
+    # Distinct user preference content — managed home must not copy this file.
     source_plist.write_text(
         '<plist><dict><key>DefaultKeychain</key><array/></dict></plist>\n',
         encoding='utf-8',
     )
+    (source_keychains / 'login.keychain-db').write_bytes(b'fake-keychain')
 
     monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
 
     materialize_claude_home_config(target_home, source_home=source_home)
 
     target_plist = target_home / 'Library' / 'Preferences' / 'com.apple.security.plist'
-    assert not target_plist.exists()
-    assert source_plist.is_file()
+    assert target_plist.is_file()
+    payload = plistlib.loads(target_plist.read_bytes())
+    expected_db = str(source_keychains / 'login.keychain')
+    assert payload['DefaultKeychain'][0]['DbName'] == expected_db
+    assert payload['DLDBSearchList'][0]['DbName'] == expected_db
+    # Still must not copy the user's preference bytes.
+    assert target_plist.read_bytes() != source_plist.read_bytes()
+    # Still must not restore the broad Keychains symlink.
+    target_keychains = target_home / 'Library' / 'Keychains'
+    assert not target_keychains.exists()
+    assert not target_keychains.is_symlink()
 
 
 def test_materialize_claude_home_config_never_links_macos_keychains_when_preferences_absent(
@@ -3491,6 +3506,9 @@ def test_materialize_claude_home_config_never_links_macos_keychains_when_prefere
     target_keychains = target_home / 'Library' / 'Keychains'
     assert not target_keychains.exists()
     assert not target_keychains.is_symlink()
+    # Without a login keychain file, do not invent a preference.
+    target_plist = target_home / 'Library' / 'Preferences' / 'com.apple.security.plist'
+    assert not target_plist.exists()
 
 
 def test_materialize_claude_home_config_detaches_legacy_macos_keychains_link(
