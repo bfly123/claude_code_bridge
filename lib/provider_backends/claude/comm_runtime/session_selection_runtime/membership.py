@@ -8,6 +8,22 @@ from ...registry_support.pathing import (
     project_key_for_path,
 )
 
+# Transcript preambles can push the first `isSidechain` far past a small
+# fixed line window. Skip these record types so the probe budget is spent on
+# entries that can actually carry membership.
+_SIDECHAIN_PROBE_SKIP_TYPES = frozenset(
+    {
+        'file-history-snapshot',
+        'ai-title',
+        'agent-name',
+        'mode',
+        'permission-mode',
+        'summary',
+    }
+)
+_SIDECHAIN_PROBE_CANDIDATE_LIMIT = 40
+_SIDECHAIN_PROBE_ABSOLUTE_LINE_LIMIT = 2000
+
 
 def session_belongs_to_current_project(reader, session_path: Path) -> bool:
     candidate = _resolved_existing_path(session_path)
@@ -27,7 +43,12 @@ def project_dir(reader) -> Path:
 
 
 def session_is_sidechain(session_path: Path) -> bool | None:
-    entry = _first_json_entry_with_key(session_path, key='isSidechain', line_limit=20)
+    entry = _first_json_entry_with_key(
+        session_path,
+        key='isSidechain',
+        candidate_limit=_SIDECHAIN_PROBE_CANDIDATE_LIMIT,
+        absolute_line_limit=_SIDECHAIN_PROBE_ABSOLUTE_LINE_LIMIT,
+    )
     if entry is None:
         return None
     return bool(entry.get('isSidechain'))
@@ -75,14 +96,28 @@ def _candidate_parent_allowed(candidate_parent: Path, *, allowed_dirs: list[Path
     return any(candidate_parent == allowed_dir or allowed_dir in candidate_parent.parents for allowed_dir in allowed_dirs)
 
 
-def _first_json_entry_with_key(session_path: Path, *, key: str, line_limit: int) -> dict | None:
+def _first_json_entry_with_key(
+    session_path: Path,
+    *,
+    key: str,
+    candidate_limit: int,
+    absolute_line_limit: int,
+) -> dict | None:
     try:
         with session_path.open('r', encoding='utf-8', errors='replace') as handle:
-            for _ in range(line_limit):
+            candidates_seen = 0
+            for _ in range(max(0, int(absolute_line_limit))):
                 entry = _json_line_entry(handle.readline())
-                if entry is None or key not in entry:
+                if entry is None:
                     continue
-                return entry
+                entry_type = str(entry.get('type') or '').strip()
+                if entry_type in _SIDECHAIN_PROBE_SKIP_TYPES:
+                    continue
+                candidates_seen += 1
+                if key in entry:
+                    return entry
+                if candidates_seen >= max(1, int(candidate_limit)):
+                    break
     except OSError:
         return None
     return None

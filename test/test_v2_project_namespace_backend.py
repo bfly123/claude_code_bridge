@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import subprocess
+import shutil
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -502,7 +504,7 @@ def test_prepare_server_then_create_session_and_server_policy_retry_transient_tm
     monkeypatch.setenv('WT_SESSION', 'windows-terminal-session')
     monkeypatch.setenv('AGENT_ROLES_STORE', '/home/demo/.roles')
     backend = _FlakyBackend()
-    backend.fail_once('start-server')
+    backend.fail_once('start-server', ';', 'set-option', '-g', 'exit-empty', 'off')
     backend.fail_once('set-option', '-g', 'destroy-unattached', 'off')
     backend.fail_once(
         'new-session',
@@ -526,7 +528,7 @@ def test_prepare_server_then_create_session_and_server_policy_retry_transient_tm
     create_session(backend, session_name='ccb-proj', project_root=tmp_path, window_name='cmd')
     ensure_server_policy(backend)
 
-    assert backend.calls.count(('start-server',)) == 2
+    assert backend.calls.count(('start-server', ';', 'set-option', '-g', 'exit-empty', 'off')) == 2
     assert backend.calls.count(('set-option', '-g', 'destroy-unattached', 'off')) == 2
     assert backend.calls.count(('set-option', '-g', 'mouse', 'on')) == 1
     assert backend.calls.count(('set-option', '-g', 'history-limit', '10000')) == 1
@@ -582,7 +584,31 @@ def test_prepare_server_accepts_fast_probe_timeout(monkeypatch) -> None:
 
     prepare_server(backend, timeout_s=0.0)
 
-    assert backend.calls == [('start-server',)]
+    assert backend.calls == [('start-server', ';', 'set-option', '-g', 'exit-empty', 'off')]
+
+
+@pytest.mark.skipif(shutil.which('tmux') is None, reason='requires real tmux')
+def test_prepare_server_keeps_real_empty_server_alive_until_session_creation():
+    # Short private socket path avoids platform Unix-socket length limits.
+    with tempfile.TemporaryDirectory(prefix='ccb-tmux-') as directory:
+        class RealBackend:
+            def _tmux_run(self, args, *, check=False, capture=False, timeout=None):
+                return subprocess.run(
+                    ['tmux', '-f', '/dev/null', '-S', str(Path(directory) / 's'), *args],
+                    check=check, capture_output=True, text=True, timeout=timeout or 5,
+                )
+
+        backend = RealBackend()
+        try:
+            prepare_server(backend)
+            # A separate client verifies the empty server survived the initial
+            # command queue, before any session can keep it alive.
+            result = backend._tmux_run(['show-options', '-sv', 'exit-empty'], check=True)
+            assert result.stdout.strip() == 'off'
+            backend._tmux_run(['new-session', '-d', '-s', 'probe', 'sleep 30'], check=True)
+            backend._tmux_run(['has-session', '-t', 'probe'], check=True)
+        finally:
+            backend._tmux_run(['kill-server'])
 
 
 def test_fresh_namespace_creates_session_before_server_policy(monkeypatch, tmp_path: Path) -> None:

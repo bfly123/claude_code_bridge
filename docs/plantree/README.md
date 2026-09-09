@@ -20,6 +20,14 @@ to resume across agents and sessions.
 
 ## Baseline
 
+Core PR maintenance requirements, reaffirmed by the project owner on
+2026-09-07: **CCB only inherits Provider state in one direction and must not
+reverse-manage Providers; Windows/Herdr development and PRs must remain
+isolated from Linux/macOS and shared surfaces.** These are merge requirements
+for every relevant plan and PR. See
+[Core PR Maintenance Requirements](baseline/test-and-release-gates.md#core-pr-maintenance-requirements)
+for the authority links and required review evidence.
+
 - [baseline/README.md](baseline/README.md) indexes the lightweight project
   baseline used by plan roots.
 

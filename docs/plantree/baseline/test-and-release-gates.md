@@ -2,6 +2,54 @@
 
 Date: 2026-05-25
 
+## Core PR Maintenance Requirements
+
+Latest review evidence: [PR340-344 review and repairs](evidence/pr340-344-review-20260909.md).
+
+Owner reaffirmation: 2026-09-07. These are mandatory development, PR review,
+merge, and release-maintenance constraints. They record required behavior,
+not a claim that all existing code has already passed an audit.
+
+### One-Way Provider Inheritance
+
+- CCB must not reverse-manage Providers. External Provider configuration,
+  authentication, account selection, and environment are inheritance sources;
+  the direction is external Provider state to CCB-owned managed state only.
+- CCB configuration, refresh, clear, kill, cleanup, logout, and uninstall must
+  not write back, repair, overwrite, delete, or invalidate external Provider
+  state. Explicit CCB overrides stay local to the selected CCB Agent.
+- Review remote effects as well as local writes: copied rotating OAuth tokens
+  do not create independent authority, and managed refresh/revocation must not
+  invalidate the user's external login.
+- Provider-related PRs must identify source and destination ownership and
+  supply relevant regression evidence that external state remains unchanged.
+  Unproven ownership or reverse mutation blocks merge.
+
+Detailed authority: [Provider auth authority plan](../plans/provider-auth-authority/README.md)
+and [one-way external authority decision](../plans/provider-auth-authority/decisions/001-one-way-external-authority.md).
+
+### Windows And Herdr Isolation
+
+- Keep Windows/Herdr implementation in approved Windows-owned surfaces,
+  primarily `lib/platforms/windows/` and `platforms/windows/`, with scoped
+  Windows tests and planning documents. Do not contaminate Linux/macOS,
+  shared runtime, generic clients, installers, dependencies, or tests.
+- Existing shared-to-Windows imports are a frozen debt ceiling. New reverse
+  dependencies are forbidden; a platform guard alone does not exempt a
+  shared-file change from ownership review.
+- Separate Windows functional PRs from global release metadata changes,
+  including `VERSION`, root READMEs, changelog, npm metadata, and release notes.
+  Global release changes require a separately reviewed release PR.
+- Require the trusted-base isolation gate against the actual PR base/head,
+  plus relevant Windows tests and non-Windows regression evidence. The PR
+  cannot weaken its own checker or workflow to pass. Record the revisions,
+  gate result, and any unavailable platform verification in the review.
+- Isolation violations block merge; a successful Windows build does not
+  establish Linux/macOS isolation.
+
+Detailed authority: [Windows PR isolation decision](../plans/windows-native-release/decisions/003-windows-pr-diff-isolation.md)
+and [trusted-base native-only gate](../plans/windows-native-release/decisions/004-trusted-base-native-only-gate.md).
+
 ## Documentation Gates
 
 - Markdown links introduced by the README refresh resolve locally.

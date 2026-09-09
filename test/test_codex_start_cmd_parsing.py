@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import pytest
+
 from provider_backends.codex.start_cmd_runtime.parsing import (
     extract_resume_session_id,
     looks_like_bare_resume_cmd,
 )
-from provider_backends.codex.start_cmd_runtime.rewriting import strip_resume_start_cmd
+from provider_backends.codex.start_cmd_runtime.rewriting import (
+    build_resume_start_cmd,
+    rewrite_codex_segment,
+    strip_resume_from_codex_segment,
+    strip_resume_start_cmd,
+)
 
 
 def test_extract_resume_session_id_prefers_regex_match() -> None:
@@ -50,3 +57,65 @@ def test_strip_resume_start_cmd_removes_resume_suffix_from_shell_wrapped_command
         'export CODEX_HOME=/tmp/home CODEX_SESSION_ROOT=/tmp/home/sessions; '
         'codex -m gpt-5.4'
     )
+
+
+def test_rewrite_codex_segment_replaces_fork_continuation_with_resume() -> None:
+    rewritten = rewrite_codex_segment(
+        'codex fork 00000000-0000-0000-0000-000000000001',
+        '00000000-0000-0000-0000-000000000002',
+    )
+
+    assert rewritten == 'codex resume 00000000-0000-0000-0000-000000000002'
+
+
+@pytest.mark.parametrize('option', ['--profile fork', '-p fork', '--profile=fork',
+                                  '-pfork', '--model resume', '-c fork'])
+def test_rewrite_preserves_continuation_words_in_option_values(option):
+    base = f'codex {option} --model test-model'
+    assert rewrite_codex_segment(base + ' fork old', 'new') == base + ' resume new'
+    assert strip_resume_from_codex_segment(base + ' fork old') == base
+    assert rewrite_codex_segment(base, 'new') == base + ' resume new'
+
+
+def test_continuation_probe_does_not_scan_other_subcommands_or_prompt():
+    from provider_backends.codex.start_cmd_runtime.rewriting import _continuation_subcommand_index
+    for tokens in [['codex', 'exec', 'fork'], ['codex', '--', 'fork'],
+                   ['codex', 'prompt', 'resume']]:
+        assert _continuation_subcommand_index(tokens, 0) is None
+
+
+def test_rewrite_codex_segment_swaps_resume_id_without_keeping_old_continuation() -> None:
+    rewritten = rewrite_codex_segment(
+        'codex -c disable_paste_burst=true resume old-session',
+        'new-session',
+    )
+
+    assert rewritten == 'codex -c disable_paste_burst=true resume new-session'
+
+
+def test_rewrite_codex_segment_appends_resume_when_no_continuation_present() -> None:
+    rewritten = rewrite_codex_segment('codex -m gpt-5.4', 'sess-123')
+
+    assert rewritten == 'codex -m gpt-5.4 resume sess-123'
+
+
+def test_strip_resume_from_codex_segment_removes_fork_continuation() -> None:
+    stripped = strip_resume_from_codex_segment(
+        'codex fork 00000000-0000-0000-0000-000000000001'
+    )
+
+    assert stripped == 'codex'
+
+
+def test_build_resume_start_cmd_managed_remote_path_untouched_by_fork_fix() -> None:
+    command = (
+        "export CCB_CODEX_MANAGED_REMOTE=1 CCB_CODEX_RESUME_ID='old-id'; "
+        'codex --remote unix:///tmp/app-server.sock'
+    )
+
+    rewritten = build_resume_start_cmd(command, 'new-id')
+
+    assert 'CCB_CODEX_RESUME_ID=new-id' in rewritten
+    assert 'CCB_CODEX_MANAGED_REMOTE=1' in rewritten
+    assert 'fork' not in rewritten
+    assert 'resume new-id' not in rewritten

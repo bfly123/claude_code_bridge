@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import re
 import shlex
 
 from agents.policy import should_restore_provider_history
@@ -264,7 +265,78 @@ def _persistable_start_cmd(start_cmd: str, *, settings_path: Path) -> str:
     return command.strip(' ;')
 
 
-__all__ = ['build_runtime_launcher', 'build_session_payload', 'build_start_cmd', 'prepare_runtime', 'resolve_run_cwd']
+def rehydrate_claude_persisted_start_cmd(
+    start_cmd: str,
+    *,
+    credential_env: dict[str, str] | None = None,
+) -> str:
+    """Restore sensitive Claude API exports stripped by ``_persistable_start_cmd``.
+
+    Pane recovery (including ``pane-foreign`` refresh → ``ensure_pane``) respawns
+    from the persisted ``start_cmd``. That command intentionally omits
+    ``ANTHROPIC_AUTH_TOKEN`` / ``ANTHROPIC_API_KEY`` so credentials are not
+    written to session files, but it keeps route keys such as
+    ``ANTHROPIC_BASE_URL``. Without rehydration, recovery can relaunch against a
+    proxy URL with no auth and land on Claude's login prompt, while an explicit
+    ``ccb restart`` rebuilds the full command from current config.
+    """
+    command = str(start_cmd or '').strip()
+    missing = {
+        key: value
+        for key, value in dict(credential_env or {}).items()
+        if key in _SENSITIVE_PERSISTED_ENV
+        and str(value or '').strip()
+        and f'{key}=' not in command
+    }
+    if not missing:
+        return command
+    export = 'export ' + ' '.join(
+        f'{key}={shlex.quote(str(value))}' for key, value in sorted(missing.items())
+    )
+    if not command:
+        return export
+    # Preserve the command verbatim, including quoting and shell templates.
+    # Generated launchers start with export/unset statements; credentials must
+    # follow those statements so their alias cleanup cannot erase them.
+    word = r'''(?:[^\s;'"\\]|\\.|'[^']*'|"(?:\\.|[^"\\])*")+'''
+    setup = re.compile(r'\s*(?:export|unset)\s+' + word + r'(?:\s+' + word + r')*\s*;\s*')
+    offset = 0
+    while match := setup.match(command, offset):
+        offset = match.end()
+    return f'{command[:offset]}{export}; {command[offset:]}'
+
+
+def claude_respawn_credential_env(runtime_dir: Path | None) -> dict[str, str]:
+    """Load Claude API credentials from the materialized provider profile."""
+    if runtime_dir is None:
+        return {}
+    try:
+        from provider_profiles import load_resolved_provider_profile
+    except Exception:
+        return {}
+    try:
+        profile = load_resolved_provider_profile(Path(runtime_dir))
+    except Exception:
+        return {}
+    if profile is None:
+        return {}
+    env = dict(getattr(profile, 'env', {}) or {})
+    return {
+        key: str(env.get(key) or '').strip()
+        for key in sorted(_SENSITIVE_PERSISTED_ENV)
+        if str(env.get(key) or '').strip()
+    }
+
+
+__all__ = [
+    'build_runtime_launcher',
+    'build_session_payload',
+    'build_start_cmd',
+    'claude_respawn_credential_env',
+    'prepare_runtime',
+    'rehydrate_claude_persisted_start_cmd',
+    'resolve_run_cwd',
+]
 
 
 def _append_unique_flag(parts: list[str], flag: str, startup_args: tuple[str, ...]) -> None:

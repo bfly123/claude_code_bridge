@@ -156,7 +156,9 @@ def prepare_server(backend, *, timeout_s: float | None = None) -> None:
         return
     _tmux_run_ready(
         backend,
-        ['start-server'],
+        # One tmux command queue keeps the server alive until exit-empty is
+        # disabled. Separate client calls leave an empty-server exit window.
+        ['start-server', ';', 'set-option', '-g', 'exit-empty', 'off'],
         failure_message='failed to prepare tmux server',
         timeout_s=timeout_s,
     )
