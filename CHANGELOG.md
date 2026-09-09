@@ -1,5 +1,17 @@
 # Changelog
 
+## v8.6.16 (2026-09-09)
+
+- Made Mobile host aggregation depend on reachable hosts, preserving offline
+  pairings and supporting initial fallback to the sole reachable host.
+- Replaced stale same-path project registrations and validated daemon identity.
+- Corrected Claude recovery credential ordering (#340), Codex fork parsing
+  (#341), and tmux startup atomicity (#343); included transcript preamble
+  handling (#342) and smoke cleanup failure evidence.
+- Reverted #344 to preserve the existing external Keychain boundary.
+- Recorded Provider one-way inheritance and Windows/Herdr isolation as core
+  PR maintenance requirements. Full bilingual notes: docs/releases/v8.6.16.md.
+
 ## v8.6.15 (2026-09-06)
 
 - Fixed blank CCB Mobile conversations for OMP Agents by routing OMP through
