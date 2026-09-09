@@ -177,6 +177,12 @@ def ensure_server_policy(backend, *, timeout_s: float | None = None) -> None:
         failure_message='failed to persist tmux destroy-unattached policy',
         timeout_s=timeout_s,
     )
+    _tmux_run_ready(
+        backend,
+        ['set-option', '-g', 'exit-empty', 'off'],
+        failure_message='failed to persist tmux exit-empty policy',
+        timeout_s=timeout_s,
+    )
     _apply_optional_server_policy(backend, option='mouse', value='on', timeout_s=timeout_s)
     _apply_optional_server_policy(
         backend,

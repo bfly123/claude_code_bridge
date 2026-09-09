@@ -531,6 +531,7 @@ def test_prepare_server_then_create_session_and_server_policy_retry_transient_tm
     assert backend.calls.count(('start-server', ';', 'set-option', '-g', 'exit-empty', 'off')) == 2
     assert backend.calls.count(('set-option', '-g', 'destroy-unattached', 'off')) == 2
     assert backend.calls.count(('set-option', '-g', 'mouse', 'on')) == 1
+    assert backend.calls.count(('set-option', '-g', 'exit-empty', 'off')) == 1
     assert backend.calls.count(('set-option', '-g', 'history-limit', '10000')) == 1
     assert backend.calls.count(('set-option', '-g', 'set-clipboard', 'on')) == 1
     assert backend.calls.count(('set-option', '-g', 'focus-events', 'on')) == 1
@@ -665,6 +666,7 @@ def test_fresh_namespace_creates_session_before_server_policy(monkeypatch, tmp_p
     assert ('set-option', '-g', 'escape-time', '10') not in backend.calls[:1]
     expected_policy_calls = [
         ('set-option', '-g', 'destroy-unattached', 'off'),
+        ('set-option', '-g', 'exit-empty', 'off'),
         ('set-option', '-g', 'mouse', 'on'),
         ('set-option', '-g', 'history-limit', '10000'),
         ('set-option', '-g', 'set-clipboard', 'on'),
@@ -915,8 +917,9 @@ def test_ensure_server_policy_accepts_fast_probe_timeout(monkeypatch) -> None:
 
     ensure_server_policy(backend, timeout_s=0.0)
 
-    assert backend.calls[:7] == [
+    assert backend.calls[:8] == [
         ('set-option', '-g', 'destroy-unattached', 'off'),
+        ('set-option', '-g', 'exit-empty', 'off'),
         ('set-option', '-g', 'mouse', 'on'),
         ('set-option', '-g', 'history-limit', '10000'),
         ('set-option', '-g', 'set-clipboard', 'on'),
