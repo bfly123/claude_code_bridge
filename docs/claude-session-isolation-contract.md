@@ -261,15 +261,11 @@ When `ccb` starts a managed Claude agent:
   different value already held by the agent-derived service because the
   managed Claude process may have refreshed its private credential after the
   last source projection
-- managed login-auth projection must not copy the user's
+- managed login-auth projection must not copy
   `~/Library/Preferences/com.apple.security.plist` or link the managed
   `Library/Keychains` path to the user's Keychains; startup must remove a
-  recognized legacy managed link without traversing the user's Keychain
-- managed login-auth projection may write a CCB-owned
-  `Library/Preferences/com.apple.security.plist` that points `DefaultKeychain`
-  at the user's login keychain by absolute path so Claude can resolve a default
-  Keychain from the private `HOME` without restoring the broad Keychains
-  symlink
+  recognized legacy managed link and legacy copied preference without
+  traversing the user's Keychain
 - managed login-auth projection may also synchronize older or alternate Claude
   Code credential cache artifacts such as `.config/claude-code/auth.json` when
   they exist in the source home

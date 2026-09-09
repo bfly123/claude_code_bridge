@@ -6,7 +6,6 @@ import json
 import os
 import platform
 from pathlib import Path
-import plistlib
 import shutil
 import stat
 import subprocess
@@ -700,11 +699,8 @@ def _materialize_auth(source_home: Path, target_layout: ClaudeHomeLayout, *, pro
     )
 
 
-_MACOS_LOGIN_KEYCHAIN_GUID = '{87191ca3-0fc9-11d4-849a-000502b52122}'
-_MACOS_LOGIN_KEYCHAIN_SUBSERVICE_TYPE = 6
-
-
 def _materialize_macos_keychain_preferences(source_home: Path, target_layout: ClaudeHomeLayout, *, profile) -> None:
+    del source_home, profile
     target = target_layout.home_root / 'Library' / 'Preferences' / 'com.apple.security.plist'
     target_keychains = target_layout.home_root / 'Library' / 'Keychains'
     # Older CCB releases linked this path back to the user's real Keychains
@@ -712,56 +708,9 @@ def _materialize_macos_keychain_preferences(source_home: Path, target_layout: Cl
     # external login authority.  Credential inheritance is now copy-only, so
     # detach any legacy link before doing anything else.
     _remove_keychains_link(target_keychains)
-    if platform.system() != 'Darwin' or not _inherits_external_auth(profile):
-        # Never keep a copied/legacy preference when auth is not inherited.
-        _remove_file(target)
-        return
-    login_keychain = _resolve_macos_login_keychain_db_name(source_home)
-    if login_keychain is None:
-        _remove_file(target)
-        return
-    # Write a CCB-owned preference (not a copy of the user's plist) so the
-    # managed HOME can resolve a default Keychain without restoring the broad
-    # Library/Keychains symlink forbidden by the isolation contract.
-    _write_managed_default_keychain_preference(target, login_keychain)
-
-
-def _resolve_macos_login_keychain_db_name(source_home: Path) -> Path | None:
-    keychains = Path(source_home).expanduser() / 'Library' / 'Keychains'
-    for name in ('login.keychain-db', 'login.keychain'):
-        if (keychains / name).exists():
-            # Security.framework preference DbName historically uses the
-            # login.keychain basename even when the on-disk file is
-            # login.keychain-db.
-            return keychains / 'login.keychain'
-    return None
-
-
-def _write_managed_default_keychain_preference(target: Path, login_keychain: Path) -> None:
-    entry = {
-        'DbName': str(login_keychain),
-        'GUID': _MACOS_LOGIN_KEYCHAIN_GUID,
-        'SubserviceType': _MACOS_LOGIN_KEYCHAIN_SUBSERVICE_TYPE,
-    }
-    payload = {
-        'DefaultKeychain': [dict(entry)],
-        'DLDBSearchList': [dict(entry)],
-    }
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_name(f'.{target.name}.tmp-{os.getpid()}')
-    try:
-        tmp.write_bytes(plistlib.dumps(payload, fmt=plistlib.FMT_XML))
-        if hasattr(os, 'replace'):
-            os.replace(tmp, target)
-        else:  # pragma: no cover
-            tmp.replace(target)
-    finally:
-        try:
-            tmp.unlink()
-        except FileNotFoundError:
-            pass
-        except Exception:
-            pass
+    # A copied preference file can itself point Security.framework back to the
+    # user's global keychain database, so remove legacy copies as well.
+    _remove_file(target)
 
 
 def _remove_keychains_link(path: Path) -> None:

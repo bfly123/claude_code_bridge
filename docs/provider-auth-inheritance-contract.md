@@ -167,12 +167,9 @@ representation on macOS. CCB may:
 
 Managed Claude must set `CLAUDE_CONFIG_DIR` and
 `CLAUDE_SECURESTORAGE_CONFIG_DIR` to its private `.claude` directory and disable
-both interactive login and logout commands. It must never copy the user's
+both interactive login and logout commands. It must never copy
 `com.apple.security.plist`, link `Library/Keychains`, or add/delete the user's
-ordinary Claude Keychain services. It may write a CCB-owned
-`com.apple.security.plist` that points `DefaultKeychain` at the user's login
-keychain by absolute path so the managed `HOME` can resolve a default Keychain
-without restoring the broad Keychains symlink.
+ordinary Claude Keychain services.
 
 Gemini, Cursor, and Droid may read known external keyring entries only to
 materialize provider-supported files inside their private managed homes. Their
